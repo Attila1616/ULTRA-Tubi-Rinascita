@@ -1204,6 +1204,45 @@ def nest_piece_groups(groups, rod_length=6000):
         return {"status": "error", "message": str(exc), "groups": []}
 
 
+def debug_nesting_group(group, rods, rod_length=6000):
+    """Run an on-demand deep diagnostic for one already-calculated tube group."""
+    try:
+        config = load_config(silent=True) or {}
+        try:
+            gap_mm = max(0.0, float(config.get("nesting_gap_mm", 2.0)))
+        except (TypeError, ValueError):
+            gap_mm = 2.0
+
+        pieces = []
+        validation_cache = {}
+        for raw_piece in (group or {}).get("pieces") or []:
+            piece = dict(raw_piece)
+            file_path = str(piece.get("filePath") or "").strip()
+            if file_path and os.path.isfile(file_path):
+                if file_path not in validation_cache:
+                    validation_cache[file_path] = bool(validate_zzx_file(file_path))
+                if validation_cache[file_path]:
+                    piece["tubePart"] = None
+            pieces.append(piece)
+
+        report = tubenest_engine.diagnose_items_dict(
+            pieces,
+            rods or [],
+            rod_length=rod_length,
+            gap_mm=gap_mm,
+            dead_zone_mm=400.0,
+            deep_pair_checks=32,
+        )
+        return {"status": "success", **report}
+    except Exception as exc:
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": str(exc),
+            "text": f"Errore durante il debug nesting: {exc}",
+        }
+
+
 def get_current_state(da_fare_path):
     config = load_config()
     ignore_list = set(folder.lower() for folder in config.get('ignore_folders', []))
