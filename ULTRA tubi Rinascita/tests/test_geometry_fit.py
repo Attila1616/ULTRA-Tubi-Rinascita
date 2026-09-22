@@ -98,6 +98,31 @@ class GeometryFitTests(unittest.TestCase):
         self.assertAlmostEqual(end.slope_x, 0.25)
         self.assertAlmostEqual(end.slope_vertical, -0.5)
 
+    def test_reversal_plus_180_axial_rotation_matches_z_then_y_flip(self):
+        part = make_part(
+            length=1000,
+            start_plane=(20.0, 0.25, 0.5),
+            end_plane=(980.0, -0.75, -1.0),
+        )
+        start, end = posed_ends(
+            part,
+            PartPose(
+                axial_rotation_degrees=180.0,
+                reversed_end_for_end=True,
+            ),
+        )
+
+        # reverse about machine vertical Z, then rotate 180° about machine Y:
+        # (sx, sv) -> (-sx, +sv) after the end swap.
+        self.assertEqual(start.source_label, "B")
+        self.assertEqual(end.source_label, "A")
+        self.assertAlmostEqual(start.c, 20.0)
+        self.assertAlmostEqual(start.slope_x, 0.75)
+        self.assertAlmostEqual(start.slope_vertical, -1.0)
+        self.assertAlmostEqual(end.c, 980.0)
+        self.assertAlmostEqual(end.slope_x, -0.25)
+        self.assertAlmostEqual(end.slope_vertical, 0.5)
+
     def test_rectangle_rotation_family_never_turns_long_side_into_short_side(self):
         self.assertEqual(rectangular_rotation_family(0), [0.0, 180.0])
         self.assertEqual(rectangular_rotation_family(90), [90.0, 270.0])
