@@ -1853,6 +1853,10 @@ function getSegmentPreviewGeometry(segment) {
         polygon,
         leftAngle: angleFor(ends[0]),
         rightAngle: angleFor(ends[1]),
+        leftTopPct: pct(aTop),
+        leftBottomPct: pct(aBottom),
+        rightTopPct: pct(bTop),
+        rightBottomPct: pct(bBottom),
     };
 }
 
@@ -1943,6 +1947,19 @@ function renderRodSegmentHTML(segment, kind, rodId, tubeType, startMm, endMm) {
     const title = `${segment.length}mm - ${segment.fileName || ''}${angleText}${placementText}\nClick per aprire il file`;
 
     let html = `<div class="rod-segment${doneClass}" draggable="${draggable}" data-action="open-file-path" data-file-path="${escapeAttr(filePath)}" data-segment-key="${escapeAttr(segment.instanceKey)}" data-rod-kind="${escapeAttr(kind)}" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" style="left: ${leftPercent}%; width: ${widthPercent}%; background-color: ${getColorForPiece(segment)};${clipStyle}" title="${escapeAttr(title)}"><span>${escapeHtml(segment.length)}</span>`;
+
+    if (preview) {
+        html += `
+            <svg class="rod-segment-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <line class="rod-cut-edge"
+                      x1="${preview.leftTopPct.toFixed(3)}" y1="0"
+                      x2="${preview.leftBottomPct.toFixed(3)}" y2="100" />
+                <line class="rod-cut-edge"
+                      x1="${preview.rightTopPct.toFixed(3)}" y1="0"
+                      x2="${preview.rightBottomPct.toFixed(3)}" y2="100" />
+            </svg>
+        `;
+    }
 
     if (preview && widthPercent > 4) {
         const leftLabel = preview.leftAngle > 0.05 ? `${preview.leftAngle.toFixed(0)}°` : '';
