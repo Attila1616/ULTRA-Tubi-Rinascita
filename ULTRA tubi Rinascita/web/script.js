@@ -1824,39 +1824,58 @@ function getSegmentPreviewGeometry(segment) {
         return null;
     };
 
-    const a = readPlane(ends[0]);
-    const b = readPlane(ends[1]);
+    const displayPlane = end => {
+        const plane = readPlane(end);
+        if (!plane) return null;
+
+        // The bar preview is schematic: project an angled 3D end onto whichever
+        // cross-section direction carries the strongest slope. This guarantees
+        // that a real 45° cut remains visibly 45° instead of disappearing when
+        // its slope happens to lie on the other tube face.
+        const magnitude = Math.hypot(plane.sx, plane.sv);
+        const dominant = Math.abs(plane.sv) >= Math.abs(plane.sx) ? plane.sv : plane.sx;
+        const sign = dominant < 0 ? -1 : 1;
+        return {
+            ...plane,
+            displaySlope: magnitude > 1e-9 ? sign * magnitude : 0,
+        };
+    };
+
+    const a = displayPlane(ends[0]);
+    const b = displayPlane(ends[1]);
     if (!a || !b) return null;
 
     const halfHeight = outsideHeight / 2;
-    const aTop = a.c + a.sv * halfHeight;
-    const aBottom = a.c - a.sv * halfHeight;
-    const bTop = b.c + b.sv * halfHeight;
-    const bBottom = b.c - b.sv * halfHeight;
+    const aTop = a.c + a.displaySlope * halfHeight;
+    const aBottom = a.c - a.displaySlope * halfHeight;
+    const bTop = b.c + b.displaySlope * halfHeight;
+    const bBottom = b.c - b.displaySlope * halfHeight;
 
     const pct = value => Math.max(0, Math.min(100, value / partLength * 100));
+    const aTopPct = pct(aTop);
+    const aBottomPct = pct(aBottom);
+    const bTopPct = pct(bTop);
+    const bBottomPct = pct(bBottom);
+
     const polygon = [
-        `${pct(aTop).toFixed(3)}% 0%`,
-        `${pct(bTop).toFixed(3)}% 0%`,
-        `${pct(bBottom).toFixed(3)}% 100%`,
-        `${pct(aBottom).toFixed(3)}% 100%`,
+        `${aTopPct.toFixed(3)}% 0%`,
+        `${bTopPct.toFixed(3)}% 0%`,
+        `${bBottomPct.toFixed(3)}% 100%`,
+        `${aBottomPct.toFixed(3)}% 100%`,
     ].join(', ');
 
-    const angleFor = end => {
-        const value = Number(end?.angle_from_perpendicular_degrees);
-        if (Number.isFinite(value)) return Math.abs(value);
-        const plane = readPlane(end);
-        return plane ? Math.atan(Math.hypot(plane.sx, plane.sv)) * 180 / Math.PI : 0;
-    };
+    const signedAngleFor = plane => (
+        Math.atan(plane.displaySlope) * 180 / Math.PI
+    );
 
     return {
         polygon,
-        leftAngle: angleFor(ends[0]),
-        rightAngle: angleFor(ends[1]),
-        leftTopPct: pct(aTop),
-        leftBottomPct: pct(aBottom),
-        rightTopPct: pct(bTop),
-        rightBottomPct: pct(bBottom),
+        leftAngle: Math.abs(signedAngleFor(a)),
+        rightAngle: Math.abs(signedAngleFor(b)),
+        leftSignedAngle: signedAngleFor(a),
+        rightSignedAngle: signedAngleFor(b),
+        leftCenterPct: (aTopPct + aBottomPct) / 2,
+        rightCenterPct: (bTopPct + bBottomPct) / 2,
     };
 }
 
@@ -1936,7 +1955,8 @@ function renderRodSegmentHTML(segment, kind, rodId, tubeType, startMm, endMm) {
     const doneClass = segment.done ? ' done' : '';
     const draggable = kind === 'locked' && segment.done ? 'false' : 'true';
     const preview = getSegmentPreviewGeometry(segment);
-    const clipStyle = preview ? ` clip-path: polygon(${preview.polygon});` : '';
+    const pieceColor = getColorForPiece(segment);
+    const edgeColor = getEdgeColorForPiece(segment);
     const angleText = preview
         ? ` | tagli ${preview.leftAngle.toFixed(1)}° / ${preview.rightAngle.toFixed(1)}°`
         : '';
@@ -1946,20 +1966,19 @@ function renderRodSegmentHTML(segment, kind, rodId, tubeType, startMm, endMm) {
         : '';
     const title = `${segment.length}mm - ${segment.fileName || ''}${angleText}${placementText}\nClick per aprire il file`;
 
-    let html = `<div class="rod-segment${doneClass}" draggable="${draggable}" data-action="open-file-path" data-file-path="${escapeAttr(filePath)}" data-segment-key="${escapeAttr(segment.instanceKey)}" data-rod-kind="${escapeAttr(kind)}" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" style="left: ${leftPercent}%; width: ${widthPercent}%; background-color: ${getColorForPiece(segment)};${clipStyle}" title="${escapeAttr(title)}"><span>${escapeHtml(segment.length)}</span>`;
+    let html = `<div class="rod-segment${doneClass}" draggable="${draggable}" data-action="open-file-path" data-file-path="${escapeAttr(filePath)}" data-segment-key="${escapeAttr(segment.instanceKey)}" data-rod-kind="${escapeAttr(kind)}" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" style="left: ${leftPercent}%; width: ${widthPercent}%; --piece-edge-color: ${edgeColor};" title="${escapeAttr(title)}">`;
 
     if (preview) {
-        html += `
-            <svg class="rod-segment-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                <line class="rod-cut-edge"
-                      x1="${preview.leftTopPct.toFixed(3)}" y1="0"
-                      x2="${preview.leftBottomPct.toFixed(3)}" y2="100" />
-                <line class="rod-cut-edge"
-                      x1="${preview.rightTopPct.toFixed(3)}" y1="0"
-                      x2="${preview.rightBottomPct.toFixed(3)}" y2="100" />
-            </svg>
-        `;
+        html += `<div class="rod-segment-fill" style="background-color: ${pieceColor}; clip-path: polygon(${preview.polygon});"></div>`;
+        html += `<span class="rod-cut-edge rod-cut-edge-left" style="left: ${preview.leftCenterPct.toFixed(3)}%; transform: translateX(-50%) rotate(${preview.leftSignedAngle.toFixed(3)}deg);"></span>`;
+        html += `<span class="rod-cut-edge rod-cut-edge-right" style="left: ${preview.rightCenterPct.toFixed(3)}%; transform: translateX(-50%) rotate(${preview.rightSignedAngle.toFixed(3)}deg);"></span>`;
+    } else {
+        html += `<div class="rod-segment-fill" style="background-color: ${pieceColor};"></div>`;
+        html += '<span class="rod-cut-edge rod-cut-edge-left" style="left: 0%;"></span>';
+        html += '<span class="rod-cut-edge rod-cut-edge-right" style="left: 100%;"></span>';
     }
+
+    html += `<span class="rod-segment-length">${escapeHtml(segment.length)}</span>`;
 
     if (preview && widthPercent > 4) {
         const leftLabel = preview.leftAngle > 0.05 ? `${preview.leftAngle.toFixed(0)}°` : '';
@@ -2894,15 +2913,20 @@ async function nestGroupsBackend(groupRequests, rodLength = 6000) {
     });
 }
 
-function getColorForPiece(piece) {
+function getPieceColorHue(piece) {
     const seed = String(piece?.logicalKey || piece?.filePath || piece?.fileName || piece?.length || '');
     let hash = 0;
     for (let i = 0; i < seed.length; i++) {
         hash = ((hash << 5) - hash) + seed.charCodeAt(i);
         hash |= 0;
     }
-    const hue = Math.abs(hash) % 360;
-    return `hsl(${hue}, 70%, 82%)`;
+    return Math.abs(hash) % 360;
+}
+function getColorForPiece(piece) {
+    return `hsl(${getPieceColorHue(piece)}, 70%, 82%)`;
+}
+function getEdgeColorForPiece(piece) {
+    return `hsl(${getPieceColorHue(piece)}, 58%, 42%)`;
 }
 function findPieceById(pieceId) {
     if (currentPieceMap.has(pieceId)) return currentPieceMap.get(pieceId);
