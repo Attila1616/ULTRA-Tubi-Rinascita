@@ -1244,6 +1244,41 @@ def debug_nesting_group(group, rods, rod_length=6000, focus_rod_number=None):
         }
 
 
+def export_locked_rod_zzx(payload):
+    """Export one locked UI rod as a structurally validated multi-segment ZZX."""
+    try:
+        config = load_config(silent=True) or {}
+        output_dir = str(config.get("nested_zzx_output_dir") or "").strip()
+        if not output_dir:
+            return {
+                "status": "error",
+                "message": "Imposta prima la cartella 'ZZX verghe annidate' nelle Impostazioni.",
+            }
+
+        segments = list((payload or {}).get("segments") or [])
+        if not segments:
+            return {"status": "error", "message": "La verga bloccata non contiene pezzi."}
+
+        result = tubenest_engine.export_nested_rod_to_directory(
+            segments,
+            output_dir,
+            tube_type=str((payload or {}).get("tubeType") or "Tube"),
+            rod_id=str((payload or {}).get("rodId") or "rod"),
+            rod_length=float((payload or {}).get("rodLength") or 6000.0),
+        )
+        return {
+            "status": "success",
+            **result,
+            "safetyNote": (
+                "File ZZX generato e validato strutturalmente. "
+                "Aprirlo e controllarlo in Friendess/TubesT prima di qualsiasi uso macchina."
+            ),
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        return {"status": "error", "message": str(exc)}
+
+
 def get_current_state(da_fare_path):
     config = load_config()
     ignore_list = set(folder.lower() for folder in config.get('ignore_folders', []))
