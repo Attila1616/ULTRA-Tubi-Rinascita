@@ -1134,6 +1134,15 @@ def get_current_state(da_fare_path):
                     }
                     if geometry_result.get("status") == "ok":
                         piece_data["geometry"] = geometry_result.get("document")
+                        part_result = tubenest_engine.describe_tube_parts(file_path)
+                        piece_data["tubePartStatus"] = part_result.get("status", "error")
+                        if part_result.get("status") == "ok":
+                            parts = part_result.get("parts", [])
+                            piece_data["tubeParts"] = parts
+                            if len(parts) == 1:
+                                piece_data["tubePart"] = parts[0]
+                        else:
+                            piece_data["tubePartError"] = part_result.get("error", "Unknown TubePart error")
                     else:
                         piece_data["geometryError"] = geometry_result.get("error", "Unknown ZZX parser error")
                     all_pieces.append(piece_data)
