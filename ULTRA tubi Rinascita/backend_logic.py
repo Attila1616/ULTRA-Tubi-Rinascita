@@ -12,6 +12,7 @@ import openpyxl
 import importlib.util
 import tube_database
 import runtime_paths
+import tubenest_engine
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 from collections import defaultdict, Counter
@@ -1117,7 +1118,8 @@ def get_current_state(da_fare_path):
                 size, material, finish = extract_tube_info(file)
                 length, total_qty, completed_qty = extract_length_and_quantity_enhanced(file_path)
                 if length is not None and total_qty is not None:
-                    all_pieces.append({
+                    geometry_result = tubenest_engine.describe_zzx(file_path)
+                    piece_data = {
                         "id": str(uuid.uuid4()),
                         "logicalKey": make_logical_piece_key(file_path, da_fare_path),
                         "filePath": file_path,
@@ -1127,8 +1129,14 @@ def get_current_state(da_fare_path):
                         "length": length,
                         "totalQuantity": total_qty,
                         "completedQuantity": completed_qty,
-                        "quantityNeeded": max(0, total_qty - completed_qty)
-                    })
+                        "quantityNeeded": max(0, total_qty - completed_qty),
+                        "geometryStatus": geometry_result.get("status", "error"),
+                    }
+                    if geometry_result.get("status") == "ok":
+                        piece_data["geometry"] = geometry_result.get("document")
+                    else:
+                        piece_data["geometryError"] = geometry_result.get("error", "Unknown ZZX parser error")
+                    all_pieces.append(piece_data)
 
     grouped_tubes = defaultdict(list)
     for piece in all_pieces:
