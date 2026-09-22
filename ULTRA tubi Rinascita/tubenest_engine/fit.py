@@ -5,8 +5,10 @@ Coordinate convention inside the ZZX reader:
 - local cross-section coordinates are X/Y.
 
 At the machine/UI level we treat that local axial coordinate as the tube-laser
-Y axis. The second cross-section coordinate is the machine vertical axis used
-for the fall-direction rule.
+Y axis.
+
+Cut start-position/toolpath choices are intentionally handled after nesting and
+must not influence the chosen part pose.
 
 Only proper rigid rotations are allowed. No reflection/mirroring operation is
 defined anywhere in this module.
@@ -275,16 +277,6 @@ def tail_flip_eligibility(part, pose: PartPose, dead_zone_mm=400.0):
         "requiresFlip": not reasons,
         "finalEndAngled": bool(end and not end.is_straight),
     }
-
-
-def fall_friendly_final_cut(part, pose: PartPose):
-    """Whether the final face is straight or slopes '\\' in machine side view."""
-    _, end = posed_ends(part, pose)
-    if end is None:
-        return None
-    if end.is_straight:
-        return True
-    return end.slope_vertical < -STRAIGHT_SLOPE_EPS
 
 
 def pose_is_proper_rotation(_pose: PartPose):
