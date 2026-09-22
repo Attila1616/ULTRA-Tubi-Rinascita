@@ -1,7 +1,7 @@
 import unittest
 
 import tubenest_engine.optimizer as optimizer_module
-from tubenest_engine.optimizer import optimize_items_dict
+from tubenest_engine.optimizer import diagnose_items_dict, optimize_items_dict
 
 
 def make_part(
@@ -184,6 +184,49 @@ class GeometryOptimizerTests(unittest.TestCase):
         self.assertGreater(cache_size_after_first, 0)
         self.assertEqual(cache_size_after_first, cache_size_after_second)
         self.assertEqual(first, second)
+
+    def test_diagnostic_reports_definite_cross_rod_merge(self):
+        a = make_part(1000)
+        b = make_part(1000)
+        pieces = [item("A", 1000, a), item("B", 1000, b)]
+
+        # Deliberately inefficient current plan: one short piece per rod.
+        rods = [
+            {
+                "used": 1000.0,
+                "remaining": 5000.0,
+                "commonLineCount": 0,
+                "placements": [{
+                    "instance_key": "A",
+                    "nominal_length": 1000.0,
+                    "occupied_length": 1000.0,
+                    "end_a": {"angle_from_perpendicular_degrees": 0.0},
+                    "end_b": {"angle_from_perpendicular_degrees": 0.0},
+                }],
+            },
+            {
+                "used": 1000.0,
+                "remaining": 5000.0,
+                "commonLineCount": 0,
+                "placements": [{
+                    "instance_key": "B",
+                    "nominal_length": 1000.0,
+                    "occupied_length": 1000.0,
+                    "end_a": {"angle_from_perpendicular_degrees": 0.0},
+                    "end_b": {"angle_from_perpendicular_degrees": 0.0},
+                }],
+            },
+        ]
+
+        report = diagnose_items_dict(
+            pieces,
+            rods,
+            gap_mm=2.0,
+            deep_pair_checks=4,
+        )
+
+        self.assertEqual(report["definiteMergeCount"], 1)
+        self.assertIn("PUÒ DIVENTARE 1 VERGA", report["text"])
 
     def test_tail_feature_inside_last_400_blocks_flip(self):
         # Make the long piece ineligible too, otherwise the optimizer could
