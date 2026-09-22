@@ -13,6 +13,7 @@ import importlib.util
 import tube_database
 import runtime_paths
 import tubenest_engine
+from tubenest_engine.validation import validate_zzx_file
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 from collections import defaultdict, Counter
@@ -1160,6 +1161,52 @@ def get_current_state(da_fare_path):
         nested_rods = nest_pieces(flat_pieces_to_nest)
         final_state.append({"tubeType": tube_type, "pieces": pieces, "rods": nested_rods})
     return final_state
+
+
+def find_zzx_validation_issues(da_fare_path):
+    """Find ZZX files that need drawing/operator review.
+
+    Filename wall thickness is authoritative and intentionally not compared
+    against ZZX metadata. Legacy array files with a deliberately deleted final
+    cutoff are also exempt from warnings.
+    """
+    if not da_fare_path or not os.path.isdir(da_fare_path):
+        return []
+
+    config = load_config(silent=True) or {}
+    ignore_list = {str(folder).strip().lower() for folder in config.get("ignore_folders", []) if str(folder).strip()}
+    issues = []
+
+    for root, dirs, files in os.walk(da_fare_path):
+        relative_root = os.path.relpath(root, da_fare_path)
+        path_parts = [] if relative_root == "." else [part.lower() for part in relative_root.split(os.path.sep)]
+        if any(part in ignore_list for part in path_parts):
+            dirs[:] = []
+            continue
+        dirs[:] = [d for d in dirs if d.lower() not in ignore_list]
+
+        for filename in files:
+            if not filename.lower().endswith(".zzx"):
+                continue
+            file_path = os.path.join(root, filename)
+            file_issues = validate_zzx_file(file_path)
+            if not file_issues:
+                continue
+
+            relative_path = os.path.relpath(file_path, da_fare_path)
+            for issue in file_issues:
+                issues.append({
+                    "filePath": file_path,
+                    "fileName": filename,
+                    "relativePath": relative_path,
+                    "mainFolder": get_product_folder_name(file_path, da_fare_path),
+                    "type": issue.get("type", "unknown"),
+                    "message": issue.get("message", "Controllare il file ZZX."),
+                    **{k: v for k, v in issue.items() if k not in {"type", "message"}},
+                })
+
+    issues.sort(key=lambda item: (item["relativePath"].lower(), item["type"]))
+    return issues
 
 def _normalized_cut_stem(filename):
     return _stable_cut_stem(filename)
