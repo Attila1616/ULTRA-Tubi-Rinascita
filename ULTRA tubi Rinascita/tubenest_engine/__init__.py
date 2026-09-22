@@ -26,6 +26,7 @@ from .fit import (
     tail_flip_eligibility,
 )
 from .toolpath import curve_start_parameter, point_at_composite_parameter
+from .exporter import export_nested_rod, export_nested_rod_to_directory
 from .reader import (
     clear_cache,
     describe_zzx,
@@ -58,6 +59,8 @@ __all__ = [
     "tail_flip_eligibility",
     "curve_start_parameter",
     "point_at_composite_parameter",
+    "export_nested_rod",
+    "export_nested_rod_to_directory",
     "clear_cache",
     "describe_zzx",
     "read_zzx",
