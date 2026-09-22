@@ -6,6 +6,13 @@ or modify machine files.
 """
 
 from .bcmp import FormatError
+from .domain import (
+    TubePart,
+    build_tube_part,
+    build_tube_parts,
+    describe_tube_parts,
+    read_tube_parts,
+)
 from .reader import (
     clear_cache,
     describe_zzx,
@@ -15,6 +22,11 @@ from .reader import (
 
 __all__ = [
     "FormatError",
+    "TubePart",
+    "build_tube_part",
+    "build_tube_parts",
+    "describe_tube_parts",
+    "read_tube_parts",
     "clear_cache",
     "describe_zzx",
     "read_zzx",
