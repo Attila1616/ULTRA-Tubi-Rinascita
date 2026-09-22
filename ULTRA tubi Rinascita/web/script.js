@@ -4,6 +4,7 @@
 let expandedState = {}, daFareOverrides = {}, allTubeData = [], unmatchedIgsFiles = [], zzxValidationIssues = [];
 let lastIgsWarningSignature = '';
 let lastZzxWarningSignature = '';
+let nestingRenderSequence = 0;
 let uiPreferences = {
     sorting: {},
     columnWidths: {},
@@ -608,7 +609,8 @@ async function updateSummaryPreview() {
     thresholdValue.textContent = `${threshold}%`;
     summaryPreview.textContent = 'Generazione riepilogo in corso...';
     try {
-        const summaryData = await window.pywebview.api.get_summary_data_for_plan(threshold, buildSummaryPlanFromCurrentView());
+        const plan = await buildSummaryPlanFromCurrentView();
+        const summaryData = await window.pywebview.api.get_summary_data_for_plan(threshold, plan);
         summaryPreview.textContent = summaryData.text;
     } catch (e) {
         console.error("Failed to generate summary:", e);
@@ -693,7 +695,7 @@ async function loadTubeData() {
         unmatchedIgsFiles = await window.pywebview.api.get_unmatched_igs_files();
         zzxValidationIssues = await window.pywebview.api.get_zzx_validation_issues();
         console.log("Received fresh data from backend:", allTubeData);
-        renderUI();
+        await renderUI();
         showIgsWarningAlertIfNeeded();
         showZzxWarningAlertIfNeeded();
     } catch (e) {
@@ -1531,57 +1533,91 @@ async function saveUiState() {
 
 
 // --- Core UI Rendering ---
-function renderUI() {
+async function renderUI() {
     if (mainContainer.style.display === 'none') return;
-    availableSegmentMap = new Map();
-    currentPieceMap = new Map();
-    currentPieceByLogicalKey = new Map();
-    mainContainer.innerHTML = '';
-    renderIgsWarningBanner();
-    renderZzxWarningBanner();
-    if (!allTubeData || allTubeData.length === 0) {
-        mainContainer.insertAdjacentHTML('beforeend', '<p>No tubes found.</p>');
-        return;
-    }
-    mainContainer.insertAdjacentHTML('beforeend', renderNestingGlobalControls());
-    allTubeData.sort((a, b) => a.tubeType.localeCompare(b.tubeType));
-    allTubeData.forEach(group => {
-        const pieceInstances = buildPieceInstances(group.pieces);
-        const lockedForTube = reconcileLockedRodsForTube(group.tubeType, pieceInstances);
-        const lockedInstanceKeys = new Set();
-        lockedForTube.forEach(rod => {
-            (rod.segments || []).forEach(segment => {
-                if (!segment.done && segment.instanceKey) lockedInstanceKeys.add(segment.instanceKey);
+    const renderSequence = ++nestingRenderSequence;
+
+    try {
+        const nextAvailableSegmentMap = new Map();
+        const nextCurrentPieceMap = new Map();
+        const nextCurrentPieceByLogicalKey = new Map();
+        const groupContexts = [];
+        const nestRequests = [];
+
+        (allTubeData || []).sort((a, b) => a.tubeType.localeCompare(b.tubeType));
+
+        for (const group of (allTubeData || [])) {
+            const pieceInstances = buildPieceInstances(group.pieces);
+            const lockedForTube = reconcileLockedRodsForTube(group.tubeType, pieceInstances);
+            const lockedInstanceKeys = new Set();
+
+            lockedForTube.forEach(rod => {
+                (rod.segments || []).forEach(segment => {
+                    if (!segment.done && segment.instanceKey) lockedInstanceKeys.add(segment.instanceKey);
+                });
             });
+
+            const piecesToNest = pieceInstances.filter(segment => !lockedInstanceKeys.has(segment.instanceKey));
+            piecesToNest.forEach(segment => nextAvailableSegmentMap.set(segment.instanceKey, segment));
+            group.pieces.forEach(piece => {
+                nextCurrentPieceMap.set(piece.id, piece);
+                nextCurrentPieceByLogicalKey.set(piece.logicalKey || stablePieceKey(piece.filePath), piece);
+            });
+
+            groupContexts.push({ group, lockedForTube });
+            nestRequests.push({ tubeType: group.tubeType, pieces: piecesToNest });
+        }
+
+        const nestedGroups = await nestGroupsBackend(nestRequests);
+        if (renderSequence !== nestingRenderSequence) return;
+
+        const nestedByTube = new Map(nestedGroups.map(group => [group.tubeType, group.rods || []]));
+        availableSegmentMap = nextAvailableSegmentMap;
+        currentPieceMap = nextCurrentPieceMap;
+        currentPieceByLogicalKey = nextCurrentPieceByLogicalKey;
+
+        mainContainer.innerHTML = '';
+        renderIgsWarningBanner();
+        renderZzxWarningBanner();
+
+        if (!allTubeData || allTubeData.length === 0) {
+            mainContainer.insertAdjacentHTML('beforeend', '<p>No tubes found.</p>');
+            return;
+        }
+
+        mainContainer.insertAdjacentHTML('beforeend', renderNestingGlobalControls());
+
+        groupContexts.forEach(({ group, lockedForTube }) => {
+            const nestedRods = nestedByTube.get(group.tubeType) || [];
+            const groupDiv = document.createElement('div');
+            groupDiv.className = 'tube-group';
+
+            const header = document.createElement('div');
+            header.className = 'tube-header';
+            header.dataset.tubeType = group.tubeType;
+            const isExpanded = expandedState[group.tubeType] || false;
+            const headerText = isExpanded ? `▼ ${group.tubeType}` : `► ${group.tubeType}`;
+            const styledHeaderText = headerText.replace(/316/g, '<span class="material-316">316</span>');
+            header.innerHTML = `<span class="tube-header-label">${styledHeaderText}</span>
+                <button class="action-button icon-button tube-location-button" data-action="search-tube-location" data-tube-type="${escapeAttr(group.tubeType)}" title="Mostra ubicazioni tubo" aria-label="Mostra ubicazioni tubo">&#128269;</button>`;
+
+            const detailsDiv = document.createElement('div');
+            detailsDiv.className = 'tube-details';
+            detailsDiv.style.display = isExpanded ? 'block' : 'none';
+            detailsDiv.innerHTML = renderRodsHTML(group.tubeType, lockedForTube, nestedRods);
+            detailsDiv.innerHTML += renderPieceListHTML(group.pieces, group.tubeType);
+
+            groupDiv.appendChild(header);
+            groupDiv.appendChild(detailsDiv);
+            mainContainer.appendChild(groupDiv);
         });
 
-        const piecesToNest = pieceInstances.filter(segment => !lockedInstanceKeys.has(segment.instanceKey));
-        piecesToNest.forEach(segment => availableSegmentMap.set(segment.instanceKey, segment));
-        group.pieces.forEach(p => {
-            currentPieceMap.set(p.id, p);
-            currentPieceByLogicalKey.set(p.logicalKey || stablePieceKey(p.filePath), p);
-        });
-        const nestedRods = nestPiecesJS(piecesToNest); 
-        const groupDiv = document.createElement('div');
-        groupDiv.className = 'tube-group';
-        const header = document.createElement('div');
-        header.className = 'tube-header';
-        header.dataset.tubeType = group.tubeType;
-        const isExpanded = expandedState[group.tubeType] || false;
-        const headerText = isExpanded ? `▼ ${group.tubeType}` : `► ${group.tubeType}`;
-        const styledHeaderText = headerText.replace(/316/g, '<span class="material-316">316</span>');
-        header.innerHTML = `<span class="tube-header-label">${styledHeaderText}</span>
-            <button class="action-button icon-button tube-location-button" data-action="search-tube-location" data-tube-type="${escapeAttr(group.tubeType)}" title="Mostra ubicazioni tubo" aria-label="Mostra ubicazioni tubo">&#128269;</button>`;
-        const detailsDiv = document.createElement('div');
-        detailsDiv.className = 'tube-details';
-        detailsDiv.style.display = isExpanded ? 'block' : 'none';
-        detailsDiv.innerHTML = renderRodsHTML(group.tubeType, lockedForTube, nestedRods);
-        detailsDiv.innerHTML += renderPieceListHTML(group.pieces, group.tubeType);
-        groupDiv.appendChild(header);
-        groupDiv.appendChild(detailsDiv);
-        mainContainer.appendChild(groupDiv);
-    });
-    updateGuardedButtonStates();
+        updateGuardedButtonStates();
+    } catch (error) {
+        if (renderSequence !== nestingRenderSequence) return;
+        console.error('Backend nesting render failed:', error);
+        mainContainer.innerHTML = '<p style="color: red;">Errore durante il nesting backend. Controlla il terminale.</p>';
+    }
 }
 function renderIgsWarningBanner() {
     if (!unmatchedIgsFiles || unmatchedIgsFiles.length === 0) return;
@@ -1949,7 +1985,7 @@ async function handleContainerClick(event) {
                 toggleAllUnlockedRods();
                 break;
             case 'lock-all-rods':
-                lockAllUnlockedRods();
+                await lockAllUnlockedRods();
                 break;
             case 'unlock-all-rods':
                 unlockAllLockedRods();
@@ -2057,7 +2093,7 @@ async function handleDaFareChange(input) {
     const newDaFare = Math.max(0, parseInt(input.value, 10));
     daFareOverrides[filePath] = newDaFare;
     await saveUiState();
-    renderUI();
+    await renderUI();
 }
 async function handleQuantityChange(input) {
     const pieceId = input.dataset.pieceId;
@@ -2229,9 +2265,11 @@ function buildPieceInstances(pieces) {
     });
     return instances;
 }
-function buildSummaryPlanFromCurrentView() {
-    const plan = [];
-    (allTubeData || []).forEach(group => {
+async function buildSummaryPlanFromCurrentView() {
+    const planByTube = new Map();
+    const nestRequests = [];
+
+    for (const group of (allTubeData || [])) {
         const instances = buildPieceInstances(group.pieces || []);
         const lockedForTube = reconcileLockedRodsForTube(group.tubeType, instances);
         const lockedKeys = new Set();
@@ -2248,16 +2286,24 @@ function buildSummaryPlanFromCurrentView() {
         });
 
         const freeSegments = instances.filter(segment => !lockedKeys.has(segment.instanceKey));
-        nestPiecesJS(freeSegments).forEach(rod => {
+        planByTube.set(group.tubeType, rods);
+        nestRequests.push({ tubeType: group.tubeType, pieces: freeSegments });
+    }
+
+    const nestedGroups = await nestGroupsBackend(nestRequests);
+    nestedGroups.forEach(group => {
+        const rods = planByTube.get(group.tubeType) || [];
+        (group.rods || []).forEach(rod => {
             if ((rod.segments || []).length > 0) {
                 rods.push({ remaining: rod.remaining, pieces: [] });
             }
         });
-
-        if (rods.length > 0) {
-            plan.push({ tubeType: group.tubeType, rods });
-        }
     });
+
+    const plan = [];
+    for (const [tubeType, rods] of planByTube.entries()) {
+        if (rods.length > 0) plan.push({ tubeType, rods });
+    }
     return plan;
 }
 function reconcileLockedRodsForTube(tubeType, currentInstances) {
@@ -2297,12 +2343,15 @@ function toggleAllUnlockedRods() {
     saveUiState();
     renderUI();
 }
-function lockAllUnlockedRods() {
+async function lockAllUnlockedRods() {
     let rodsAdded = 0;
-    (allTubeData || []).forEach(group => {
+    const nestRequests = [];
+
+    for (const group of (allTubeData || [])) {
         const instances = buildPieceInstances(group.pieces || []);
         const lockedForTube = reconcileLockedRodsForTube(group.tubeType, instances);
         const lockedInstanceKeys = new Set();
+
         lockedForTube.forEach(rod => {
             (rod.segments || []).forEach(segment => {
                 if (!segment.done && segment.instanceKey) lockedInstanceKeys.add(segment.instanceKey);
@@ -2310,11 +2359,16 @@ function lockAllUnlockedRods() {
         });
 
         const freeSegments = instances.filter(segment => !lockedInstanceKeys.has(segment.instanceKey));
-        const rodsToLock = nestPiecesJS(freeSegments);
-        if (rodsToLock.length === 0) return;
+        if (freeSegments.length > 0) {
+            nestRequests.push({ tubeType: group.tubeType, pieces: freeSegments });
+        }
+    }
 
+    const nestedGroups = await nestGroupsBackend(nestRequests);
+
+    nestedGroups.forEach(group => {
         lockedRods[group.tubeType] = lockedRods[group.tubeType] || [];
-        rodsToLock.forEach(nestedRod => {
+        (group.rods || []).forEach(nestedRod => {
             if (!(nestedRod.segments || []).length) return;
             lockedRods[group.tubeType].push({
                 rodId: makeRodId(),
@@ -2323,14 +2377,18 @@ function lockAllUnlockedRods() {
                 historyLogged: false,
                 inventoryDecrementDone: false,
                 inventoryDecision: null,
-                segments: nestedRod.segments.map(segment => ({ ...segment, done: false }))
+                segments: nestedRod.segments.map(segment => {
+                    const { nestPlacement, ...persistentSegment } = segment;
+                    return { ...persistentSegment, done: false };
+                })
             });
             rodsAdded += 1;
         });
     });
+
     if (rodsAdded === 0) return;
-    saveUiState();
-    renderUI();
+    await saveUiState();
+    await renderUI();
 }
 function unlockAllLockedRods() {
     const hasLockedRods = Object.values(lockedRods || {}).some(rods => Array.isArray(rods) && rods.length > 0);
@@ -2628,24 +2686,68 @@ async function confirmInventoryUse() {
 }
 
 // --- Utilities ---
-function nestPiecesJS(piecesToNest, rodLength = 6000) {
-    if (!piecesToNest || piecesToNest.length === 0) return [];
-    piecesToNest.sort((a, b) => b.length - a.length);
-    const rods = [];
-    piecesToNest.forEach(piece => {
-        let placed = false;
-        for (let i = 0; i < rods.length; i++) {
-            if (piece.length <= rods[i].remaining) {
-                rods[i].remaining -= piece.length;
-                rods[i].segments.push(piece);
-                placed = true;
-                break;
-            }
-        }
-        if (!placed) { rods.push({ remaining: rodLength - piece.length, segments: [piece] }); }
+async function nestGroupsBackend(groupRequests, rodLength = 6000) {
+    const sourcePieces = new Map();
+    (allTubeData || []).forEach(group => {
+        (group.pieces || []).forEach(piece => sourcePieces.set(piece.id, piece));
     });
-    return rods;
+
+    const requestByTube = new Map();
+    const payload = (groupRequests || []).map(group => {
+        const pieces = group.pieces || [];
+        requestByTube.set(group.tubeType, pieces);
+        return {
+            tubeType: group.tubeType,
+            pieces: pieces.map(segment => {
+                const sourcePiece = sourcePieces.get(segment.sourceId);
+                return {
+                    instanceKey: segment.instanceKey,
+                    sourceId: segment.sourceId,
+                    length: segment.length,
+                    tubePart: sourcePiece?.tubePart || null
+                };
+            })
+        };
+    });
+
+    if (payload.length === 0) return [];
+
+    const response = await window.pywebview.api.nest_piece_groups(payload, rodLength);
+    if (!response || response.status !== 'success') {
+        throw new Error(response?.message || 'Nesting backend non disponibile.');
+    }
+
+    return (response.groups || []).map(group => {
+        const originals = new Map(
+            (requestByTube.get(group.tubeType) || []).map(segment => [segment.instanceKey, segment])
+        );
+
+        const rods = (group.rods || []).map(rod => {
+            const placements = rod.placements || [];
+            const segments = placements.map(placement => {
+                const original = originals.get(placement.instance_key);
+                if (!original) {
+                    throw new Error(`Placement backend sconosciuto: ${placement.instance_key}`);
+                }
+                return {
+                    ...original,
+                    nestPlacement: placement
+                };
+            });
+
+            return {
+                rodLength: rod.rodLength,
+                used: rod.used,
+                remaining: rod.remaining,
+                placements,
+                segments
+            };
+        });
+
+        return { tubeType: group.tubeType, rods };
+    });
 }
+
 function getColorForPiece(piece) {
     const seed = String(piece?.logicalKey || piece?.filePath || piece?.fileName || piece?.length || '');
     let hash = 0;
