@@ -2080,6 +2080,11 @@ function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked,
         html += `<button class="action-button icon-button rod-lock-button rod-lock-locked" data-action="unlock-locked-rod" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Sblocca verga">&#128274;</button>`;
         html += `<button class="action-button fatto-button ctrl-required" data-action="mark-locked-rod-fatto" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}"${isDone ? ' disabled' : ''}>Fatto</button>`;
     } else {
+        const rodNumberMatch = String(label || '').match(/(\d+)$/);
+        const rodNumber = rodNumberMatch ? Number(rodNumberMatch[1]) : null;
+        if (rodNumber && segments.length > 0) {
+            html += `<button class="action-button icon-button" data-action="debug-nesting-rod" data-tube-type="${escapeAttr(tubeType)}" data-rod-number="${rodNumber}" title="Debug questa verga">&#128269;</button>`;
+        }
         html += `<button class="action-button icon-button rod-lock-button rod-lock-unlocked" data-action="lock-unlocked-rod" data-tube-type="${escapeAttr(tubeType)}" data-segment-keys='${escapeAttr(segmentKeys)}' title="Blocca verga"${segments.length === 0 ? ' disabled' : ''}>&#128275;</button>`;
         html += `<button class="action-button fatto-button ctrl-required" data-action="mark-rod-fatto" data-rod-pieces='${escapeAttr(rodPieceIds)}'${segments.length === 0 ? ' disabled' : ''}>Fatto</button>`;
     }
@@ -2276,6 +2281,12 @@ async function handleContainerClick(event) {
                 break;
             case 'debug-nesting-group':
                 await debugNestingGroup(actionTarget.dataset.tubeType);
+                break;
+            case 'debug-nesting-rod':
+                await debugNestingGroup(
+                    actionTarget.dataset.tubeType,
+                    Number(actionTarget.dataset.rodNumber)
+                );
                 break;
             case 'toggle-unlocked-rods':
                 toggleUnlockedRodsForTube(actionTarget.dataset.tubeType);
@@ -3063,7 +3074,7 @@ async function nestGroupsBackend(groupRequests, rodLength = 6000) {
     });
 }
 
-async function debugNestingGroup(tubeType) {
+async function debugNestingGroup(tubeType, focusRodNumber = null) {
     const group = (allTubeData || []).find(item => item.tubeType === tubeType);
     if (!group) return;
 
@@ -3098,7 +3109,8 @@ async function debugNestingGroup(tubeType) {
         const response = await window.pywebview.api.debug_nesting_group(
             payload,
             rods,
-            6000
+            6000,
+            focusRodNumber
         );
         if (!response || response.status !== 'success') {
             openSearchModal(response?.text || response?.message || 'Errore durante il debug nesting.');
