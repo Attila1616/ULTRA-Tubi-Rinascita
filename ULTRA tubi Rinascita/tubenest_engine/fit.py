@@ -22,6 +22,8 @@ from typing import Optional
 
 ANGLE_EPS = 1e-7
 PLANE_EPS = 1e-5
+PLANAR_FIT_TOLERANCE_MM = 0.05
+COMMON_LINE_RESIDUAL_TOLERANCE_MM = 0.01
 STRAIGHT_SLOPE_EPS = 1e-5
 
 
@@ -190,17 +192,39 @@ def fit_adjacent_parts(
     if previous_end is None or next_start is None:
         raise ValueError("Both adjacent ends need planar geometry")
 
-    if previous_end.residual_mm is not None and previous_end.residual_mm > PLANE_EPS:
-        raise ValueError("Previous end is not planar enough for planar fitting")
-    if next_start.residual_mm is not None and next_start.residual_mm > PLANE_EPS:
-        raise ValueError("Next start is not planar enough for planar fitting")
+    if (
+        previous_end.residual_mm is not None
+        and previous_end.residual_mm > PLANAR_FIT_TOLERANCE_MM
+    ):
+        raise ValueError(
+            f"Previous end plane residual {previous_end.residual_mm:.6f} mm "
+            f"exceeds {PLANAR_FIT_TOLERANCE_MM:.3f} mm fitting tolerance"
+        )
+    if (
+        next_start.residual_mm is not None
+        and next_start.residual_mm > PLANAR_FIT_TOLERANCE_MM
+    ):
+        raise ValueError(
+            f"Next start plane residual {next_start.residual_mm:.6f} mm "
+            f"exceeds {PLANAR_FIT_TOLERANCE_MM:.3f} mm fitting tolerance"
+        )
 
     dsx = next_start.slope_x - previous_end.slope_x
     dsy = next_start.slope_vertical - previous_end.slope_vertical
     slope_delta = math.hypot(dsx, dsy)
 
     same_plane_shape = slope_delta <= PLANE_EPS
-    common_line = bool(allow_common_line and same_plane_shape)
+    previous_residual = float(previous_end.residual_mm or 0.0)
+    next_residual = float(next_start.residual_mm or 0.0)
+    residuals_precise_enough_for_common_line = (
+        previous_residual <= COMMON_LINE_RESIDUAL_TOLERANCE_MM
+        and next_residual <= COMMON_LINE_RESIDUAL_TOLERANCE_MM
+    )
+    common_line = bool(
+        allow_common_line
+        and same_plane_shape
+        and residuals_precise_enough_for_common_line
+    )
     target_gap = 0.0 if common_line else float(gap_mm)
     if target_gap < 0:
         raise ValueError("gap_mm cannot be negative")
