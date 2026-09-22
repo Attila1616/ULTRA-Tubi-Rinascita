@@ -14,6 +14,17 @@ from .domain import (
     read_tube_parts,
 )
 from .nesting import NestItem, NestPlacement, NestRod, nest_items, nest_items_dict
+from .fit import (
+    AdjacencyFit,
+    PartPose,
+    PosedEnd,
+    equivalent_axial_rotations,
+    fall_friendly_final_cut,
+    fit_adjacent_parts,
+    posed_ends,
+    rectangular_rotation_family,
+    tail_flip_eligibility,
+)
 from .reader import (
     clear_cache,
     describe_zzx,
@@ -33,6 +44,15 @@ __all__ = [
     "NestRod",
     "nest_items",
     "nest_items_dict",
+    "AdjacencyFit",
+    "PartPose",
+    "PosedEnd",
+    "equivalent_axial_rotations",
+    "fall_friendly_final_cut",
+    "fit_adjacent_parts",
+    "posed_ends",
+    "rectangular_rotation_family",
+    "tail_flip_eligibility",
     "clear_cache",
     "describe_zzx",
     "read_zzx",
