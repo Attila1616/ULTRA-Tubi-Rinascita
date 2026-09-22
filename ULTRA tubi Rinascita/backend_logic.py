@@ -1109,6 +1109,20 @@ def nest_piece_instances(piece_instances, rod_length=6000):
         return {"status": "error", "message": str(exc), "rods": []}
 
 
+def nest_piece_groups(groups, rod_length=6000):
+    """Nest multiple tube-type groups in one UI/backend round trip."""
+    try:
+        result_groups = []
+        for group in groups or []:
+            tube_type = str(group.get("tubeType") or "")
+            pieces = group.get("pieces") or []
+            rods = tubenest_engine.nest_items_dict(pieces, rod_length=rod_length)
+            result_groups.append({"tubeType": tube_type, "rods": rods})
+        return {"status": "success", "groups": result_groups}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc), "groups": []}
+
+
 def get_current_state(da_fare_path):
     config = load_config()
     ignore_list = set(folder.lower() for folder in config.get('ignore_folders', []))
