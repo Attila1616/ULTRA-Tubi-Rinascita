@@ -65,6 +65,7 @@ class ZzxDocumentInfo:
     document_type: str
     file_version: str
     default_channel: Optional[int]
+    source_sha256: str
     segments: list = field(default_factory=list)
 
     @property
