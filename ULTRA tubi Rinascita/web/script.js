@@ -51,6 +51,7 @@ let settingsModal, settingsDaFarePath, settingsInventoryXlsxPath, settingsDocxOu
 let settingsIgnoreInput, settingsIgnoreList;
 let settingsIgnoredFolders = [];
 let lockColors = { unlocked: '#dc3545', locked: '#198754' };
+let nestingDebugEnabled = true;
 let inventoryExportModal, inventoryExportIncludeMissing;
 let orderPriorityModal, orderPrioritySearch, orderPrioritySelectAll, orderPriorityRowsContainer;
 let orderPriorityStatus, orderPriorityRows = [];
@@ -70,6 +71,7 @@ const settingsPathFieldIds = {
     codes_docx_output_dir: 'settings-codes-docx-output-dir',
     inventory_xlsx_output_dir: 'settings-inventory-xlsx-output-dir',
     order_txt_output_dir: 'settings-order-txt-output-dir',
+    nested_zzx_output_dir: 'settings-nested-zzx-output-dir',
     inventory_request_folder: 'settings-inventory-request-folder',
 };
 
@@ -408,6 +410,7 @@ async function openSettingsModal() {
         document.getElementById('settings-order-medium-quantity').value = parseNonNegativeInteger(config.order_priority_medium_quantity, 3);
         document.getElementById('settings-order-high-quantity').value = parseNonNegativeInteger(config.order_priority_high_quantity, 5);
         document.getElementById('settings-nesting-gap-mm').value = Number.isFinite(Number(config.nesting_gap_mm)) ? Number(config.nesting_gap_mm) : 2;
+        document.getElementById('settings-nesting-debug-enabled').checked = config.nesting_debug_enabled !== false;
         document.getElementById('settings-order-include-low-priority').checked = config.order_include_low_priority !== false;
         settingsIgnoredFolders = Array.isArray(config.ignore_folders) ? [...config.ignore_folders] : [];
         settingsIgnoreInput.value = '';
@@ -520,6 +523,7 @@ async function saveSettings() {
             order_priority_high_quantity: parseNonNegativeInteger(document.getElementById('settings-order-high-quantity').value, 5),
             order_include_low_priority: document.getElementById('settings-order-include-low-priority').checked,
             nesting_gap_mm: Math.max(0, Number(document.getElementById('settings-nesting-gap-mm').value) || 0),
+            nesting_debug_enabled: document.getElementById('settings-nesting-debug-enabled').checked,
         };
         Object.entries(settingsPathFieldIds).forEach(([configKey, elementId]) => {
             payload[configKey] = document.getElementById(elementId)?.value || '';
@@ -532,6 +536,7 @@ async function saveSettings() {
         closeSettingsModal();
         applyLockColors(response.config?.lock_unlocked_color, response.config?.lock_locked_color);
         nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}`;
+        nestingDebugEnabled = response.config?.nesting_debug_enabled !== false;
         invalidateNestingCache();
         document.getElementById('current-folder-path').textContent = response.config?.da_fare_path || 'Non impostato';
         await loadTubeData();
@@ -674,6 +679,7 @@ async function initialize() {
         if (configResponse?.status === 'success') {
             applyLockColors(configResponse.config?.lock_unlocked_color, configResponse.config?.lock_locked_color);
             nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}`;
+            nestingDebugEnabled = configResponse.config?.nesting_debug_enabled !== false;
         }
         
         const initialData = await window.pywebview.api.get_initial_data();
@@ -1885,7 +1891,7 @@ function renderRodsHTML(tubeType, lockedForTube, nestedRods) {
     let html = `<div class="rod-section-heading">
         <h3 class="details-section-title">Visualizzazione Verghe (${totalShown} visibili)</h3>
         <div class="rod-section-actions">
-            <button class="action-button database-mini-button" data-action="debug-nesting-group" data-tube-type="${escapeAttr(tubeType)}">Debug nesting</button>
+            ${nestingDebugEnabled ? `<button class="action-button database-mini-button" data-action="debug-nesting-group" data-tube-type="${escapeAttr(tubeType)}">Debug nesting</button>` : ''}
             <button class="action-button database-mini-button" data-action="toggle-unlocked-rods" data-tube-type="${escapeAttr(tubeType)}">${unlockedVisible ? 'Nascondi libere' : 'Mostra libere'}</button>
         </div>
     </div>`;
@@ -2077,12 +2083,13 @@ function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked,
 
     html += `</div></div><div class="rod-actions">`;
     if (kind === 'locked') {
+        html += `<button class="action-button" data-action="export-locked-rod-zzx" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Esporta questa verga come ZZX annidato"${segments.length === 0 ? ' disabled' : ''}>ZZX</button>`;
         html += `<button class="action-button icon-button rod-lock-button rod-lock-locked" data-action="unlock-locked-rod" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Sblocca verga">&#128274;</button>`;
         html += `<button class="action-button fatto-button ctrl-required" data-action="mark-locked-rod-fatto" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}"${isDone ? ' disabled' : ''}>Fatto</button>`;
     } else {
         const rodNumberMatch = String(label || '').match(/(\d+)$/);
         const rodNumber = rodNumberMatch ? Number(rodNumberMatch[1]) : null;
-        if (rodNumber && segments.length > 0) {
+        if (nestingDebugEnabled && rodNumber && segments.length > 0) {
             html += `<button class="action-button icon-button" data-action="debug-nesting-rod" data-tube-type="${escapeAttr(tubeType)}" data-rod-number="${rodNumber}" title="Debug questa verga">&#128269;</button>`;
         }
         html += `<button class="action-button icon-button rod-lock-button rod-lock-unlocked" data-action="lock-unlocked-rod" data-tube-type="${escapeAttr(tubeType)}" data-segment-keys='${escapeAttr(segmentKeys)}' title="Blocca verga"${segments.length === 0 ? ' disabled' : ''}>&#128275;</button>`;
@@ -2220,7 +2227,60 @@ function renderHistory(historyData) {
 
 
 // --- Event Handlers & Actions ---
-async function handleContainerClick(event) {
+async async function exportLockedRodZzx(tubeType, rodId) {
+    const rod = getLockedRod(tubeType, rodId);
+    if (!rod || !(rod.segments || []).length) {
+        alert('Verga bloccata non trovata o vuota.');
+        return;
+    }
+
+    const segments = (rod.segments || []).map(segment => {
+        const sourcePiece = findPieceById(segment.sourceId);
+        return {
+            instanceKey: segment.instanceKey,
+            filePath: segment.currentFilePath || segment.filePath || sourcePiece?.filePath || '',
+            fileName: segment.fileName || sourcePiece?.fileName || '',
+            segmentHandle: sourcePiece?.tubePart?.segment_handle ?? null,
+            nestPlacement: segment.nestPlacement || null,
+        };
+    });
+
+    if (segments.some(segment => !segment.nestPlacement)) {
+        alert(
+            'Questa verga contiene pezzi senza posa geometrica salvata. ' +
+            'Sbloccala, lascia che il nesting venga ricalcolato e ribloccala prima di esportare.'
+        );
+        return;
+    }
+
+    try {
+        const response = await window.pywebview.api.export_locked_rod_zzx({
+            tubeType,
+            rodId,
+            rodLength: 6000,
+            segments,
+        });
+        if (!response || response.status !== 'success') {
+            alert(response?.message || 'Esportazione ZZX non riuscita.');
+            return;
+        }
+
+        const warnings = Array.isArray(response.warnings) && response.warnings.length
+            ? `\n\nAvvisi:\n- ${response.warnings.join('\n- ')}`
+            : '';
+        alert(
+            `ZZX annidato esportato:\n${response.path}\n\n` +
+            `Segmenti: ${response.segmentCount}\n` +
+            `${response.safetyNote || 'Controllare il file in Friendess/TubesT prima dell’uso macchina.'}` +
+            warnings
+        );
+    } catch (error) {
+        console.error('Locked rod ZZX export failed:', error);
+        alert('Errore durante l’esportazione ZZX della verga.');
+    }
+}
+
+function handleContainerClick(event) {
     const target = event.target;
     const actionTarget = target.closest('[data-action]');
     const headerTarget = target.closest('.tube-header');
@@ -2272,6 +2332,12 @@ async function handleContainerClick(event) {
                 break;
             case 'unlock-locked-rod':
                 unlockLockedRod(actionTarget.dataset.tubeType, actionTarget.dataset.rodId);
+                break;
+            case 'export-locked-rod-zzx':
+                await exportLockedRodZzx(
+                    actionTarget.dataset.tubeType,
+                    actionTarget.dataset.rodId
+                );
                 break;
             case 'mark-locked-rod-fatto':
                 await markLockedRodFatto(actionTarget.dataset.tubeType, actionTarget.dataset.rodId);
