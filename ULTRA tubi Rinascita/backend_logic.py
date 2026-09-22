@@ -1082,21 +1082,22 @@ def decrement_tube_database_position(payload, da_fare_path=None):
 
 # --- Nesting ---
 def nest_pieces(pieces_to_nest, rod_length=6000):
+    """Compatibility wrapper around the authoritative TubeNest backend engine."""
     if not pieces_to_nest:
         return []
-    pieces_to_nest.sort(key=lambda p: p['length'], reverse=True)
-    rods = []
-    for piece in pieces_to_nest:
-        placed = False
-        for rod in rods:
-            if piece['length'] <= rod['remaining']:
-                rod['remaining'] -= piece['length']
-                rod['pieces'].append(piece['id'])
-                placed = True
-                break
-        if not placed:
-            rods.append({'remaining': rod_length - piece['length'], 'pieces': [piece['id']]})
-    return rods
+
+    items = []
+    for index, piece in enumerate(pieces_to_nest):
+        source_id = str(piece.get("id") or piece.get("sourceId") or "")
+        instance_key = str(piece.get("instanceKey") or f"{source_id}::{index + 1}")
+        items.append({
+            "instanceKey": instance_key,
+            "sourceId": source_id,
+            "length": float(piece["length"]),
+            "tubePart": piece.get("tubePart"),
+        })
+
+    return tubenest_engine.nest_items_dict(items, rod_length=rod_length)
 
 # --- Main State Aggregation ---
 def get_current_state(da_fare_path):
@@ -1156,8 +1157,13 @@ def get_current_state(da_fare_path):
     for tube_type, pieces in grouped_tubes.items():
         flat_pieces_to_nest = []
         for p in pieces:
-            for _ in range(p['quantityNeeded']):
-                flat_pieces_to_nest.append({'length': p['length'], 'id': p['id']})
+            for instance_index in range(p['quantityNeeded']):
+                flat_pieces_to_nest.append({
+                    'length': p['length'],
+                    'id': p['id'],
+                    'instanceKey': f"{p['logicalKey']}::{instance_index + 1}",
+                    'tubePart': p.get('tubePart'),
+                })
         nested_rods = nest_pieces(flat_pieces_to_nest)
         final_state.append({"tubeType": tube_type, "pieces": pieces, "rods": nested_rods})
     return final_state
