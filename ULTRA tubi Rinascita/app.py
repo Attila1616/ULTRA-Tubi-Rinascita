@@ -176,6 +176,14 @@ class Api:
             traceback.print_exc()
             return {"status": "error", "message": "Errore durante il nesting backend.", "rods": []}
 
+    def nest_piece_groups(self, groups, rod_length=6000):
+        try:
+            return logic.nest_piece_groups(groups or [], rod_length)
+        except Exception:
+            print("--- PYTHON ERROR in nest_piece_groups ---")
+            traceback.print_exc()
+            return {"status": "error", "message": "Errore durante il nesting backend.", "groups": []}
+
     def get_unmatched_igs_files(self):
         try:
             return logic.find_unmatched_igs_files(self.da_fare_path)
