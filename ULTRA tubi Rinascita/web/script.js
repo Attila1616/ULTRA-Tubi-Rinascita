@@ -2227,7 +2227,7 @@ function renderHistory(historyData) {
 
 
 // --- Event Handlers & Actions ---
-async async function exportLockedRodZzx(tubeType, rodId) {
+async function exportLockedRodZzx(tubeType, rodId) {
     const rod = getLockedRod(tubeType, rodId);
     if (!rod || !(rod.segments || []).length) {
         alert('Verga bloccata non trovata o vuota.');
@@ -2280,7 +2280,7 @@ async async function exportLockedRodZzx(tubeType, rodId) {
     }
 }
 
-function handleContainerClick(event) {
+async function handleContainerClick(event) {
     const target = event.target;
     const actionTarget = target.closest('[data-action]');
     const headerTarget = target.closest('.tube-header');
