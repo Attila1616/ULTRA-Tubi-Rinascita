@@ -140,6 +140,7 @@ class PlacedItem:
     gap_before_mm: float = 0.0
     overlap_before_mm: float = 0.0
     requires_tail_flip: bool = False
+    geometry_fallback_before: Optional[str] = None
 
 
 @dataclass
@@ -404,6 +405,7 @@ def _append_candidate(
         elif candidate_family != new_family:
             return None
 
+    geometry_fallback_before = None
     if not state.placed:
         origin = 0.0
         common_line = False
@@ -428,9 +430,17 @@ def _append_candidate(
                     pose,
                     gap_mm,
                 )
-            except (ValueError, TypeError):
-                return None
-            origin = float(previous_placed.origin) + float(relative_origin)
+                origin = float(previous_placed.origin) + float(relative_origin)
+            except (ValueError, TypeError) as exc:
+                # A geometry-fit failure must not make two otherwise valid
+                # pieces impossible to place on the same stock. Fall back to
+                # the conservative axial envelope plus configured gap. This
+                # disables interlocking/common-line only for this boundary.
+                origin = float(state.used_span) + float(gap_mm)
+                common_line = False
+                actual_gap = float(gap_mm)
+                overlap = 0.0
+                geometry_fallback_before = str(exc)
         else:
             # Geometry-less legacy arrays remain opaque. Keep a conservative
             # configured gap and never claim a common line.
@@ -438,6 +448,7 @@ def _append_candidate(
             common_line = False
             actual_gap = float(gap_mm)
             overlap = 0.0
+            geometry_fallback_before = "geometry unavailable"
 
     if origin < -EPS:
         return None
@@ -471,6 +482,7 @@ def _append_candidate(
         gap_before_mm=actual_gap,
         overlap_before_mm=overlap,
         requires_tail_flip=requires_tail_flip,
+        geometry_fallback_before=geometry_fallback_before,
     )
 
     return RodSearchState(
@@ -730,6 +742,7 @@ def _rod_to_dict(state, items, rod_length, dead_zone_mm, gap_mm):
             "gap_before_mm": float(placed.gap_before_mm),
             "overlap_before_mm": float(placed.overlap_before_mm),
             "requires_tail_flip": bool(placed.requires_tail_flip),
+            "geometry_fallback_before": placed.geometry_fallback_before,
             "payload": dict(item.payload or {}),
         }
         placements.append(placement)
