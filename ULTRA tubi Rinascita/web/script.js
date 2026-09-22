@@ -403,6 +403,7 @@ async function openSettingsModal() {
         document.getElementById('settings-order-low-quantity').value = parseNonNegativeInteger(config.order_priority_low_quantity, 1);
         document.getElementById('settings-order-medium-quantity').value = parseNonNegativeInteger(config.order_priority_medium_quantity, 3);
         document.getElementById('settings-order-high-quantity').value = parseNonNegativeInteger(config.order_priority_high_quantity, 5);
+        document.getElementById('settings-nesting-gap-mm').value = Number.isFinite(Number(config.nesting_gap_mm)) ? Number(config.nesting_gap_mm) : 2;
         document.getElementById('settings-order-include-low-priority').checked = config.order_include_low_priority !== false;
         settingsIgnoredFolders = Array.isArray(config.ignore_folders) ? [...config.ignore_folders] : [];
         settingsIgnoreInput.value = '';
@@ -514,6 +515,7 @@ async function saveSettings() {
             order_priority_medium_quantity: parseNonNegativeInteger(document.getElementById('settings-order-medium-quantity').value, 3),
             order_priority_high_quantity: parseNonNegativeInteger(document.getElementById('settings-order-high-quantity').value, 5),
             order_include_low_priority: document.getElementById('settings-order-include-low-priority').checked,
+            nesting_gap_mm: Math.max(0, Number(document.getElementById('settings-nesting-gap-mm').value) || 0),
         };
         Object.entries(settingsPathFieldIds).forEach(([configKey, elementId]) => {
             payload[configKey] = document.getElementById(elementId)?.value || '';
