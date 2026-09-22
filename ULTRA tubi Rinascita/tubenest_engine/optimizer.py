@@ -941,6 +941,7 @@ def _boundary_pose_alternatives(items, rod):
         )
 
         alternatives = []
+        rejected = []
         for pose in poses:
             try:
                 fit = fit_adjacent_parts(
@@ -952,7 +953,12 @@ def _boundary_pose_alternatives(items, rod):
                     gap_mm=float((rod or {}).get("gapMm") or DEFAULT_GAP_MM),
                     allow_common_line=True,
                 )
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
+                rejected.append({
+                    "rotation": _normalize_angle(pose.axial_rotation_degrees),
+                    "reversed": bool(pose.reversed_end_for_end),
+                    "reason": str(exc),
+                })
                 continue
 
             candidate_end = float(fit.next_origin) + next_item.physical_length
@@ -986,6 +992,7 @@ def _boundary_pose_alternatives(items, rod):
                 "reversed": bool(current_pose.reversed_end_for_end),
                 "origin": current_origin,
             },
+            "rejected": rejected,
         })
 
     return results
@@ -1215,6 +1222,19 @@ def diagnose_items_dict(
                     f"CL={alt['commonLine']}, gap={alt['gap']:.3f}, "
                     f"overlap={alt['overlap']:.3f}, Δorigine={alt['deltaOrigin']:+.3f}"
                 )
+            for rejected in row.get("rejected") or []:
+                lines.append(
+                    f"    RIFIUTATA: rotY={rejected['rotation']:g}° "
+                    f"rev={rejected['reversed']} -> {rejected['reason']}"
+                )
+
+            # Include raw residuals because planar-fit tolerance is one of the
+            # few reasons a legal square-tube pose can disappear before scoring.
+            prev_residual = (row["previous"].get("end_b") or {}).get("plane_max_residual_mm")
+            next_residual = (row["next"].get("end_a") or {}).get("plane_max_residual_mm")
+            lines.append(
+                f"  residuali piani attuali: uscita={prev_residual}, ingresso={next_residual}"
+            )
     lines.append("")
 
     lines.append("=== INTERPRETAZIONE ===")
