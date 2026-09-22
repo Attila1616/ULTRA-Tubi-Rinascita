@@ -46,6 +46,7 @@ class Api:
 
     def get_config_settings(self):
         self.config = logic.load_config() or {}
+        self.config.setdefault("nesting_gap_mm", 2.0)
         return {"status": "success", "config": self.config}
 
     def save_config_settings(self, payload):
@@ -68,6 +69,11 @@ class Api:
         )
         for key in path_keys:
             updated[key] = str(payload.get(key) or "").strip()
+
+        try:
+            updated["nesting_gap_mm"] = max(0.0, float(payload.get("nesting_gap_mm", 2.0)))
+        except (TypeError, ValueError):
+            updated["nesting_gap_mm"] = 2.0
 
         updated["inventory_request_enabled"] = bool(payload.get("inventory_request_enabled"))
         updated["order_include_low_priority"] = bool(
