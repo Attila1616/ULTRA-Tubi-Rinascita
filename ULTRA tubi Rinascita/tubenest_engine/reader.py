@@ -28,7 +28,10 @@ def _record_map(archive, section):
 
 def _object_channel(shape_record):
     block = next((b for b in shape_record.blocks if b.name == "Shape" and len(b.payload) >= 4), None)
-    return struct.unpack_from("<I", block.payload)[0] if block else None
+    if block is None:
+        return None
+    channel = struct.unpack_from("<I", block.payload)[0]
+    return channel if channel > 0 else None
 
 
 def _profile_info(section, curve_record):
