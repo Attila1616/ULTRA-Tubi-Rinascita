@@ -1,8 +1,9 @@
 // web/script.js
 
 // --- Global State & Element Refs ---
-let expandedState = {}, daFareOverrides = {}, allTubeData = [], unmatchedIgsFiles = [];
+let expandedState = {}, daFareOverrides = {}, allTubeData = [], unmatchedIgsFiles = [], zzxValidationIssues = [];
 let lastIgsWarningSignature = '';
+let lastZzxWarningSignature = '';
 let uiPreferences = {
     sorting: {},
     columnWidths: {},
@@ -690,9 +691,11 @@ async function loadTubeData() {
         }
         allTubeData = data;
         unmatchedIgsFiles = await window.pywebview.api.get_unmatched_igs_files();
+        zzxValidationIssues = await window.pywebview.api.get_zzx_validation_issues();
         console.log("Received fresh data from backend:", allTubeData);
         renderUI();
         showIgsWarningAlertIfNeeded();
+        showZzxWarningAlertIfNeeded();
     } catch (e) {
         console.error("Error fetching tube data:", e);
         mainContainer.innerHTML = `<p style="color: red;">Error loading data. Check the terminal for a detailed error message.</p>`;
@@ -1535,6 +1538,7 @@ function renderUI() {
     currentPieceByLogicalKey = new Map();
     mainContainer.innerHTML = '';
     renderIgsWarningBanner();
+    renderZzxWarningBanner();
     if (!allTubeData || allTubeData.length === 0) {
         mainContainer.insertAdjacentHTML('beforeend', '<p>No tubes found.</p>');
         return;
@@ -1630,6 +1634,76 @@ function showIgsWarningAlertIfNeeded() {
     const extra = unmatchedIgsFiles.length > 10 ? `\n...e altri ${unmatchedIgsFiles.length - 10}` : '';
     alert(`Attenzione: ci sono ${unmatchedIgsFiles.length} file IGS senza ZZX corrispondente.\n\n${preview}${extra}`);
 }
+
+function renderZzxWarningBanner() {
+    if (!zzxValidationIssues || zzxValidationIssues.length === 0) return;
+
+    const banner = document.createElement('div');
+    banner.className = 'igs-warning-banner';
+
+    const uniqueFiles = new Set(zzxValidationIssues.map(item => item.filePath)).size;
+    const title = document.createElement('div');
+    title.className = 'igs-warning-title';
+    title.textContent = `Attenzione: ${uniqueFiles} file ZZX richiedono controllo disegno`;
+    banner.appendChild(title);
+
+    const list = document.createElement('ul');
+    zzxValidationIssues.slice(0, 25).forEach(item => {
+        const li = document.createElement('li');
+
+        const text = document.createElement('span');
+        text.textContent = `${item.relativePath}  ->  ${item.message}`;
+
+        const button = document.createElement('button');
+        button.className = 'action-button igs-open-button';
+        button.dataset.action = 'open-zzx-validation-file';
+        button.dataset.filePath = item.filePath;
+        button.textContent = 'Apri';
+
+        li.appendChild(text);
+        li.appendChild(button);
+        list.appendChild(li);
+    });
+    banner.appendChild(list);
+
+    if (zzxValidationIssues.length > 25) {
+        const more = document.createElement('div');
+        more.className = 'igs-warning-more';
+        more.textContent = `Altri ${zzxValidationIssues.length - 25} problemi non mostrati.`;
+        banner.appendChild(more);
+    }
+
+    mainContainer.appendChild(banner);
+}
+
+function showZzxWarningAlertIfNeeded() {
+    const signature = (zzxValidationIssues || [])
+        .map(item => `${item.filePath}|${item.type}|${item.message}`)
+        .sort()
+        .join('|');
+
+    if (!signature) {
+        lastZzxWarningSignature = '';
+        return;
+    }
+    if (signature === lastZzxWarningSignature) return;
+
+    lastZzxWarningSignature = signature;
+
+    const uniqueFiles = new Set(zzxValidationIssues.map(item => item.filePath)).size;
+    const preview = zzxValidationIssues.slice(0, 10)
+        .map(item => `- ${item.relativePath}\n  ${item.message}`)
+        .join('\n');
+    const extra = zzxValidationIssues.length > 10
+        ? `\n...e altri ${zzxValidationIssues.length - 10} problemi`
+        : '';
+
+    alert(
+        `Attenzione: ${uniqueFiles} file ZZX richiedono un controllo del disegno.\n\n` +
+        `${preview}${extra}`
+    );
+}
+
 function renderRodsHTML(tubeType, lockedForTube, nestedRods) {
     const unlockedVisible = isUnlockedRodsVisible(tubeType);
     const unlockedCount = unlockedVisible ? nestedRods.length + 1 : 0;
