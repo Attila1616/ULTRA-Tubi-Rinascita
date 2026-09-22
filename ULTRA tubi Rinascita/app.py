@@ -168,6 +168,14 @@ class Api:
             traceback.print_exc()
             return None
 
+    def nest_piece_instances(self, piece_instances, rod_length=6000):
+        try:
+            return logic.nest_piece_instances(piece_instances or [], rod_length)
+        except Exception:
+            print("--- PYTHON ERROR in nest_piece_instances ---")
+            traceback.print_exc()
+            return {"status": "error", "message": "Errore durante il nesting backend.", "rods": []}
+
     def get_unmatched_igs_files(self):
         try:
             return logic.find_unmatched_igs_files(self.da_fare_path)
