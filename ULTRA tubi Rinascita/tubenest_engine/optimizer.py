@@ -885,6 +885,15 @@ def _possible_common_line_between_items(item_a, item_b):
     }
 
 
+def _item_debug_label(item):
+    if item is None:
+        return "?"
+    file_name = str((item.payload or {}).get("fileName") or "").strip()
+    if file_name:
+        return f"{item.nominal_length:g}mm | {file_name}"
+    return f"{item.nominal_length:g}mm | {item.instance_key}"
+
+
 def _placement_pose(placement):
     return PartPose(
         axial_rotation_degrees=float(placement.get("axial_rotation_degrees") or 0.0),
@@ -1161,9 +1170,17 @@ def diagnose_items_dict(
 
             prev_len = float(row["previous"].get("nominal_length") or row["previous"].get("occupied_length") or 0.0)
             next_len = float(row["next"].get("nominal_length") or row["next"].get("occupied_length") or 0.0)
+            prev_item = next(
+                (item for item in normalized if item.instance_key == str(row["previous"].get("instance_key") or "")),
+                None,
+            )
+            next_item = next(
+                (item for item in normalized if item.instance_key == str(row["next"].get("instance_key") or "")),
+                None,
+            )
             lines.append(
                 f"Verga {rod_index}, confine {row['boundaryIndex']}: "
-                f"{prev_len:g}mm -> {next_len:g}mm"
+                f"{_item_debug_label(prev_item)} -> {_item_debug_label(next_item)}"
             )
             lines.append(
                 f"  uscita attuale: {_signed_end_summary(row['previous'].get('end_b'))}"
