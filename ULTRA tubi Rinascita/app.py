@@ -176,6 +176,14 @@ class Api:
             traceback.print_exc()
             return []
 
+    def get_zzx_validation_issues(self):
+        try:
+            return logic.find_zzx_validation_issues(self.da_fare_path)
+        except Exception:
+            print("--- PYTHON ERROR in get_zzx_validation_issues ---")
+            traceback.print_exc()
+            return []
+
     def open_file_path(self, file_path):
         return logic.open_file_in_explorer(file_path)
 
