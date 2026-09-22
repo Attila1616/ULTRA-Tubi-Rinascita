@@ -140,8 +140,13 @@ class GeometryOptimizerTests(unittest.TestCase):
         self.assertTrue(rods[0]["placements"][-1]["requires_tail_flip"])
 
     def test_ineligible_tail_does_not_enter_chuck_zone(self):
-        long_piece = make_part(5200)
-        # Both ends angled, so no reversal can produce the required clean first cut.
+        # Both pieces have angled ends, so neither can become a valid flip-tail
+        # regardless of optimizer ordering or end-for-end reversal.
+        long_piece = make_part(
+            5200,
+            start_plane=(25.0, 0.0, 0.5),
+            end_plane=(5175.0, 0.0, -0.5),
+        )
         bad_tail = make_part(
             700,
             start_plane=(25.0, 0.0, 0.5),
@@ -157,7 +162,13 @@ class GeometryOptimizerTests(unittest.TestCase):
         self.assertTrue(all(rod["used"] <= 5600.0 + 1e-6 for rod in rods))
 
     def test_tail_feature_inside_last_400_blocks_flip(self):
-        long_piece = make_part(5200)
+        # Make the long piece ineligible too, otherwise the optimizer could
+        # simply reorder and use it as the flip-tail instead.
+        long_piece = make_part(
+            5200,
+            start_plane=(25.0, 0.0, 0.5),
+            end_plane=(5175.0, 0.0, -0.5),
+        )
         dirty_tail = make_part(
             700,
             features=[{
