@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 import runtime_paths
 from tubenest_engine import describe_tube_parts
+from tubenest_engine.validation import is_known_array_without_terminal_cut
 
 
 LENGTH_TOLERANCE_MM = 1.0
@@ -113,6 +114,7 @@ def main():
     unrecognized_profiles = []
     multi_segment = []
     inferred_profiles = []
+    allowed_legacy_arrays = []
     total_parts = 0
 
     print(f"Tubi:      {tubi_root}")
@@ -126,7 +128,11 @@ def main():
         relative = str(path.relative_to(tubi_root))
 
         if status != "ok":
-            length_mismatches.append((relative, None, None, result.get("error", "")))
+            error = result.get("error", "")
+            if is_known_array_without_terminal_cut(path.name, error):
+                allowed_legacy_arrays.append(relative)
+                continue
+            length_mismatches.append((relative, None, None, error))
             continue
 
         parts = result.get("parts", [])
@@ -179,6 +185,7 @@ def main():
     print(f"Unsupported:              {status_counts['unsupported']}")
     print(f"Errors:                   {status_counts['error']}")
     print(f"Multi-segment files:      {len(multi_segment)}")
+    print(f"Allowed legacy arrays:    {len(allowed_legacy_arrays)}")
     print(f"Profile kinds:            {dict(sorted(profile_kinds.items()))}")
     print(f"File versions:            {dict(sorted(file_versions.items()))}")
     print(f"Layer sets:               {dict(sorted((str(k), v) for k, v in layer_sets.items()))}")
@@ -218,6 +225,11 @@ def main():
         print("\n=== MULTI-SEGMENT FILES ===")
         for relative, count in multi_segment:
             print(f"{count} segments | {relative}")
+
+    if allowed_legacy_arrays:
+        print("\n=== ALLOWED LEGACY ARRAYS (NO TERMINAL CUT) ===")
+        for relative in allowed_legacy_arrays:
+            print(relative)
 
     if inferred_profiles:
         print("\n=== GEOMETRY-INFERRED PROFILES ===")
