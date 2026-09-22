@@ -2256,7 +2256,7 @@ async function exportLockedRodZzx(tubeType, rodId) {
             instanceKey: segment.instanceKey,
             filePath: segment.currentFilePath || segment.filePath || sourcePiece?.filePath || '',
             fileName: segment.fileName || sourcePiece?.fileName || '',
-            segmentHandle: sourcePiece?.tubePart?.segment_handle ?? null,
+            segmentHandle: segment.segmentHandle ?? sourcePiece?.tubePart?.segment_handle ?? null,
             nestPlacement: segment.nestPlacement || null,
         };
     });
@@ -2648,6 +2648,7 @@ function buildPieceInstances(pieces) {
                 mainFolder: piece.mainFolder,
                 tubeType: piece.tubeType,
                 length: piece.length,
+                segmentHandle: piece?.tubePart?.segment_handle ?? null,
                 totalQuantity: piece.totalQuantity,
                 completedQuantity: piece.completedQuantity,
                 pieceNumber,
