@@ -1,8 +1,13 @@
 import os
 from pathlib import Path
+import tempfile
 import unittest
+import zipfile
+import xml.etree.ElementTree as ET
 
 from tubenest_engine import describe_zzx, read_zzx
+from tubenest_engine.geometry import rounded_rectangle
+from tubenest_engine.reader import _profile_from_unknown_outline
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +42,39 @@ class ZzxReaderTests(unittest.TestCase):
         marked = [shape for shape in segment.shapes if shape.is_marking]
         self.assertTrue(any(shape.geometry_class == "Polyline3D" for shape in marked))
         self.assertTrue(any(shape.point_count >= 2 for shape in marked))
+
+
+    def test_older_393222_dialect_is_accepted_for_reading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "older.zzx"
+            with zipfile.ZipFile(ROUND_SAMPLE, "r") as source, zipfile.ZipFile(target, "w") as dest:
+                for info in source.infolist():
+                    data = source.read(info.filename)
+                    if info.filename == "content.xml":
+                        root = ET.fromstring(data)
+                        root.set("FileVer", "393222")
+                        data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+                    dest.writestr(info, data)
+
+            doc = read_zzx(target)
+            self.assertEqual(doc.file_version, "393222")
+            self.assertEqual(len(doc.segments), 1)
+            self.assertEqual(doc.segments[0].profile.section_class, "Circle")
+
+    def test_unknown_section_can_be_inferred_from_rounded_rectangle_outline(self):
+        profile = _profile_from_unknown_outline(
+            "Unknown",
+            3.0,
+            "TRvUnknownSection",
+            rounded_rectangle(50.0, 150.0, 6.0),
+        )
+        self.assertEqual(profile.section_class, "Rect")
+        self.assertEqual(profile.source_section_class, "Unknown")
+        self.assertEqual(profile.native_record_class, "TRvUnknownSection")
+        self.assertTrue(profile.inferred_from_geometry)
+        self.assertAlmostEqual(profile.width, 50.0, places=6)
+        self.assertAlmostEqual(profile.height, 150.0, places=6)
+        self.assertAlmostEqual(profile.radius, 6.0, places=6)
 
     def test_describe_zzx_is_failure_safe(self):
         result = describe_zzx(ROOT / "missing-file.zzx")
