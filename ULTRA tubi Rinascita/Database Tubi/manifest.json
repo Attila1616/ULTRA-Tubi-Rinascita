@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "created_from": "D:\\backup c drive\\Pyhon Programs\\CODEX EDIT\\ULTRA tubi Rinascita\\Conteggio Tubi.xlsx",
+  "imported_at": "2026-07-07T20:27:56",
+  "locations": [
+    {
+      "name": "Scaffalatura 0",
+      "type": "scaffalatura",
+      "file": "Scaffalatura 0.json"
+    },
+    {
+      "name": "Scaffalatura 1",
+      "type": "scaffalatura",
+      "file": "Scaffalatura 1.json"
+    },
+    {
+      "name": "Scaffalatura 2",
+      "type": "scaffalatura",
+      "file": "Scaffalatura 2.json"
+    },
+    {
+      "name": "Scaffalatura 3",
+      "type": "scaffalatura",
+      "file": "Scaffalatura 3.json"
+    },
+    {
+      "name": "Scaffalatura 4",
+      "type": "scaffalatura",
+      "file": "Scaffalatura 4.json"
+    },
+    {
+      "name": "Scaffalatura 5A",
+      "type": "scaffalatura",
+      "file": "Scaffalatura 5A.json"
+    },
+    {
+      "name": "Scaffalatura 5B",
+      "type": "scaffalatura",
+      "file": "Scaffalatura 5B.json"
+    },
+    {
+      "name": "Scaffalatura 6",
+      "type": "scaffalatura",
+      "file": "Scaffalatura 6.json"
+    },
+    {
+      "name": "Scaffalatura 7",
+      "type": "scaffalatura",
+      "file": "Scaffalatura 7.json"
+    },
+    {
+      "name": "Scaffalatura 8",
+      "type": "scaffalatura",
+      "file": "Scaffalatura 8.json"
+    },
+    {
+      "name": "Terra",
+      "type": "terra",
+      "file": "Terra.json"
+    }
+  ]
+}

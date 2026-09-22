@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "name": "Scaffalatura 2",
+  "type": "scaffalatura",
+  "ripiani": [
+    {
+      "name": "Ripiano 1",
+      "tubi": [
+        {
+          "misura": "120",
+          "forma": "tondo",
+          "dimensioni": [
+            120
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 20
+        },
+        {
+          "misura": "254",
+          "forma": "tondo",
+          "dimensioni": [
+            254
+          ],
+          "spessore": 2,
+          "materiale": "316",
+          "finitura": "2B",
+          "quantita": 6
+        }
+      ]
+    },
+    {
+      "name": "Ripiano 2",
+      "tubi": [
+        {
+          "misura": "204",
+          "forma": "tondo",
+          "dimensioni": [
+            204
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 1
+        },
+        {
+          "misura": "219.1",
+          "forma": "tondo",
+          "dimensioni": [
+            219.1
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 2
+        }
+      ]
+    },
+    {
+      "name": "Ripiano 3",
+      "tubi": [
+        {
+          "misura": "154",
+          "forma": "tondo",
+          "dimensioni": [
+            154
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 10
+        }
+      ]
+    }
+  ]
+}

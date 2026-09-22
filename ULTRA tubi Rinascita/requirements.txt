@@ -1,0 +1,6 @@
+pywebview
+openpyxl
+python-docx
+keyboard
+pywin32
+bottle

@@ -1,0 +1,440 @@
+<!-- web/index.html -->
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tubi Nesting Manager</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <h1>Tubi Nesting Manager</h1>
+            <div class="inventory-search">
+    <div class="search-row">
+        <input id="search-dimensione" type="text" class="search-input" placeholder="Dimensione (es. 100x50 o 60.3)" autocomplete="off">
+        <span class="search-sep">x</span>
+        <input id="search-spessore" type="text" class="search-input search-input-small" placeholder="Spessore" autocomplete="off">
+
+        <select id="search-materiale" class="search-select">
+            <option value="304" selected>304</option>
+            <option value="316">316</option>
+        </select>
+
+        <select id="search-finitura" class="search-select">
+            <option value="2B" selected>2B</option>
+            <option value="BA">BA</option>
+        </select>
+
+        <button id="search-btn" class="action-button">Cerca</button>
+    </div>
+    <div class="folder-row">
+        <span>Cartella corrente: </span><strong id="current-folder-path">Nessuna cartella selezionata</strong>
+    </div>
+</div>
+<div class="view-toggle">
+                <button id="main-view-btn" class="view-btn active">Lavori Attivi</button>
+                <button id="history-view-btn" class="view-btn">Cronologia</button>
+                <button id="database-view-btn" class="view-btn">Database Tubi</button>
+            </div>
+            <button id="summary-btn" class="action-button">Genera Riepilogo</button>
+            <button id="tt-docx-btn" class="action-button">Lista TT DOCX</button>
+            <button id="refresh-button">Ricarica Dati</button>
+            <button id="settings-btn" class="action-button">Impostazioni</button>
+            <button id="debug-btn" class="action-button" style="background-color: #ffc107;">Debug</button>
+        </header>
+
+        <!-- Main view for active work -->
+        <main id="tube-list-container">
+            <!-- Content will be inserted by JavaScript -->
+        </main>
+        
+        <!-- Hidden view for history -->
+        <main id="history-container" style="display: none;">
+            <div class="history-controls">
+                <div class="date-filter">
+                    <label for="start-date">Dal:</label>
+                    <input type="date" id="start-date">
+                    <label for="end-date">Al:</label>
+                    <input type="date" id="end-date">
+                    <button id="clear-filter-btn" class="action-button">Pulisci Filtro</button>
+                </div>
+                <div class="bulk-actions">
+                    <button id="remove-selected-btn" class="action-button remove-btn">Rimuovi Selezionati</button>
+                    <button id="remove-all-btn" class="action-button remove-btn">Rimuovi Tutti</button>
+                </div>
+            </div>
+            <div id="history-list">
+                <!-- Historical content will be inserted by JavaScript -->
+            </div>
+        </main>
+
+        <!-- Tube database view -->
+        <main id="tube-database-container" style="display: none;">
+            <section class="database-toolbar">
+                <div class="database-filters">
+                    <input id="db-filter-misura" type="text" class="search-input" placeholder="Misura" autocomplete="off">
+                    <input id="db-filter-spessore" type="text" class="search-input search-input-small" placeholder="Spessore" autocomplete="off">
+                    <select id="db-filter-forma" class="search-select">
+                        <option value="tutti" selected>Tutte le forme</option>
+                        <option value="tondo">Tondi</option>
+                        <option value="tubolari">Tubolari</option>
+                        <option value="quadrato">Quadrati</option>
+                        <option value="rettangolare">Rettangolari</option>
+                    </select>
+                    <select id="db-filter-materiale" class="search-select">
+                        <option value="tutti" selected>Tutti materiali</option>
+                        <option value="304">304</option>
+                        <option value="316">316</option>
+                    </select>
+                    <select id="db-filter-finitura" class="search-select">
+                        <option value="tutti" selected>Tutte finiture</option>
+                        <option value="2B">2B</option>
+                        <option value="BA">BA</option>
+                    </select>
+                    <select id="db-filter-codice" class="search-select">
+                        <option value="tutti" selected>Tutti codici</option>
+                        <option value="con">Con codice</option>
+                        <option value="senza">Senza codice</option>
+                    </select>
+                    <button id="db-apply-filters-btn" class="action-button">Filtra</button>
+                    <button id="db-clear-filters-btn" class="action-button">Pulisci</button>
+                </div>
+                <div class="database-actions">
+                    <div class="database-view-toggle">
+                        <button id="db-list-view-btn" class="view-btn active">Lista</button>
+                        <button id="db-panel-view-btn" class="view-btn">Pannelli</button>
+                    </div>
+                    <button id="db-add-scaffolding-btn" class="action-button">Aggiungi Scaffalatura</button>
+                    <button id="db-expand-all-scaff-btn" class="action-button">Apri Scaff.</button>
+                    <button id="db-collapse-all-scaff-btn" class="action-button">Chiudi Scaff.</button>
+                    <button id="db-expand-all-ripiani-btn" class="action-button">Apri Ripiani</button>
+                    <button id="db-collapse-all-ripiani-btn" class="action-button">Chiudi Ripiani</button>
+                    <button id="db-import-codes-btn" class="action-button">Importa Codici</button>
+                    <button id="db-add-code-btn" class="action-button">Aggiungi Codice</button>
+                    <button id="db-codes-docx-btn" class="action-button">Lista Codici DOCX</button>
+                    <button id="db-export-xlsx-btn" class="action-button">Esporta Inventario Excel</button>
+                    <button id="db-order-priorities-btn" class="action-button">Gestisci Priorit&agrave;</button>
+                    <button id="db-order-txt-btn" class="action-button fatto-button">Genera Ordine TXT</button>
+                    <button id="adhoc-docx-btn" class="action-button">Lista ADHOC</button>
+                    <button id="adhoc-reset-btn" class="action-button remove-btn ctrl-shift-required">Azzera ADHOC</button>
+                    <button id="db-refresh-btn" class="action-button">Ricarica Database</button>
+                    <button id="db-import-btn" class="action-button">Importa Excel</button>
+                    <button id="db-validate-btn" class="action-button">Valida</button>
+                </div>
+            </section>
+            <div id="tube-database-status" class="database-status"></div>
+            <div id="tube-database-list"></div>
+        </main>
+    </div>
+
+    <!-- Summary Modal (starts hidden) -->
+    <div id="summary-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Riepilogo Prelievo Materiale</h2>
+                <button id="close-summary-btn" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="summary-controls">
+                    <label for="threshold-slider">Considera come verga intera se l'utilizzo è > </label>
+                    <input type="range" id="threshold-slider" min="1" max="100" value="80">
+                    <span id="threshold-value">80%</span>
+                </div>
+                <hr>
+                <h3>Anteprima File di Testo:</h3>
+                <pre id="summary-preview" class="summary-preview-area"></pre>
+            </div>
+            <div class="modal-footer">
+                <button id="generate-file-btn" class="action-button fatto-button">Genera e Apri File</button>
+            <button id="generate-print-btn" class="action-button">Genera Stampa</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Debug Info Modal (starts hidden) -->
+    <div id="debug-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Informazioni di Debug</h2>
+                <button id="close-debug-btn" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <h3>Percorsi e Dati Attuali</h3>
+                <pre id="debug-info-area" class="summary-preview-area"></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Search Result Modal -->
+<div id="search-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Risultato Ricerca Inventario</h2>
+            <button id="close-search-btn" class="close-button">&times;</button>
+        </div>
+        <div class="modal-body">
+            <pre id="search-result" class="summary-output"></pre>
+        </div>
+    </div>
+</div>
+
+<!-- Database tube edit modal -->
+<div id="db-tube-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content db-modal-content">
+        <div class="modal-header">
+            <h2 id="db-tube-modal-title">Modifica tubo</h2>
+            <button id="db-tube-modal-close" class="close-button">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="db-tube-modal-source" class="db-source-note"></div>
+            <div class="db-form-grid">
+                <label>Misura</label>
+                <input id="db-modal-misura" type="text" class="search-input" autocomplete="off">
+                <label>Spessore</label>
+                <input id="db-modal-spessore" type="text" class="search-input" autocomplete="off">
+                <label>Materiale</label>
+                <select id="db-modal-materiale" class="search-select">
+                    <option value="304">304</option>
+                    <option value="316">316</option>
+                </select>
+                <label>Finitura</label>
+                <select id="db-modal-finitura" class="search-select">
+                    <option value="2B">2B</option>
+                    <option value="BA">BA</option>
+                </select>
+                <label>Quantità</label>
+                <input id="db-modal-quantita" type="number" min="1" step="1" class="search-input search-input-small">
+            </div>
+            <div id="db-modal-target-section" class="db-target-section">
+                <h3>Destinazione</h3>
+                <div class="db-form-grid">
+                    <label>Scaffalatura / Terra</label>
+                    <select id="db-modal-target-location" class="search-select"></select>
+                    <label>Ripiano / Zona</label>
+                    <select id="db-modal-target-ripiano" class="search-select"></select>
+                    <label>Nuovo ripiano/zona</label>
+                    <input id="db-modal-new-ripiano" type="text" class="search-input" placeholder="opzionale" autocomplete="off">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button id="db-tube-modal-cancel" class="action-button">Annulla</button>
+            <button id="db-tube-modal-confirm" class="action-button fatto-button">Conferma</button>
+        </div>
+    </div>
+</div>
+
+<!-- Inventory decrement modal for locked rods -->
+<div id="inventory-use-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content inventory-use-content">
+        <div class="modal-header">
+            <h2>Rimuovi una verga dal Database?</h2>
+            <button id="inventory-use-close" class="close-button">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="inventory-use-note" class="db-source-note"></div>
+            <select id="inventory-use-position" class="search-select inventory-use-select"></select>
+        </div>
+        <div class="modal-footer">
+            <button id="inventory-use-cancel" class="action-button">Annulla</button>
+            <button id="inventory-use-confirm" class="action-button fatto-button">Conferma</button>
+        </div>
+    </div>
+</div>
+
+<!-- Visual configuration editor -->
+<div id="settings-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content settings-modal-content">
+        <div class="modal-header">
+            <h2>Impostazioni</h2>
+            <button id="settings-close" class="close-button">&times;</button>
+        </div>
+        <div class="modal-body settings-body">
+            <label for="settings-da-fare-path">Cartella lavori DA FARE</label>
+            <div class="settings-path-row">
+                <input id="settings-da-fare-path" type="text" class="search-input" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-da-fare-path" data-picker-type="folder">Sfoglia</button>
+            </div>
+
+            <label for="settings-inventory-xlsx-path">File Excel inventario da importare</label>
+            <div class="settings-path-row">
+                <input id="settings-inventory-xlsx-path" type="text" class="search-input" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-inventory-xlsx-path" data-picker-type="excel">Sfoglia</button>
+            </div>
+
+            <h3 class="settings-section-title">Database condivisi</h3>
+            <label for="settings-database-tubi-dir">Cartella Database Tubi</label>
+            <div class="settings-path-row">
+                <input id="settings-database-tubi-dir" type="text" class="search-input" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-database-tubi-dir" data-picker-type="folder">Sfoglia</button>
+            </div>
+
+            <label for="settings-codici-tubi-path">File catalogo codici JSON</label>
+            <div class="settings-path-row">
+                <input id="settings-codici-tubi-path" type="text" class="search-input" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-codici-tubi-path" data-picker-type="json">Sfoglia</button>
+            </div>
+
+            <h3 class="settings-section-title">Cartelle di esportazione</h3>
+
+            <label for="settings-docx-output-dir">Cartella predefinita</label>
+            <div class="settings-path-row">
+                <input id="settings-docx-output-dir" type="text" class="search-input" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-docx-output-dir" data-picker-type="folder">Sfoglia</button>
+            </div>
+
+            <label for="settings-summary-txt-output-dir">Riepilogo TXT</label>
+            <div class="settings-path-row">
+                <input id="settings-summary-txt-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-summary-txt-output-dir" data-picker-type="folder">Sfoglia</button>
+            </div>
+
+            <label for="settings-summary-docx-output-dir">Riepilogo DOCX</label>
+            <div class="settings-path-row">
+                <input id="settings-summary-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-summary-docx-output-dir" data-picker-type="folder">Sfoglia</button>
+            </div>
+
+            <label for="settings-tt-docx-output-dir">Lista TT DOCX</label>
+            <div class="settings-path-row">
+                <input id="settings-tt-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-tt-docx-output-dir" data-picker-type="folder">Sfoglia</button>
+            </div>
+
+            <label for="settings-adhoc-docx-output-dir">Lista ADHOC DOCX</label>
+            <div class="settings-path-row">
+                <input id="settings-adhoc-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-adhoc-docx-output-dir" data-picker-type="folder">Sfoglia</button>
+            </div>
+
+            <label for="settings-codes-docx-output-dir">Lista Codici DOCX</label>
+            <div class="settings-path-row">
+                <input id="settings-codes-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-codes-docx-output-dir" data-picker-type="folder">Sfoglia</button>
+            </div>
+
+            <label for="settings-inventory-xlsx-output-dir">Inventario Excel</label>
+            <div class="settings-path-row">
+                <input id="settings-inventory-xlsx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-inventory-xlsx-output-dir" data-picker-type="folder">Sfoglia</button>
+            </div>
+
+            <label for="settings-order-txt-output-dir">Lista Ordine TXT</label>
+            <div class="settings-path-row">
+                <input id="settings-order-txt-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-order-txt-output-dir" data-picker-type="folder">Sfoglia</button>
+            </div>
+
+            <h3 class="settings-section-title">Soglie priorit&agrave; ordini</h3>
+            <div class="settings-threshold-grid">
+                <label for="settings-order-low-quantity">Bassa</label>
+                <input id="settings-order-low-quantity" type="number" min="0" step="1" value="1" class="search-input search-input-small">
+                <span>verghe o meno</span>
+                <label for="settings-order-medium-quantity">Media</label>
+                <input id="settings-order-medium-quantity" type="number" min="0" step="1" value="3" class="search-input search-input-small">
+                <span>verghe o meno</span>
+                <label for="settings-order-high-quantity">Alta</label>
+                <input id="settings-order-high-quantity" type="number" min="0" step="1" value="5" class="search-input search-input-small">
+                <span>verghe o meno</span>
+            </div>
+
+            <h3 class="settings-section-title">Richieste inventario dalla rete</h3>
+            <label class="settings-checkbox-row">
+                <input id="settings-inventory-request-enabled" type="checkbox">
+                <span>Attiva controllo cartella condivisa</span>
+            </label>
+            <label for="settings-inventory-request-folder">Cartella condivisa</label>
+            <div class="settings-path-row">
+                <input id="settings-inventory-request-folder" type="text" class="search-input" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-inventory-request-folder" data-picker-type="folder">Sfoglia</button>
+            </div>
+            <div class="settings-request-note"><strong>1</strong> = pronto, <strong>2</strong> = solo tubi con codice, <strong>3</strong> = inventario completo.</div>
+
+            <h3 class="settings-section-title">Colori pulsanti blocco verghe</h3>
+            <div class="settings-color-row">
+                <label for="settings-lock-unlocked-color">Verga sbloccata</label>
+                <input id="settings-lock-unlocked-color" type="color" value="#dc3545" title="Colore verga sbloccata">
+            </div>
+            <div class="settings-color-row">
+                <label for="settings-lock-locked-color">Verga bloccata</label>
+                <input id="settings-lock-locked-color" type="color" value="#198754" title="Colore verga bloccata">
+            </div>
+
+            <label for="settings-ignore-input">Cartelle ignorate</label>
+            <div class="settings-ignore-add">
+                <input id="settings-ignore-input" type="text" class="search-input" placeholder="Nome cartella" autocomplete="off">
+                <button id="settings-ignore-add" class="action-button">Aggiungi</button>
+            </div>
+            <div id="settings-ignore-list" class="settings-ignore-list"></div>
+        </div>
+        <div class="modal-footer">
+            <button id="settings-cancel" class="action-button">Annulla</button>
+            <button id="settings-save" class="action-button fatto-button">Salva</button>
+        </div>
+    </div>
+</div>
+
+<!-- Excel inventory export options -->
+<div id="inventory-export-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content inventory-export-content">
+        <div class="modal-header">
+            <h2>Esporta Inventario Excel</h2>
+            <button id="inventory-export-close" class="close-button">&times;</button>
+        </div>
+        <div class="modal-body">
+            <label class="settings-checkbox-row">
+                <input id="inventory-export-include-missing" type="checkbox" checked>
+                <span>Includi tubi senza codice</span>
+            </label>
+        </div>
+        <div class="modal-footer">
+            <button id="inventory-export-cancel" class="action-button">Annulla</button>
+            <button id="inventory-export-confirm" class="action-button fatto-button">Genera Excel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Tube order priority manager -->
+<div id="order-priority-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content order-priority-content">
+        <div class="modal-header">
+            <h2>Priorit&agrave; Ordini Tubi</h2>
+            <button id="order-priority-close" class="close-button">&times;</button>
+        </div>
+        <div class="modal-body order-priority-body">
+            <div class="order-priority-toolbar">
+                <input id="order-priority-search" type="search" class="search-input" placeholder="Cerca misura, codice, materiale..." autocomplete="off">
+                <label class="settings-checkbox-row">
+                    <input id="order-priority-select-all" type="checkbox">
+                    <span>Seleziona visibili</span>
+                </label>
+                <select id="order-priority-bulk-value" class="search-select">
+                    <option value="bassa">Priorit&agrave; bassa</option>
+                    <option value="media" selected>Priorit&agrave; media</option>
+                    <option value="alta">Priorit&agrave; alta</option>
+                </select>
+                <button id="order-priority-apply-bulk" class="action-button">Applica ai selezionati</button>
+            </div>
+            <div id="order-priority-status" class="database-status"></div>
+            <div class="order-priority-table">
+                <div class="order-priority-header"></div>
+                <div class="order-priority-header">Codice</div>
+                <div class="order-priority-header">Tubo</div>
+                <div class="order-priority-header">Quantit&agrave;</div>
+                <div class="order-priority-header">Priorit&agrave;</div>
+                <div id="order-priority-rows" class="order-priority-rows"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button id="order-priority-cancel" class="action-button">Annulla</button>
+            <button id="order-priority-save" class="action-button fatto-button">Salva Priorit&agrave;</button>
+        </div>
+    </div>
+</div>
+
+<script src="script.js"></script></div>
+
+</body>
+</html>

@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "name": "Scaffalatura 3",
+  "type": "scaffalatura",
+  "ripiani": [
+    {
+      "name": "Ripiano 1",
+      "tubi": [
+        {
+          "misura": "76.1",
+          "forma": "tondo",
+          "dimensioni": [
+            76.1
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 3
+        },
+        {
+          "misura": "80",
+          "forma": "tondo",
+          "dimensioni": [
+            80
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 15
+        },
+        {
+          "misura": "88.9",
+          "forma": "tondo",
+          "dimensioni": [
+            88.9
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 8
+        },
+        {
+          "misura": "88.9",
+          "forma": "tondo",
+          "dimensioni": [
+            88.9
+          ],
+          "spessore": 3,
+          "materiale": "316",
+          "finitura": "2B",
+          "quantita": 3
+        }
+      ]
+    },
+    {
+      "name": "Ripiano 2",
+      "tubi": [
+        {
+          "misura": "101.6",
+          "forma": "tondo",
+          "dimensioni": [
+            101.6
+          ],
+          "spessore": 1.5,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 1
+        },
+        {
+          "misura": "101.6",
+          "forma": "tondo",
+          "dimensioni": [
+            101.6
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 2
+        },
+        {
+          "misura": "101.6",
+          "forma": "tondo",
+          "dimensioni": [
+            101.6
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 1
+        },
+        {
+          "misura": "60.3",
+          "forma": "tondo",
+          "dimensioni": [
+            60.3
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 5
+        },
+        {
+          "misura": "80",
+          "forma": "tondo",
+          "dimensioni": [
+            80
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 7
+        },
+        {
+          "misura": "88.9",
+          "forma": "tondo",
+          "dimensioni": [
+            88.9
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 10
+        }
+      ]
+    },
+    {
+      "name": "Ripiano 3",
+      "tubi": [
+        {
+          "misura": "101.6",
+          "forma": "tondo",
+          "dimensioni": [
+            101.6
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 1
+        },
+        {
+          "misura": "139.7",
+          "forma": "tondo",
+          "dimensioni": [
+            139.7
+          ],
+          "spessore": 4,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 2
+        },
+        {
+          "misura": "154",
+          "forma": "tondo",
+          "dimensioni": [
+            154
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 4
+        },
+        {
+          "misura": "80",
+          "forma": "tondo",
+          "dimensioni": [
+            80
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 12
+        }
+      ]
+    }
+  ]
+}

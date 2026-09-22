@@ -1,0 +1,21 @@
+{
+    "da_fare_path": "D:/backup c drive/Pyhon Programs/CODEX EDIT/ULTRA tubi Rinascita/Tubi",
+    "ignore_folders": [
+        "f",
+        "fatto"
+    ],
+    "inventory_xlsx_path": "D:/backup c drive/Pyhon Programs/CODEX EDIT/ULTRA tubi Rinascita/Conteggio Tubi.xlsx",
+    "database_tubi_dir": "D:/backup c drive/Pyhon Programs/CODEX EDIT/ULTRA tubi Rinascita/Database Tubi",
+    "codici_tubi_path": "D:/backup c drive/Pyhon Programs/CODEX EDIT/ULTRA tubi Rinascita/codici_tubi.json",
+    "docx_output_dir": "C:/Users/Misch/Desktop/Pyhon Programs/programmi e roba per lavoro",
+    "summary_txt_output_dir": "C:/Users/Misch/Desktop/Pyhon Programs/programmi e roba per lavoro",
+    "summary_docx_output_dir": "C:/Users/Misch/Desktop/Pyhon Programs/programmi e roba per lavoro",
+    "tt_docx_output_dir": "C:/Users/Misch/Desktop/Pyhon Programs/programmi e roba per lavoro",
+    "adhoc_docx_output_dir": "C:/Users/Misch/Desktop/Pyhon Programs/programmi e roba per lavoro",
+    "codes_docx_output_dir": "C:/Users/Misch/Desktop/Pyhon Programs/programmi e roba per lavoro",
+    "inventory_xlsx_output_dir": "C:/Users/Misch/Desktop/Pyhon Programs/programmi e roba per lavoro",
+    "inventory_request_enabled": true,
+    "inventory_request_folder": "C:\\Users\\Misch\\Desktop\\test",
+    "lock_unlocked_color": "#dc3545",
+    "lock_locked_color": "#198754"
+}

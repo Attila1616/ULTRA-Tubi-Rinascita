@@ -1,0 +1,1644 @@
+{
+  "schema_version": 2,
+  "updated_at": "2026-07-13T20:10:30",
+  "sources": [
+    {
+      "file": "TUBI nuovi.xlsx",
+      "mtime": "2026-06-04T10:50:10"
+    },
+    {
+      "file": "TUBOLARI nuovi.xlsx",
+      "mtime": "2026-06-04T10:50:10"
+    }
+  ],
+  "entries": [
+    {
+      "key": "100x100|2|304|2B",
+      "misura": "100x100",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00040",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 2
+        }
+      ]
+    },
+    {
+      "key": "100x100|3|304|2B",
+      "misura": "100x100",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00052",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 3
+        }
+      ]
+    },
+    {
+      "key": "100x100|4|304|2B",
+      "misura": "100x100",
+      "spessore": "4",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00057",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 4
+        },
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 5
+        }
+      ]
+    },
+    {
+      "key": "120x120|3|304|2B",
+      "misura": "120x120",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00078",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 9
+        }
+      ]
+    },
+    {
+      "key": "120x120|4|304|2B",
+      "misura": "120x120",
+      "spessore": "4",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00080",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 10
+        }
+      ]
+    },
+    {
+      "key": "120x120|5|304|2B",
+      "misura": "120x120",
+      "spessore": "5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00082",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 11
+        }
+      ]
+    },
+    {
+      "key": "150x150|3|304|2B",
+      "misura": "150x150",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00577",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 16
+        }
+      ]
+    },
+    {
+      "key": "150x150|4|304|2B",
+      "misura": "150x150",
+      "spessore": "4",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00097",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 17
+        }
+      ]
+    },
+    {
+      "key": "150x150|5|304|2B",
+      "misura": "150x150",
+      "spessore": "5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00100",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 18
+        }
+      ]
+    },
+    {
+      "key": "20x20|2|304|2B",
+      "misura": "20x20",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00033",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 26
+        }
+      ]
+    },
+    {
+      "key": "30x30|2|304|2B",
+      "misura": "30x30",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00025",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 28
+        }
+      ]
+    },
+    {
+      "key": "30x30|3|304|2B",
+      "misura": "30x30",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00537",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 29
+        }
+      ]
+    },
+    {
+      "key": "40x40|2|304|2B",
+      "misura": "40x40",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00229",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 33
+        }
+      ]
+    },
+    {
+      "key": "40x40|3|304|2B",
+      "misura": "40x40",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00289",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 34
+        }
+      ]
+    },
+    {
+      "key": "50x50|2|304|2B",
+      "misura": "50x50",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00032",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 36
+        }
+      ]
+    },
+    {
+      "key": "50x50|3|304|2B",
+      "misura": "50x50",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00176",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 37
+        }
+      ]
+    },
+    {
+      "key": "60x60|2|304|2B",
+      "misura": "60x60",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00122",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 42
+        }
+      ]
+    },
+    {
+      "key": "60x60|3|304|2B",
+      "misura": "60x60",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00294",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 43
+        }
+      ]
+    },
+    {
+      "key": "60x60|4|304|2B",
+      "misura": "60x60",
+      "spessore": "4",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00480",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 44
+        }
+      ]
+    },
+    {
+      "key": "60x60|6|304|2B",
+      "misura": "60x60",
+      "spessore": "6",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00271",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 45
+        }
+      ]
+    },
+    {
+      "key": "70x70|2|304|2B",
+      "misura": "70x70",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00116",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 46
+        }
+      ]
+    },
+    {
+      "key": "70x70|3|304|2B",
+      "misura": "70x70",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00118",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 47
+        }
+      ]
+    },
+    {
+      "key": "80x80|2|304|2B",
+      "misura": "80x80",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00034",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 51
+        }
+      ]
+    },
+    {
+      "key": "80x80|3|304|2B",
+      "misura": "80x80",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00043",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 52
+        }
+      ]
+    },
+    {
+      "key": "80x80|3|316|2B",
+      "misura": "80x80",
+      "spessore": "3",
+      "materiale": "316",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A01078",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 53
+        }
+      ]
+    },
+    {
+      "key": "80x80|4|304|2B",
+      "misura": "80x80",
+      "spessore": "4",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00113",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 54
+        }
+      ]
+    },
+    {
+      "key": "90x90|3|304|2B",
+      "misura": "90x90",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "quadrato",
+      "code": "TA9900A00453",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 55
+        }
+      ]
+    },
+    {
+      "key": "100x50|2|304|2B",
+      "misura": "100x50",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00784",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 6
+        }
+      ]
+    },
+    {
+      "key": "100x50|3|304|2B",
+      "misura": "100x50",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00519",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 7
+        }
+      ]
+    },
+    {
+      "key": "100x50|4|304|2B",
+      "misura": "100x50",
+      "spessore": "4",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00474",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 8
+        }
+      ]
+    },
+    {
+      "key": "120x60|2|304|2B",
+      "misura": "120x60",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00935",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 12
+        }
+      ]
+    },
+    {
+      "key": "120x80|2|304|2B",
+      "misura": "120x80",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A01071",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 13
+        }
+      ]
+    },
+    {
+      "key": "150x100|3|304|2B",
+      "misura": "150x100",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00903",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 14
+        },
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 15
+        }
+      ]
+    },
+    {
+      "key": "150x50|3|304|2B",
+      "misura": "150x50",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00473",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 19
+        }
+      ]
+    },
+    {
+      "key": "150x50|5|304|2B",
+      "misura": "150x50",
+      "spessore": "5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00882",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 20
+        }
+      ]
+    },
+    {
+      "key": "160x80|2|304|2B",
+      "misura": "160x80",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00246",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 21
+        }
+      ]
+    },
+    {
+      "key": "160x80|3|304|2B",
+      "misura": "160x80",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00246",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 22
+        }
+      ]
+    },
+    {
+      "key": "160x80|5|304|2B",
+      "misura": "160x80",
+      "spessore": "5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00437",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 23
+        }
+      ]
+    },
+    {
+      "key": "200x100|3|304|2B",
+      "misura": "200x100",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00324",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 24
+        }
+      ]
+    },
+    {
+      "key": "200x100|5|304|2B",
+      "misura": "200x100",
+      "spessore": "5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00307",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 25
+        }
+      ]
+    },
+    {
+      "key": "30x20|2|304|2B",
+      "misura": "30x20",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00786",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 27
+        }
+      ]
+    },
+    {
+      "key": "40x15|1.5|304|2B",
+      "misura": "40x15",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A01102",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 30
+        }
+      ]
+    },
+    {
+      "key": "40x30|2|304|2B",
+      "misura": "40x30",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00987",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 32
+        }
+      ]
+    },
+    {
+      "key": "50x30|2|304|2B",
+      "misura": "50x30",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00560",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 35
+        }
+      ]
+    },
+    {
+      "key": "60x20|2|304|2B",
+      "misura": "60x20",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A01019",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 39
+        }
+      ]
+    },
+    {
+      "key": "60x30|3|304|2B",
+      "misura": "60x30",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00523",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 40
+        }
+      ]
+    },
+    {
+      "key": "60x40|3|304|2B",
+      "misura": "60x40",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A01040",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 41
+        }
+      ]
+    },
+    {
+      "key": "80x40|2|304|2B",
+      "misura": "80x40",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00139",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 48
+        }
+      ]
+    },
+    {
+      "key": "80x40|3|304|2B",
+      "misura": "80x40",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00327",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 49
+        }
+      ]
+    },
+    {
+      "key": "80x60|2|304|2B",
+      "misura": "80x60",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "rettangolare",
+      "code": "TA9900A00944",
+      "sources": [
+        {
+          "file": "TUBOLARI nuovi.xlsx",
+          "row": 50
+        }
+      ]
+    },
+    {
+      "key": "101.6|1.5|304|2B",
+      "misura": "101.6",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00159",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 42
+        }
+      ]
+    },
+    {
+      "key": "101.6|2|304|2B",
+      "misura": "101.6",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00214",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 43
+        }
+      ]
+    },
+    {
+      "key": "101.6|3|304|2B",
+      "misura": "101.6",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00395",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 41
+        }
+      ]
+    },
+    {
+      "key": "114.3|2|304|2B",
+      "misura": "114.3",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00158",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 45
+        }
+      ]
+    },
+    {
+      "key": "114.3|3|304|2B",
+      "misura": "114.3",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00391",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 44
+        }
+      ]
+    },
+    {
+      "key": "120|2|304|2B",
+      "misura": "120",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00252",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 46
+        }
+      ]
+    },
+    {
+      "key": "127|2|304|2B",
+      "misura": "127",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00322",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 47
+        }
+      ]
+    },
+    {
+      "key": "129|2|304|2B",
+      "misura": "129",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00086",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 49
+        }
+      ]
+    },
+    {
+      "key": "129|3|304|2B",
+      "misura": "129",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00495",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 48
+        }
+      ]
+    },
+    {
+      "key": "139.7|3|304|2B",
+      "misura": "139.7",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A01056",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 50
+        }
+      ]
+    },
+    {
+      "key": "139.7|4|304|2B",
+      "misura": "139.7",
+      "spessore": "4",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A01096",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 51
+        }
+      ]
+    },
+    {
+      "key": "154|2|304|2B",
+      "misura": "154",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00005",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 52
+        }
+      ]
+    },
+    {
+      "key": "168.3|2|304|2B",
+      "misura": "168.3",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00016",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 54
+        }
+      ]
+    },
+    {
+      "key": "168.3|3|304|2B",
+      "misura": "168.3",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A01063",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 55
+        }
+      ]
+    },
+    {
+      "key": "168.3|4|304|2B",
+      "misura": "168.3",
+      "spessore": "4",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00595",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 53
+        }
+      ]
+    },
+    {
+      "key": "18|1.5|304|2B",
+      "misura": "18",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00552",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 3
+        }
+      ]
+    },
+    {
+      "key": "204|2|304|2B",
+      "misura": "204",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00137",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 56
+        }
+      ]
+    },
+    {
+      "key": "204|2|316|2B",
+      "misura": "204",
+      "spessore": "2",
+      "materiale": "316",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00939",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 57
+        }
+      ]
+    },
+    {
+      "key": "21.3|1.6|304|2B",
+      "misura": "21.3",
+      "spessore": "1.6",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00421",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 4
+        }
+      ]
+    },
+    {
+      "key": "219.1|2|304|2B",
+      "misura": "219.1",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00397",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 61
+        }
+      ]
+    },
+    {
+      "key": "254|2|304|2B",
+      "misura": "254",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00041",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 58
+        }
+      ]
+    },
+    {
+      "key": "254|2|304|BA",
+      "misura": "254",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "BA",
+      "forma": "tondo",
+      "code": "TA9900A01045",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 60
+        }
+      ]
+    },
+    {
+      "key": "254|2|316|2B",
+      "misura": "254",
+      "spessore": "2",
+      "materiale": "316",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00512",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 59
+        }
+      ]
+    },
+    {
+      "key": "26.9|1.5|304|2B",
+      "misura": "26.9",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00035",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 7
+        }
+      ]
+    },
+    {
+      "key": "26.9|3|304|2B",
+      "misura": "26.9",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00135",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 6
+        }
+      ]
+    },
+    {
+      "key": "28|1.5|304|2B",
+      "misura": "28",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00199",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 8
+        }
+      ]
+    },
+    {
+      "key": "30|1.5|304|2B",
+      "misura": "30",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00476",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 9
+        }
+      ]
+    },
+    {
+      "key": "33.7|3|304|2B",
+      "misura": "33.7",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00191",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 10
+        }
+      ]
+    },
+    {
+      "key": "34|1.5|304|2B",
+      "misura": "34",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00385",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 11
+        }
+      ]
+    },
+    {
+      "key": "40|1.5|304|2B",
+      "misura": "40",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00125",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 12
+        }
+      ]
+    },
+    {
+      "key": "40|2|304|2B",
+      "misura": "40",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00461",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 13
+        }
+      ]
+    },
+    {
+      "key": "40|2|316|2B",
+      "misura": "40",
+      "spessore": "2",
+      "materiale": "316",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00969",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 62
+        }
+      ]
+    },
+    {
+      "key": "42.4|1.5|304|2B",
+      "misura": "42.4",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A01008",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 15
+        }
+      ]
+    },
+    {
+      "key": "42.4|3|304|2B",
+      "misura": "42.4",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00247",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 14
+        }
+      ]
+    },
+    {
+      "key": "48.3|1.5|304|2B",
+      "misura": "48.3",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00479",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 18
+        }
+      ]
+    },
+    {
+      "key": "48.3|3|304|2B",
+      "misura": "48.3",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00499",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 19
+        }
+      ]
+    },
+    {
+      "key": "48.3|4|304|2B",
+      "misura": "48.3",
+      "spessore": "4",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00179",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 17
+        }
+      ]
+    },
+    {
+      "key": "50|2|304|2B",
+      "misura": "50",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00223",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 20
+        }
+      ]
+    },
+    {
+      "key": "50|3|304|2B",
+      "misura": "50",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00949",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 21
+        }
+      ]
+    },
+    {
+      "key": "52|2|304|2B",
+      "misura": "52",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00250",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 22
+        }
+      ]
+    },
+    {
+      "key": "52|3|304|2B",
+      "misura": "52",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00865",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 23
+        }
+      ]
+    },
+    {
+      "key": "60|1.5|304|2B",
+      "misura": "60",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00028",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 25
+        }
+      ]
+    },
+    {
+      "key": "60|2|304|2B",
+      "misura": "60",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00142",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 24
+        }
+      ]
+    },
+    {
+      "key": "60.3|2|304|2B",
+      "misura": "60.3",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00142",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 28
+        }
+      ]
+    },
+    {
+      "key": "60.3|2|316|2B",
+      "misura": "60.3",
+      "spessore": "2",
+      "materiale": "316",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00323",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 26
+        }
+      ]
+    },
+    {
+      "key": "60.3|3|304|2B",
+      "misura": "60.3",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00946",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 27
+        }
+      ]
+    },
+    {
+      "key": "63.5|1.5|304|2B",
+      "misura": "63.5",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00521",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 29
+        }
+      ]
+    },
+    {
+      "key": "70|1.5|304|2B",
+      "misura": "70",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00030",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 31
+        }
+      ]
+    },
+    {
+      "key": "70|2|304|2B",
+      "misura": "70",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00072",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 30
+        }
+      ]
+    },
+    {
+      "key": "70|3|304|2B",
+      "misura": "70",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00820",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 32
+        }
+      ]
+    },
+    {
+      "key": "76|2|304|2B",
+      "misura": "76",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00554",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 33
+        }
+      ]
+    },
+    {
+      "key": "76.1|3|304|2B",
+      "misura": "76.1",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00313",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 34
+        }
+      ]
+    },
+    {
+      "key": "80|1.5|304|2B",
+      "misura": "80",
+      "spessore": "1.5",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00029",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 37
+        }
+      ]
+    },
+    {
+      "key": "80|2|304|2B",
+      "misura": "80",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00123",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 35
+        }
+      ]
+    },
+    {
+      "key": "80|3|304|2B",
+      "misura": "80",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00464",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 36
+        }
+      ]
+    },
+    {
+      "key": "88.9|2|304|2B",
+      "misura": "88.9",
+      "spessore": "2",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00124",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 38
+        }
+      ]
+    },
+    {
+      "key": "88.9|3|304|2B",
+      "misura": "88.9",
+      "spessore": "3",
+      "materiale": "304",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00460",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 39
+        }
+      ]
+    },
+    {
+      "key": "88.9|3|316|2B",
+      "misura": "88.9",
+      "spessore": "3",
+      "materiale": "316",
+      "finitura": "2B",
+      "forma": "tondo",
+      "code": "TA9900A00460",
+      "sources": [
+        {
+          "file": "TUBI nuovi.xlsx",
+          "row": 40
+        }
+      ]
+    }
+  ]
+}

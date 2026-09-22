@@ -1,0 +1,42 @@
+[
+    {
+        "rodId": "edf1ff61-a53d-4e32-8176-d9c71832824a",
+        "lockedRodId": "locked-1783453399519-ce66b75cd0bf58",
+        "completionDate": "2026-07-07T21:43:21.939343",
+        "tubeType": "\u00d8129x2 304 2B",
+        "pieces": [
+            {
+                "id": "03 p prod 85/tt/tubo \u00f8129x2::td1702a00109 aisi 304 tubo \u00f8129x2 l200 80pz::80",
+                "logicalKey": "03 p prod 85/tt/tubo \u00f8129x2::td1702a00109 aisi 304 tubo \u00f8129x2 l200 80pz",
+                "filePath": "D:/backup c drive/Pyhon Programs/CODEX EDIT/ULTRA tubi Rinascita/Tubi\\03 p prod 85\\TT\\tubo \u00d8129x2\\TD1702A00109 aisi 304 tubo \u00d8129x2 L200 80pz (fatti 1).zzx",
+                "fileName": "TD1702A00109 aisi 304 tubo \u00d8129x2 L200 80pz (fatti 1).zzx",
+                "mainFolder": "03 p prod 85",
+                "tubeType": "\u00d8129x2 304 2B",
+                "length": 200,
+                "totalQuantity": 80,
+                "completedQuantity": 0,
+                "quantityNeeded": 0
+            }
+        ]
+    },
+    {
+        "rodId": "09fca76a-8274-4487-9dde-a55f13b94937",
+        "lockedRodId": "locked-1783455933871-934bb3e2f9f1",
+        "completionDate": "2026-07-07T22:25:36.208898",
+        "tubeType": "80x80x3 304 2B",
+        "pieces": [
+            {
+                "id": "03 p prod 80/tt/td9903a02351 4pz::td9903a02351 aisi 304 tubolare 80x80x3 l1100 8pz::8",
+                "logicalKey": "03 p prod 80/tt/td9903a02351 4pz::td9903a02351 aisi 304 tubolare 80x80x3 l1100 8pz",
+                "filePath": "D:/backup c drive/Pyhon Programs/CODEX EDIT/ULTRA tubi Rinascita/Tubi\\03 p prod 80\\TT\\TD9903A02351 4PZ\\TD9903A02351 aisi 304 tubolare 80x80x3 L1100 8pz (fatti 1).zzx",
+                "fileName": "TD9903A02351 aisi 304 tubolare 80x80x3 L1100 8pz (fatti 1).zzx",
+                "mainFolder": "03 p prod 80",
+                "tubeType": "80x80x3 304 2B",
+                "length": 1100,
+                "totalQuantity": 8,
+                "completedQuantity": 0,
+                "quantityNeeded": 0
+            }
+        ]
+    }
+]

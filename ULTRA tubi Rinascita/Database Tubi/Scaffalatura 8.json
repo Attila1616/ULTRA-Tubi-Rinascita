@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "name": "Scaffalatura 8",
+  "type": "scaffalatura",
+  "ripiani": [
+    {
+      "name": "Ripiano 1",
+      "tubi": [
+        {
+          "misura": "100x100",
+          "forma": "quadrato",
+          "dimensioni": [
+            100,
+            100
+          ],
+          "spessore": 4,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 1
+        },
+        {
+          "misura": "40x40",
+          "forma": "quadrato",
+          "dimensioni": [
+            40,
+            40
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 8
+        },
+        {
+          "misura": "50x50",
+          "forma": "quadrato",
+          "dimensioni": [
+            50,
+            50
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 6
+        },
+        {
+          "misura": "60x60",
+          "forma": "quadrato",
+          "dimensioni": [
+            60,
+            60
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 2
+        },
+        {
+          "misura": "90x90",
+          "forma": "quadrato",
+          "dimensioni": [
+            90,
+            90
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 3
+        },
+        {
+          "misura": "100x50",
+          "forma": "rettangolare",
+          "dimensioni": [
+            100,
+            50
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 3
+        },
+        {
+          "misura": "60x20",
+          "forma": "rettangolare",
+          "dimensioni": [
+            60,
+            20
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 2
+        }
+      ]
+    },
+    {
+      "name": "Ripiano 2",
+      "tubi": [
+        {
+          "misura": "40x40",
+          "forma": "quadrato",
+          "dimensioni": [
+            40,
+            40
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 1
+        },
+        {
+          "misura": "50x50",
+          "forma": "quadrato",
+          "dimensioni": [
+            50,
+            50
+          ],
+          "spessore": 4,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 7
+        },
+        {
+          "misura": "60x60",
+          "forma": "quadrato",
+          "dimensioni": [
+            60,
+            60
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 12
+        },
+        {
+          "misura": "60x60",
+          "forma": "quadrato",
+          "dimensioni": [
+            60,
+            60
+          ],
+          "spessore": 4,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 1
+        },
+        {
+          "misura": "70x70",
+          "forma": "quadrato",
+          "dimensioni": [
+            70,
+            70
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 1
+        },
+        {
+          "misura": "100x50",
+          "forma": "rettangolare",
+          "dimensioni": [
+            100,
+            50
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 10
+        }
+      ]
+    },
+    {
+      "name": "Ripiano 3",
+      "tubi": [
+        {
+          "misura": "120x120",
+          "forma": "quadrato",
+          "dimensioni": [
+            120,
+            120
+          ],
+          "spessore": 4,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 10
+        },
+        {
+          "misura": "60x60",
+          "forma": "quadrato",
+          "dimensioni": [
+            60,
+            60
+          ],
+          "spessore": 2,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 4
+        }
+      ]
+    },
+    {
+      "name": "Ripiano 4",
+      "tubi": [
+        {
+          "misura": "40x40",
+          "forma": "quadrato",
+          "dimensioni": [
+            40,
+            40
+          ],
+          "spessore": 3,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 1
+        },
+        {
+          "misura": "60x60",
+          "forma": "quadrato",
+          "dimensioni": [
+            60,
+            60
+          ],
+          "spessore": 4,
+          "materiale": "304",
+          "finitura": "2B",
+          "quantita": 12
+        }
+      ]
+    }
+  ]
+}
