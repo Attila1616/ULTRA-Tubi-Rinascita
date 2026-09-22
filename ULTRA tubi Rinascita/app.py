@@ -190,9 +190,14 @@ class Api:
             traceback.print_exc()
             return {"status": "error", "message": "Errore durante il nesting backend.", "groups": []}
 
-    def debug_nesting_group(self, group, rods, rod_length=6000):
+    def debug_nesting_group(self, group, rods, rod_length=6000, focus_rod_number=None):
         try:
-            return logic.debug_nesting_group(group or {}, rods or [], rod_length)
+            return logic.debug_nesting_group(
+                group or {},
+                rods or [],
+                rod_length,
+                focus_rod_number,
+            )
         except Exception:
             print("--- PYTHON ERROR in debug_nesting_group ---")
             traceback.print_exc()
