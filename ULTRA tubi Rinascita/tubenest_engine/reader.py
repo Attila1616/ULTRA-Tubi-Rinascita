@@ -8,7 +8,7 @@ import struct
 
 from .archive import Archive
 from .bcmp import FormatError
-from .geometry import bounds, primitives
+from .geometry import Arc2D, Line, bounds, primitives
 from .models import (
     EndCutInfo,
     ProfileInfo,
@@ -20,6 +20,7 @@ from .models import (
 
 _CACHE = {}
 _CACHE_LIMIT = 2048
+SUPPORTED_READ_VERSIONS = {"65542", "393222"}
 
 
 def _record_map(archive, section):
@@ -34,20 +35,86 @@ def _object_channel(shape_record):
     return channel if channel > 0 else None
 
 
-def _profile_info(section, curve_record):
+def _profile_from_unknown_outline(source_section_class, thickness, native_record_class, curves):
+    points = [point for curve in curves for point in curve.sample(64)]
+    if not points:
+        raise FormatError(f"Unsupported cross-section record: {native_record_class}")
+
+    bb = bounds(points)
+    width = float(bb[1][0] - bb[0][0])
+    height = float(bb[1][1] - bb[0][1])
+    lines = [curve for curve in curves if isinstance(curve, Line)]
+    arcs = [curve for curve in curves if isinstance(curve, Arc2D)]
+
+    radius = None
+    if arcs:
+        radii = [float(curve.radius) for curve in arcs]
+        average = sum(radii) / len(radii)
+        tolerance = max(1e-3, abs(average) * 1e-4)
+        if max(abs(r - average) for r in radii) <= tolerance:
+            radius = average
+
+    # Observed TRvUnknownSection files can still contain an ordinary rounded
+    # rectangle outline. Only promote them when the geometry itself proves it:
+    # four straight sides + four equal-radius corner arcs.
+    is_rounded_rectangle = len(lines) == 4 and len(arcs) == 4 and radius is not None
+    if is_rounded_rectangle:
+        effective_class = "Square" if abs(width - height) <= 1e-3 else "Rect"
+        return ProfileInfo(
+            effective_class,
+            thickness,
+            source_section_class=source_section_class,
+            native_record_class=native_record_class,
+            inferred_from_geometry=True,
+            width=width if effective_class == "Rect" else None,
+            height=height if effective_class == "Rect" else None,
+            side=(width + height) / 2.0 if effective_class == "Square" else None,
+            radius=radius,
+        )
+
+    return ProfileInfo(
+        source_section_class or "Unknown",
+        thickness,
+        source_section_class=source_section_class,
+        native_record_class=native_record_class,
+        inferred_from_geometry=True,
+        width=width,
+        height=height,
+    )
+
+
+def _profile_info(section, curve_record, geos):
     section_class = str(section.get("SectionClass") or "")
     thickness = float(section.get("ThickNess") or 0.0)
     payload = curve_record.blocks[-1].payload if curve_record.blocks else b""
+    common = {
+        "source_section_class": section_class,
+        "native_record_class": curve_record.name,
+    }
 
     if curve_record.name == "TRvSquareSection":
         radius, side = struct.unpack("<dd", payload)
-        return ProfileInfo(section_class, thickness, side=side, radius=radius)
+        return ProfileInfo(section_class, thickness, side=side, radius=radius, **common)
     if curve_record.name == "TRvRectSection":
         width, height, radius = struct.unpack("<ddd", payload)
-        return ProfileInfo(section_class, thickness, width=width, height=height, radius=radius)
+        return ProfileInfo(section_class, thickness, width=width, height=height, radius=radius, **common)
     if curve_record.name == "TRvCircleSection":
         radius = struct.unpack("<d", payload)[0]
-        return ProfileInfo(section_class, thickness, radius=radius, diameter=2.0 * radius)
+        return ProfileInfo(section_class, thickness, radius=radius, diameter=2.0 * radius, **common)
+    if curve_record.name == "TRvUnknownSection":
+        geometry = section.find("Geometry")
+        if geometry is None or geometry.get("GeoAddr") is None:
+            raise FormatError("TRvUnknownSection has no cross-section geometry")
+        geo_addr = int(geometry.get("GeoAddr"))
+        geometry_record = geos.get(geo_addr)
+        if geometry_record is None:
+            raise FormatError(f"Missing cross-section LiteGeos record at {geo_addr}")
+        return _profile_from_unknown_outline(
+            section_class or "Unknown",
+            thickness,
+            curve_record.name,
+            primitives(geometry_record),
+        )
 
     raise FormatError(f"Unsupported cross-section record: {curve_record.name}")
 
@@ -119,7 +186,7 @@ def read_zzx(path):
     root = archive.xml("content.xml")
     doc_type = str(root.get("DocType") or "")
     file_version = str(root.get("FileVer") or "")
-    if doc_type != "NestResults3D" or file_version != "65542":
+    if doc_type != "NestResults3D" or file_version not in SUPPORTED_READ_VERSIONS:
         raise FormatError(f"Unsupported ZZX dialect: {doc_type} / {file_version}")
 
     header = root.find("Header")
@@ -146,7 +213,7 @@ def read_zzx(path):
         curve_record = curve_records.get(curve_addr)
         if curve_record is None:
             raise FormatError(f"Missing Curves record at {curve_addr}")
-        profile = _profile_info(section, curve_record)
+        profile = _profile_info(section, curve_record, geos)
 
         cut_a = int(segment.get("CutOffA"))
         cut_b = int(segment.get("CutOffB"))
