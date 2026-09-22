@@ -1110,16 +1110,47 @@ def nest_piece_instances(piece_instances, rod_length=6000):
 
 
 def nest_piece_groups(groups, rod_length=6000):
-    """Nest multiple tube-type groups in one UI/backend round trip."""
+    """Nest multiple tube-type groups with the geometry-aware optimizer."""
     try:
+        config = load_config(silent=True) or {}
+        try:
+            gap_mm = max(0.0, float(config.get("nesting_gap_mm", 2.0)))
+        except (TypeError, ValueError):
+            gap_mm = 2.0
+
         result_groups = []
         for group in groups or []:
             tube_type = str(group.get("tubeType") or "")
-            pieces = group.get("pieces") or []
-            rods = tubenest_engine.nest_items_dict(pieces, rod_length=rod_length)
-            result_groups.append({"tubeType": tube_type, "rods": rods})
+            pieces = []
+
+            for raw_piece in group.get("pieces") or []:
+                piece = dict(raw_piece)
+                file_path = str(piece.get("filePath") or "").strip()
+
+                # If the drawing validator flags this ZZX, keep the piece in the
+                # plan but treat it as opaque nominal geometry. This prevents a
+                # known typo/discrepancy from influencing physical interlocking.
+                if file_path and os.path.isfile(file_path):
+                    if validate_zzx_file(file_path):
+                        piece["tubePart"] = None
+
+                pieces.append(piece)
+
+            rods = tubenest_engine.optimize_items_dict(
+                pieces,
+                rod_length=rod_length,
+                gap_mm=gap_mm,
+                dead_zone_mm=400.0,
+            )
+            result_groups.append({
+                "tubeType": tube_type,
+                "rods": rods,
+                "optimizer": "geometry",
+                "gapMm": gap_mm,
+            })
         return {"status": "success", "groups": result_groups}
     except Exception as exc:
+        traceback.print_exc()
         return {"status": "error", "message": str(exc), "groups": []}
 
 
