@@ -7,6 +7,9 @@ from typing import Optional
 class ProfileInfo:
     section_class: str
     thickness: float
+    source_section_class: Optional[str] = None
+    native_record_class: Optional[str] = None
+    inferred_from_geometry: bool = False
     width: Optional[float] = None
     height: Optional[float] = None
     side: Optional[float] = None
