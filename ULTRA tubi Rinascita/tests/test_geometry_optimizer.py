@@ -143,9 +143,9 @@ class GeometryOptimizerTests(unittest.TestCase):
         # Both pieces have angled ends, so neither can become a valid flip-tail
         # regardless of optimizer ordering or end-for-end reversal.
         long_piece = make_part(
-            5200,
+            5300,
             start_plane=(25.0, 0.0, 0.5),
-            end_plane=(5175.0, 0.0, -0.5),
+            end_plane=(5275.0, 0.0, -0.5),
         )
         bad_tail = make_part(
             700,
@@ -154,7 +154,7 @@ class GeometryOptimizerTests(unittest.TestCase):
         )
 
         rods = optimize_items_dict(
-            [item("LONG", 5200, long_piece), item("BAD", 700, bad_tail)],
+            [item("LONG", 5300, long_piece), item("BAD", 700, bad_tail)],
             gap_mm=2.0,
         )
 
@@ -165,21 +165,21 @@ class GeometryOptimizerTests(unittest.TestCase):
         # Make the long piece ineligible too, otherwise the optimizer could
         # simply reorder and use it as the flip-tail instead.
         long_piece = make_part(
-            5200,
+            5300,
             start_plane=(25.0, 0.0, 0.5),
-            end_plane=(5175.0, 0.0, -0.5),
+            end_plane=(5275.0, 0.0, -0.5),
         )
         dirty_tail = make_part(
             700,
             features=[{
                 "shape_handle": 99,
                 "feature_type": "cut",
-                "sampled_bounds": [[-1, -1, 500], [1, 1, 550]],
+                "sampled_bounds": [[-1, -1, 300], [1, 1, 400]],
             }],
         )
 
         rods = optimize_items_dict(
-            [item("LONG", 5200, long_piece), item("DIRTY", 700, dirty_tail)],
+            [item("LONG", 5300, long_piece), item("DIRTY", 700, dirty_tail)],
             gap_mm=2.0,
         )
 
