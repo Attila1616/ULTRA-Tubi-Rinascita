@@ -27,6 +27,8 @@ DEFAULT_CHUCK_DEAD_ZONE = 400.0
 DEFAULT_GAP_MM = 2.0
 DEFAULT_BEAM_WIDTH = 120
 DEFAULT_MAX_CANDIDATE_TYPES = 24
+EXACT_REQUIRE_ALL_MAX_PIECES = 8
+MERGE_PAIR_ATTEMPT_LIMIT = 160
 
 _PAIRWISE_FIT_CACHE = {}
 _PAIRWISE_FIT_CACHE_LIMIT = 50000
@@ -341,13 +343,14 @@ def _representative_indices(items, allowed_mask, used_mask, max_types):
 
 def _state_dedupe_key(state):
     if not state.placed:
-        return (state.used_mask, None, None, state.rectangle_family, state.tail_used)
+        return (state.used_mask, None, None, None, state.rectangle_family, state.tail_used)
     last = state.placed[-1]
     return (
         state.used_mask,
         last.item_index,
         round(_normalize_angle(last.pose.axial_rotation_degrees), 5),
         bool(last.pose.reversed_end_for_end),
+        round(float(last.origin), 5),
         state.rectangle_family,
         state.tail_used,
     )
@@ -496,6 +499,10 @@ def _search_single_rod(
     beam = [initial]
     terminals = []
     target_mask = int(allowed_mask)
+    exact_mode = bool(
+        require_all
+        and int(target_mask).bit_count() <= EXACT_REQUIRE_ALL_MAX_PIECES
+    )
 
     for _depth in range(len(items) + 1):
         next_states = []
@@ -555,7 +562,8 @@ def _search_single_rod(
             if previous is None or _partial_score(state) < _partial_score(previous):
                 best_by_key[key] = state
 
-        beam = sorted(best_by_key.values(), key=_partial_score)[:beam_width]
+        ordered_states = sorted(best_by_key.values(), key=_partial_score)
+        beam = ordered_states if exact_mode else ordered_states[:beam_width]
 
     terminals.extend(beam)
 
@@ -597,55 +605,58 @@ def _build_initial_rods(items, rod_length, dead_zone_mm, gap_mm):
 
 
 def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
-    # Pairwise merge is intentionally bounded. It catches the common case where
-    # geometry/interlocking lets two greedy rods become one without turning the
-    # UI refresh into an unbounded combinatorial search.
+    # Test the most promising rod pairs first instead of raw rod-index order.
+    # This prevents a short orphan rod near the end of the list from being
+    # skipped just because the group has many earlier rod combinations.
     attempts = 0
-    max_attempts = 80
 
-    while attempts < max_attempts:
-        best_merge = None
-
+    while attempts < MERGE_PAIR_ATTEMPT_LIMIT:
+        pair_candidates = []
         for i in range(len(rods)):
             for j in range(i + 1, len(rods)):
-                attempts += 1
-                if attempts > max_attempts:
-                    break
-
-                union_mask = rods[i].used_mask | rods[j].used_mask
-                union_nominal = rods[i].nominal_packed + rods[j].nominal_packed
-
-                # Geometry can save substantial material, but a very large
-                # combined nominal demand cannot realistically collapse to one
-                # 6m stock in this local merge pass.
-                if union_nominal > float(rod_length) + 3000.0:
-                    continue
-
-                merged = _search_single_rod(
-                    items,
-                    allowed_mask=union_mask,
-                    rod_length=rod_length,
-                    dead_zone_mm=dead_zone_mm,
-                    gap_mm=gap_mm,
-                    require_all=True,
-                    beam_width=max(DEFAULT_BEAM_WIDTH * 2, 220),
-                    max_candidate_types=40,
-                )
-                if merged is None:
-                    continue
-
-                key = (
-                    round(merged.used_span, 6),
-                    -merged.common_lines,
-                    merged.tail_used,
+                combined_used = float(rods[i].used_span) + float(rods[j].used_span)
+                combined_nominal = float(rods[i].nominal_packed) + float(rods[j].nominal_packed)
+                pair_candidates.append((
+                    combined_used,
+                    min(float(rods[i].used_span), float(rods[j].used_span)),
+                    combined_nominal,
                     i,
                     j,
-                )
-                if best_merge is None or key < best_merge[0]:
-                    best_merge = (key, i, j, merged)
+                ))
+        pair_candidates.sort()
 
-            if attempts > max_attempts:
+        best_merge = None
+        for _combined_used, _shortest, union_nominal, i, j in pair_candidates:
+            if attempts >= MERGE_PAIR_ATTEMPT_LIMIT:
                 break
+            attempts += 1
+
+            if union_nominal > float(rod_length) + 3000.0:
+                continue
+
+            union_mask = rods[i].used_mask | rods[j].used_mask
+            merged = _search_single_rod(
+                items,
+                allowed_mask=union_mask,
+                rod_length=rod_length,
+                dead_zone_mm=dead_zone_mm,
+                gap_mm=gap_mm,
+                require_all=True,
+                beam_width=max(DEFAULT_BEAM_WIDTH * 2, 220),
+                max_candidate_types=100,
+            )
+            if merged is None:
+                continue
+
+            key = (
+                round(merged.used_span, 6),
+                -merged.common_lines,
+                merged.tail_used,
+                i,
+                j,
+            )
+            if best_merge is None or key < best_merge[0]:
+                best_merge = (key, i, j, merged)
 
         if best_merge is None:
             break
@@ -657,7 +668,6 @@ def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
         ] + [merged]
 
     return rods
-
 
 def _refine_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
     result = []
@@ -902,11 +912,14 @@ def diagnose_items_dict(
     lines.append(f"Beam normale: {DEFAULT_BEAM_WIDTH}")
     lines.append(f"Tipi candidati per livello: {DEFAULT_MAX_CANDIDATE_TYPES}")
     lines.append(f"Coppie di verghe possibili: {total_pairs}")
-    lines.append("Limite merge corrente: 80 tentativi complessivi")
-    if total_pairs > 80:
+    lines.append(
+        f"Limite merge corrente: {MERGE_PAIR_ATTEMPT_LIMIT} tentativi, "
+        "ordinati dalle coppie più promettenti"
+    )
+    if total_pairs > MERGE_PAIR_ATTEMPT_LIMIT:
         lines.append(
-            f"ATTENZIONE: {total_pairs - 80} coppie possono non essere testate "
-            "dal merge pass corrente, a seconda dei merge precedenti."
+            f"ATTENZIONE: fino a {total_pairs - MERGE_PAIR_ATTEMPT_LIMIT} coppie "
+            "meno promettenti possono non essere testate."
         )
     lines.append("")
 
@@ -962,7 +975,7 @@ def diagnose_items_dict(
         prefix = f"Verga {i + 1} + Verga {j + 1} (coppia #{ordinal})"
         if merged is not None:
             definite_merges.append((i + 1, j + 1, merged))
-            cap_note = " [OLTRE IL LIMITE 80]" if ordinal > 80 else ""
+            cap_note = f" [indice storico coppia #{ordinal}]" if ordinal > MERGE_PAIR_ATTEMPT_LIMIT else ""
             lines.append(
                 f"{prefix}: PUÒ DIVENTARE 1 VERGA -> "
                 f"{merged.used_span:.1f} mm, CL={merged.common_lines}{cap_note}"
@@ -1025,14 +1038,10 @@ def diagnose_items_dict(
             "Almeno una coppia del piano attuale può essere compressa in una sola verga. "
             "Questa è una prova concreta che il piano corrente non è ottimo nel numero di verghe."
         )
-        if any(
-            (i * rod_count - (i * (i + 1)) // 2 + (j - i)) > 80
-            for i, j, _ in [(a - 1, b - 1, m) for a, b, m in definite_merges]
-        ):
-            lines.append(
-                "Una delle opportunità cade oltre il limite di 80 coppie del merge pass: "
-                "il limite stesso è una causa diretta possibile."
-            )
+        lines.append(
+            "Il merge pass normale ora ordina le coppie per probabilità di fusione, "
+            "quindi le verghe corte vengono controllate prima."
+        )
     else:
         lines.append(
             "Nelle coppie approfondite non è stata trovata una fusione completa; "
