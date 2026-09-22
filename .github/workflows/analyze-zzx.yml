@@ -1,0 +1,19 @@
+name: Analyze ZZX samples
+
+on:
+  push:
+    branches:
+      - analysis/zzx-samples
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Inspect uploaded ZZX samples
+        working-directory: "ULTRA tubi Rinascita"
+        run: python tools/analyze_zzx_samples.py
