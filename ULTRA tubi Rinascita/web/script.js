@@ -1774,7 +1774,8 @@ function renderRodsHTML(tubeType, lockedForTube, nestedRods) {
             label: `Verga libera ${index + 1}`,
             kind: 'unlocked',
             segments: rod.segments || [],
-            isLocked: false
+            isLocked: false,
+            nestRod: rod
         });
     });
 
@@ -1790,26 +1791,125 @@ function renderRodsHTML(tubeType, lockedForTube, nestedRods) {
     return html;
 }
 
-function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked, isDone, isEmptyPlaceholder }) {
-    const totalUsed = (segments || []).reduce((sum, segment) => sum + (parseInt(segment.length, 10) || 0), 0);
+function getSegmentPreviewGeometry(segment) {
+    const sourcePiece = findPieceById(segment?.sourceId);
+    const part = sourcePiece?.tubePart;
+    if (!part || !Array.isArray(part.ends) || part.ends.length < 2) return null;
+
+    const profile = part.profile || {};
+    const outsideHeight = Number(
+        profile.outside_height ?? profile.outside_diameter ?? profile.outside_width
+    );
+    const partLength = Number(part.overall_length || segment.length || 0);
+    if (!Number.isFinite(outsideHeight) || outsideHeight <= 0 || !Number.isFinite(partLength) || partLength <= 0) {
+        return null;
+    }
+
+    const placement = segment.nestPlacement || {};
+    const ends = [
+        placement.end_a || part.ends[0],
+        placement.end_b || part.ends[1],
+    ];
+
+    const readPlane = end => {
+        if (!end) return null;
+        if (Array.isArray(end.plane_z_equals_c_plus_ax_plus_by)) {
+            const [c, sx, sv] = end.plane_z_equals_c_plus_ax_plus_by.map(Number);
+            if ([c, sx, sv].every(Number.isFinite)) return { c, sx, sv };
+        }
+        const c = Number(end.c);
+        const sx = Number(end.slope_x);
+        const sv = Number(end.slope_vertical);
+        if ([c, sx, sv].every(Number.isFinite)) return { c, sx, sv };
+        return null;
+    };
+
+    const a = readPlane(ends[0]);
+    const b = readPlane(ends[1]);
+    if (!a || !b) return null;
+
+    const halfHeight = outsideHeight / 2;
+    const aTop = a.c + a.sv * halfHeight;
+    const aBottom = a.c - a.sv * halfHeight;
+    const bTop = b.c + b.sv * halfHeight;
+    const bBottom = b.c - b.sv * halfHeight;
+
+    const pct = value => Math.max(0, Math.min(100, value / partLength * 100));
+    const polygon = [
+        `${pct(aTop).toFixed(3)}% 0%`,
+        `${pct(bTop).toFixed(3)}% 0%`,
+        `${pct(bBottom).toFixed(3)}% 100%`,
+        `${pct(aBottom).toFixed(3)}% 100%`,
+    ].join(', ');
+
+    const angleFor = end => {
+        const value = Number(end?.angle_from_perpendicular_degrees);
+        if (Number.isFinite(value)) return Math.abs(value);
+        const plane = readPlane(end);
+        return plane ? Math.atan(Math.hypot(plane.sx, plane.sv)) * 180 / Math.PI : 0;
+    };
+
+    return {
+        polygon,
+        leftAngle: angleFor(ends[0]),
+        rightAngle: angleFor(ends[1]),
+    };
+}
+
+function getRodUsedMm(segments, nestRod = null) {
+    const backendUsed = Number(nestRod?.used);
+    if (Number.isFinite(backendUsed)) return backendUsed;
+
+    const placedEnds = (segments || [])
+        .map(segment => Number(segment?.nestPlacement?.z_end))
+        .filter(Number.isFinite);
+    if (placedEnds.length === (segments || []).length && placedEnds.length > 0) {
+        return Math.max(...placedEnds);
+    }
+
+    return (segments || []).reduce((sum, segment) => sum + (Number(segment.length) || 0), 0);
+}
+
+function segmentLayoutMm(segments) {
+    let cursor = 0;
+    return (segments || []).map(segment => {
+        const placement = segment?.nestPlacement || {};
+        let start = Number(placement.z_start);
+        let end = Number(placement.z_end);
+
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+            start = cursor;
+            end = start + (Number(segment.length) || 0);
+        }
+
+        cursor = Math.max(cursor, end);
+        return { segment, start, end };
+    });
+}
+
+function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked, isDone, isEmptyPlaceholder, nestRod = null }) {
+    const totalUsed = getRodUsedMm(segments, nestRod);
     const remainingToCut = (segments || []).reduce((sum, segment) => {
-        return segment.done ? sum : sum + (parseInt(segment.length, 10) || 0);
+        return segment.done ? sum : sum + (Number(segment.length) || 0);
     }, 0);
+    const nominalLockedTotal = (segments || []).reduce((sum, segment) => sum + (Number(segment.length) || 0), 0);
     const usedPercent = (totalUsed / 6000 * 100).toFixed(1);
-    const overfull = totalUsed > 6000;
-    const remainingLabel = isLocked ? ` - Rimasto da tagliare ${remainingToCut}/${totalUsed}mm` : '';
+    const overfull = totalUsed > 6000 + 1e-6;
+    const remainingLabel = isLocked ? ` - Rimasto da tagliare ${remainingToCut}/${nominalLockedTotal}mm` : '';
     const rodPieceIds = JSON.stringify((segments || []).map(segment => segment.sourceId || segment.id).filter(Boolean));
     const segmentKeys = JSON.stringify((segments || []).map(segment => segment.instanceKey).filter(Boolean));
+
     let html = `<div class="rod-entry ${kind}-rod${isDone ? ' rod-complete' : ''}${overfull ? ' rod-overfull' : ''}" data-rod-entry="${escapeAttr(rodId)}">
         <div class="rod-body">
-            <p class="rod-label"><strong>${escapeHtml(label)}:</strong> Usati ${totalUsed}mm (${usedPercent}%)${remainingLabel}${overfull ? ' - oltre 6000mm' : ''}</p>
-            <div class="rod-bar" data-drop-zone="rod" data-rod-kind="${escapeAttr(kind)}" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}">`;
+            <p class="rod-label"><strong>${escapeHtml(label)}:</strong> Usati ${totalUsed.toFixed(totalUsed % 1 ? 1 : 0)}mm (${usedPercent}%)${remainingLabel}${overfull ? ' - oltre 6000mm' : ''}</p>
+            <div class="rod-bar" data-drop-zone="rod" data-rod-kind="${escapeAttr(kind)}" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}">
+                <div class="rod-chuck-dead-zone" title="Ultimi 400mm: zona non tagliabile senza strategia di ribaltamento"></div>`;
 
     if (!segments || segments.length === 0) {
         html += `<div class="rod-empty-label">${isEmptyPlaceholder ? 'Trascina qui per sbloccare pezzi' : 'Vuota'}</div>`;
     } else {
-        segments.forEach(segment => {
-            html += renderRodSegmentHTML(segment, kind, rodId, tubeType);
+        segmentLayoutMm(segments).forEach(({ segment, start, end }) => {
+            html += renderRodSegmentHTML(segment, kind, rodId, tubeType, start, end);
         });
     }
 
@@ -1825,13 +1925,32 @@ function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked,
     return html;
 }
 
-function renderRodSegmentHTML(segment, kind, rodId, tubeType) {
-    const segmentWidth = Math.max(1, (parseInt(segment.length, 10) || 0) / 6000 * 100);
+function renderRodSegmentHTML(segment, kind, rodId, tubeType, startMm, endMm) {
+    const leftPercent = Math.max(0, startMm / 6000 * 100);
+    const widthPercent = Math.max(0, (endMm - startMm) / 6000 * 100);
     const filePath = segment.currentFilePath || segment.filePath || '';
     const doneClass = segment.done ? ' done' : '';
     const draggable = kind === 'locked' && segment.done ? 'false' : 'true';
-    const title = `${segment.length}mm - ${segment.fileName || ''}\nClick per aprire il file`;
-    let html = `<div class="rod-segment${doneClass}" draggable="${draggable}" data-action="open-file-path" data-file-path="${escapeAttr(filePath)}" data-segment-key="${escapeAttr(segment.instanceKey)}" data-rod-kind="${escapeAttr(kind)}" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" style="width: ${segmentWidth}%; background-color: ${getColorForPiece(segment)};" title="${escapeAttr(title)}"><span>${escapeHtml(segment.length)}</span>`;
+    const preview = getSegmentPreviewGeometry(segment);
+    const clipStyle = preview ? ` clip-path: polygon(${preview.polygon});` : '';
+    const angleText = preview
+        ? ` | tagli ${preview.leftAngle.toFixed(1)}° / ${preview.rightAngle.toFixed(1)}°`
+        : '';
+    const placement = segment.nestPlacement;
+    const placementText = placement
+        ? ` | Y ${Number(placement.z_start).toFixed(1)}→${Number(placement.z_end).toFixed(1)}`
+        : '';
+    const title = `${segment.length}mm - ${segment.fileName || ''}${angleText}${placementText}\nClick per aprire il file`;
+
+    let html = `<div class="rod-segment${doneClass}" draggable="${draggable}" data-action="open-file-path" data-file-path="${escapeAttr(filePath)}" data-segment-key="${escapeAttr(segment.instanceKey)}" data-rod-kind="${escapeAttr(kind)}" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" style="left: ${leftPercent}%; width: ${widthPercent}%; background-color: ${getColorForPiece(segment)};${clipStyle}" title="${escapeAttr(title)}"><span>${escapeHtml(segment.length)}</span>`;
+
+    if (preview && widthPercent > 4) {
+        const leftLabel = preview.leftAngle > 0.05 ? `${preview.leftAngle.toFixed(0)}°` : '';
+        const rightLabel = preview.rightAngle > 0.05 ? `${preview.rightAngle.toFixed(0)}°` : '';
+        if (leftLabel) html += `<span class="rod-cut-angle rod-cut-angle-left">${escapeHtml(leftLabel)}</span>`;
+        if (rightLabel) html += `<span class="rod-cut-angle rod-cut-angle-right">${escapeHtml(rightLabel)}</span>`;
+    }
+
     if (kind === 'locked' && !segment.done) {
         html += `<button class="segment-done-button fatto-button ctrl-required" data-action="mark-locked-segment-fatto" data-segment-key="${escapeAttr(segment.instanceKey)}" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Segna questo pezzo come fatto">&#10003;</button>`;
     }
@@ -2379,10 +2498,7 @@ async function lockAllUnlockedRods() {
                 historyLogged: false,
                 inventoryDecrementDone: false,
                 inventoryDecision: null,
-                segments: nestedRod.segments.map(segment => {
-                    const { nestPlacement, ...persistentSegment } = segment;
-                    return { ...persistentSegment, done: false };
-                })
+                segments: nestedRod.segments.map(segment => ({ ...segment, done: false }))
             });
             rodsAdded += 1;
         });
@@ -2402,6 +2518,13 @@ function unlockAllLockedRods() {
 function getLockedRod(tubeType, rodId) {
     return (lockedRods[tubeType] || []).find(rod => rod.rodId === rodId);
 }
+function clearLockedRodPlacements(rod) {
+    if (!rod) return;
+    (rod.segments || []).forEach(segment => {
+        delete segment.nestPlacement;
+    });
+}
+
 function lockUnlockedRod(tubeType, segmentKeys) {
     const segments = (segmentKeys || []).map(key => availableSegmentMap.get(key)).filter(Boolean);
     if (segments.length === 0) return;
@@ -2430,6 +2553,8 @@ function removeSegmentFromLockedRod(tubeType, rodId, instanceKey) {
     const index = (rod.segments || []).findIndex(segment => segment.instanceKey === instanceKey);
     if (index < 0) return null;
     const [segment] = rod.segments.splice(index, 1);
+    clearLockedRodPlacements(rod);
+    delete segment.nestPlacement;
     rod.done = rod.segments.length > 0 && rod.segments.every(item => item.done);
     lockedRods[tubeType] = (lockedRods[tubeType] || []).filter(item => item.segments && item.segments.length > 0);
     return segment;
@@ -2443,7 +2568,9 @@ function insertSegmentIntoLockedRod(tubeType, rodId, segment, insertIndex = null
         alert('Questa verga supererebbe 6000mm.');
         return false;
     }
+    clearLockedRodPlacements(rod);
     const cleanSegment = { ...segment, done: false };
+    delete cleanSegment.nestPlacement;
     if (insertIndex === null || insertIndex < 0 || insertIndex > rod.segments.length) {
         rod.segments.push(cleanSegment);
     } else {
