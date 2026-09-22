@@ -1921,6 +1921,7 @@ async function handleContainerClick(event) {
             case 'open-folder': if (pieceId) openFolder(pieceId); break;
             case 'open-file-path': if (actionTarget.dataset.filePath) openFilePath(actionTarget.dataset.filePath); break;
             case 'open-igs-file': if (actionTarget.dataset.filePath) openFilePath(actionTarget.dataset.filePath); break;
+            case 'open-zzx-validation-file': if (actionTarget.dataset.filePath) openFilePath(actionTarget.dataset.filePath); break;
             case 'search-tube-location':
                 await showTubeLocation(actionTarget.dataset.tubeType);
                 break;
