@@ -1100,6 +1100,15 @@ def nest_pieces(pieces_to_nest, rod_length=6000):
     return tubenest_engine.nest_items_dict(items, rod_length=rod_length)
 
 # --- Main State Aggregation ---
+def nest_piece_instances(piece_instances, rod_length=6000):
+    """Nest browser/UI piece instances through the authoritative Python engine."""
+    try:
+        rods = tubenest_engine.nest_items_dict(piece_instances or [], rod_length=rod_length)
+        return {"status": "success", "rods": rods}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc), "rods": []}
+
+
 def get_current_state(da_fare_path):
     config = load_config()
     ignore_list = set(folder.lower() for folder in config.get('ignore_folders', []))
