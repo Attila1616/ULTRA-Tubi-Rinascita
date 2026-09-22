@@ -1884,7 +1884,10 @@ function renderRodsHTML(tubeType, lockedForTube, nestedRods) {
     const totalShown = (lockedForTube?.length || 0) + unlockedCount;
     let html = `<div class="rod-section-heading">
         <h3 class="details-section-title">Visualizzazione Verghe (${totalShown} visibili)</h3>
-        <button class="action-button database-mini-button" data-action="toggle-unlocked-rods" data-tube-type="${escapeAttr(tubeType)}">${unlockedVisible ? 'Nascondi libere' : 'Mostra libere'}</button>
+        <div class="rod-section-actions">
+            <button class="action-button database-mini-button" data-action="debug-nesting-group" data-tube-type="${escapeAttr(tubeType)}">Debug nesting</button>
+            <button class="action-button database-mini-button" data-action="toggle-unlocked-rods" data-tube-type="${escapeAttr(tubeType)}">${unlockedVisible ? 'Nascondi libere' : 'Mostra libere'}</button>
+        </div>
     </div>`;
 
     (lockedForTube || []).forEach((rod, index) => {
@@ -2270,6 +2273,9 @@ async function handleContainerClick(event) {
                 break;
             case 'mark-locked-segment-fatto':
                 await markLockedSegmentFatto(actionTarget.dataset.tubeType, actionTarget.dataset.rodId, actionTarget.dataset.segmentKey);
+                break;
+            case 'debug-nesting-group':
+                await debugNestingGroup(actionTarget.dataset.tubeType);
                 break;
             case 'toggle-unlocked-rods':
                 toggleUnlockedRodsForTube(actionTarget.dataset.tubeType);
@@ -3054,6 +3060,54 @@ async function nestGroupsBackend(groupRequests, rodLength = 6000) {
             signature: group.signature || null
         };
     });
+}
+
+async function debugNestingGroup(tubeType) {
+    const group = (allTubeData || []).find(item => item.tubeType === tubeType);
+    if (!group) return;
+
+    const context = buildGroupNestingContext(group);
+    const { rods } = cachedNestingForGroup(group, context);
+    if (rods === null) {
+        alert('Apri il gruppo e attendi la fine del calcolo nesting prima di avviare il debug.');
+        return;
+    }
+
+    const sourcePieces = new Map(
+        (group.pieces || []).map(piece => [piece.id, piece])
+    );
+    const payload = {
+        tubeType,
+        pieces: context.piecesToNest.map(segment => {
+            const sourcePiece = sourcePieces.get(segment.sourceId);
+            return {
+                instanceKey: segment.instanceKey,
+                sourceId: segment.sourceId,
+                length: segment.length,
+                tubePart: sourcePiece?.tubePart || null,
+                filePath: sourcePiece?.filePath || '',
+                fileName: sourcePiece?.fileName || ''
+            };
+        })
+    };
+
+    openSearchModal('Analisi approfondita nesting in corso...');
+
+    try {
+        const response = await window.pywebview.api.debug_nesting_group(
+            payload,
+            rods,
+            6000
+        );
+        if (!response || response.status !== 'success') {
+            openSearchModal(response?.text || response?.message || 'Errore durante il debug nesting.');
+            return;
+        }
+        openSearchModal(response.text || 'Debug completato senza output.');
+    } catch (error) {
+        console.error('Nesting debug failed:', error);
+        openSearchModal('Errore durante il debug nesting. Controlla il terminale.');
+    }
 }
 
 function getPieceColorHue(piece) {
