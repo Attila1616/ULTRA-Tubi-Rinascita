@@ -1718,14 +1718,30 @@ async function renderUI() {
 
         if (isExpanded) {
             const context = buildGroupNestingContext(group);
-            context.piecesToNest.forEach(segment => {
-                nextAvailableSegmentMap.set(segment.instanceKey, segment);
-            });
 
             const { rods: cachedRods } = cachedNestingForGroup(group, context);
             const isLoading = nestingLoadingGroups.has(group.tubeType);
             const error = nestingErrorByTube.get(group.tubeType);
             const nestedRods = cachedRods || [];
+
+            // The lock button must capture the exact segment objects shown in
+            // the calculated rods, including nestPlacement. Previously this
+            // map was filled from pre-optimizer piecesToNest, which silently
+            // dropped placement metadata every time a rod was locked.
+            if (cachedRods !== null) {
+                nestedRods.forEach(rod => {
+                    (rod.segments || []).forEach(segment => {
+                        nextAvailableSegmentMap.set(segment.instanceKey, segment);
+                    });
+                });
+            } else {
+                // While nesting has not completed yet, retain the raw instances
+                // for drag/drop bookkeeping. No calculated rod can be locked
+                // from these objects because no rod is rendered yet.
+                context.piecesToNest.forEach(segment => {
+                    nextAvailableSegmentMap.set(segment.instanceKey, segment);
+                });
+            }
 
             let statusHtml = '';
             if (isLoading) {
@@ -2783,6 +2799,15 @@ function clearLockedRodPlacements(rod) {
 function lockUnlockedRod(tubeType, segmentKeys) {
     const segments = (segmentKeys || []).map(key => availableSegmentMap.get(key)).filter(Boolean);
     if (segments.length === 0) return;
+    const missingPlacement = segments.filter(segment => !segment?.nestPlacement);
+    if (missingPlacement.length > 0) {
+        console.error('Refusing to lock rod without nesting placements:', missingPlacement);
+        alert(
+            'Il nesting di questa verga non è ancora disponibile correttamente. ' +
+            'Attendi il completamento del calcolo e riprova.'
+        );
+        return;
+    }
     const rod = {
         rodId: makeRodId(),
         tubeType,
