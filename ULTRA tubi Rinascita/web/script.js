@@ -5,6 +5,10 @@ let expandedState = {}, daFareOverrides = {}, allTubeData = [], unmatchedIgsFile
 let lastIgsWarningSignature = '';
 let lastZzxWarningSignature = '';
 let nestingRenderSequence = 0;
+let nestingResultCache = new Map();
+let nestingLoadingGroups = new Set();
+let nestingErrorByTube = new Map();
+let nestingSettingsKey = 'gap:2';
 let uiPreferences = {
     sorting: {},
     columnWidths: {},
@@ -527,6 +531,8 @@ async function saveSettings() {
         }
         closeSettingsModal();
         applyLockColors(response.config?.lock_unlocked_color, response.config?.lock_locked_color);
+        nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}`;
+        invalidateNestingCache();
         document.getElementById('current-folder-path').textContent = response.config?.da_fare_path || 'Non impostato';
         await loadTubeData();
         if (tubeDatabaseContainer?.style.display !== 'none') await loadTubeDatabase();
@@ -659,9 +665,15 @@ async function initialize() {
         dbCollapsedLocations = uiPreferences.databaseCollapsedLocations;
         lockedRods = sanitizeLockedRods(savedState.lockedRods || {});
 
+        // Main nesting groups always start collapsed. No optimizer work runs
+        // until the user explicitly opens a tube group.
+        expandedState = {};
+        invalidateNestingCache();
+
         const configResponse = await window.pywebview.api.get_config_settings();
         if (configResponse?.status === 'success') {
             applyLockColors(configResponse.config?.lock_unlocked_color, configResponse.config?.lock_locked_color);
+            nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}`;
         }
         
         const initialData = await window.pywebview.api.get_initial_data();
@@ -694,6 +706,7 @@ async function loadTubeData() {
             throw new Error("Received null or undefined data from backend. Check the Python console for a traceback.");
         }
         allTubeData = data;
+        invalidateNestingCache();
         unmatchedIgsFiles = await window.pywebview.api.get_unmatched_igs_files();
         zzxValidationIssues = await window.pywebview.api.get_zzx_validation_issues();
         console.log("Received fresh data from backend:", allTubeData);
@@ -1535,91 +1548,214 @@ async function saveUiState() {
 
 
 // --- Core UI Rendering ---
-async function renderUI() {
-    if (mainContainer.style.display === 'none') return;
-    const renderSequence = ++nestingRenderSequence;
+function invalidateNestingCache(tubeType = null) {
+    if (tubeType) {
+        nestingResultCache.delete(tubeType);
+        nestingErrorByTube.delete(tubeType);
+        return;
+    }
+    nestingResultCache.clear();
+    nestingErrorByTube.clear();
+}
+
+function buildGroupNestingContext(group) {
+    const pieceInstances = buildPieceInstances(group?.pieces || []);
+    const lockedForTube = reconcileLockedRodsForTube(group.tubeType, pieceInstances);
+    const lockedInstanceKeys = new Set();
+
+    lockedForTube.forEach(rod => {
+        (rod.segments || []).forEach(segment => {
+            if (!segment.done && segment.instanceKey) {
+                lockedInstanceKeys.add(segment.instanceKey);
+            }
+        });
+    });
+
+    const piecesToNest = pieceInstances.filter(
+        segment => !lockedInstanceKeys.has(segment.instanceKey)
+    );
+
+    return { pieceInstances, lockedForTube, piecesToNest };
+}
+
+function buildClientNestingSignature(group, piecesToNest) {
+    const sourcePieces = new Map(
+        (group?.pieces || []).map(piece => [piece.id, piece])
+    );
+
+    const compact = (piecesToNest || []).map(segment => {
+        const source = sourcePieces.get(segment.sourceId);
+        const part = source?.tubePart || {};
+        return [
+            segment.instanceKey,
+            Number(segment.length) || 0,
+            source?.filePath || '',
+            part.part_fingerprint || '',
+            part.source_sha256 || ''
+        ];
+    });
+
+    return JSON.stringify([
+        nestingSettingsKey,
+        group?.tubeType || '',
+        compact
+    ]);
+}
+
+function cachedNestingForGroup(group, context) {
+    const signature = buildClientNestingSignature(group, context.piecesToNest);
+    const cached = nestingResultCache.get(group.tubeType);
+    if (!cached || cached.signature !== signature) {
+        return { signature, rods: null };
+    }
+    return { signature, rods: cached.rods || [] };
+}
+
+async function ensureGroupNesting(tubeType) {
+    if (!tubeType || nestingLoadingGroups.has(tubeType)) return;
+
+    const group = (allTubeData || []).find(item => item.tubeType === tubeType);
+    if (!group) return;
+
+    const context = buildGroupNestingContext(group);
+    const signature = buildClientNestingSignature(group, context.piecesToNest);
+    const cached = nestingResultCache.get(tubeType);
+    if (cached && cached.signature === signature) return cached.rods || [];
+
+    nestingLoadingGroups.add(tubeType);
+    nestingErrorByTube.delete(tubeType);
+    renderUI();
 
     try {
-        const nextAvailableSegmentMap = new Map();
-        const nextCurrentPieceMap = new Map();
-        const nextCurrentPieceByLogicalKey = new Map();
-        const groupContexts = [];
-        const nestRequests = [];
+        const groups = await nestGroupsBackend([
+            { tubeType, pieces: context.piecesToNest }
+        ]);
+        const result = groups[0] || { tubeType, rods: [] };
 
-        (allTubeData || []).sort((a, b) => a.tubeType.localeCompare(b.tubeType));
-
-        for (const group of (allTubeData || [])) {
-            const pieceInstances = buildPieceInstances(group.pieces);
-            const lockedForTube = reconcileLockedRodsForTube(group.tubeType, pieceInstances);
-            const lockedInstanceKeys = new Set();
-
-            lockedForTube.forEach(rod => {
-                (rod.segments || []).forEach(segment => {
-                    if (!segment.done && segment.instanceKey) lockedInstanceKeys.add(segment.instanceKey);
+        // Do not store stale work if quantities/locks changed while Python was
+        // calculating this group.
+        const latestGroup = (allTubeData || []).find(item => item.tubeType === tubeType);
+        if (latestGroup) {
+            const latestContext = buildGroupNestingContext(latestGroup);
+            const latestSignature = buildClientNestingSignature(latestGroup, latestContext.piecesToNest);
+            if (latestSignature === signature) {
+                nestingResultCache.set(tubeType, {
+                    signature,
+                    rods: result.rods || [],
+                    backendCacheHit: !!result.cacheHit
                 });
-            });
-
-            const piecesToNest = pieceInstances.filter(segment => !lockedInstanceKeys.has(segment.instanceKey));
-            piecesToNest.forEach(segment => nextAvailableSegmentMap.set(segment.instanceKey, segment));
-            group.pieces.forEach(piece => {
-                nextCurrentPieceMap.set(piece.id, piece);
-                nextCurrentPieceByLogicalKey.set(piece.logicalKey || stablePieceKey(piece.filePath), piece);
-            });
-
-            groupContexts.push({ group, lockedForTube });
-            nestRequests.push({ tubeType: group.tubeType, pieces: piecesToNest });
+            }
         }
-
-        const nestedGroups = await nestGroupsBackend(nestRequests);
-        if (renderSequence !== nestingRenderSequence) return;
-
-        const nestedByTube = new Map(nestedGroups.map(group => [group.tubeType, group.rods || []]));
-        availableSegmentMap = nextAvailableSegmentMap;
-        currentPieceMap = nextCurrentPieceMap;
-        currentPieceByLogicalKey = nextCurrentPieceByLogicalKey;
-
-        mainContainer.innerHTML = '';
-        renderIgsWarningBanner();
-        renderZzxWarningBanner();
-
-        if (!allTubeData || allTubeData.length === 0) {
-            mainContainer.insertAdjacentHTML('beforeend', '<p>No tubes found.</p>');
-            return;
-        }
-
-        mainContainer.insertAdjacentHTML('beforeend', renderNestingGlobalControls());
-
-        groupContexts.forEach(({ group, lockedForTube }) => {
-            const nestedRods = nestedByTube.get(group.tubeType) || [];
-            const groupDiv = document.createElement('div');
-            groupDiv.className = 'tube-group';
-
-            const header = document.createElement('div');
-            header.className = 'tube-header';
-            header.dataset.tubeType = group.tubeType;
-            const isExpanded = expandedState[group.tubeType] || false;
-            const headerText = isExpanded ? `▼ ${group.tubeType}` : `► ${group.tubeType}`;
-            const styledHeaderText = headerText.replace(/316/g, '<span class="material-316">316</span>');
-            header.innerHTML = `<span class="tube-header-label">${styledHeaderText}</span>
-                <button class="action-button icon-button tube-location-button" data-action="search-tube-location" data-tube-type="${escapeAttr(group.tubeType)}" title="Mostra ubicazioni tubo" aria-label="Mostra ubicazioni tubo">&#128269;</button>`;
-
-            const detailsDiv = document.createElement('div');
-            detailsDiv.className = 'tube-details';
-            detailsDiv.style.display = isExpanded ? 'block' : 'none';
-            detailsDiv.innerHTML = renderRodsHTML(group.tubeType, lockedForTube, nestedRods);
-            detailsDiv.innerHTML += renderPieceListHTML(group.pieces, group.tubeType);
-
-            groupDiv.appendChild(header);
-            groupDiv.appendChild(detailsDiv);
-            mainContainer.appendChild(groupDiv);
-        });
-
-        updateGuardedButtonStates();
+        return result.rods || [];
     } catch (error) {
-        if (renderSequence !== nestingRenderSequence) return;
-        console.error('Backend nesting render failed:', error);
-        mainContainer.innerHTML = '<p style="color: red;">Errore durante il nesting backend. Controlla il terminale.</p>';
+        console.error(`Nesting failed for ${tubeType}:`, error);
+        nestingErrorByTube.set(tubeType, error?.message || String(error));
+        return [];
+    } finally {
+        nestingLoadingGroups.delete(tubeType);
+        renderUI();
     }
+}
+
+async function renderUI() {
+    if (mainContainer.style.display === 'none') return;
+    ++nestingRenderSequence;
+
+    const nextAvailableSegmentMap = new Map();
+    const nextCurrentPieceMap = new Map();
+    const nextCurrentPieceByLogicalKey = new Map();
+    const groupsToStart = [];
+
+    (allTubeData || []).sort((a, b) => a.tubeType.localeCompare(b.tubeType));
+
+    (allTubeData || []).forEach(group => {
+        (group.pieces || []).forEach(piece => {
+            nextCurrentPieceMap.set(piece.id, piece);
+            nextCurrentPieceByLogicalKey.set(
+                piece.logicalKey || stablePieceKey(piece.filePath),
+                piece
+            );
+        });
+    });
+
+    availableSegmentMap = nextAvailableSegmentMap;
+    currentPieceMap = nextCurrentPieceMap;
+    currentPieceByLogicalKey = nextCurrentPieceByLogicalKey;
+
+    mainContainer.innerHTML = '';
+    renderIgsWarningBanner();
+    renderZzxWarningBanner();
+
+    if (!allTubeData || allTubeData.length === 0) {
+        mainContainer.insertAdjacentHTML('beforeend', '<p>No tubes found.</p>');
+        return;
+    }
+
+    mainContainer.insertAdjacentHTML('beforeend', renderNestingGlobalControls());
+
+    (allTubeData || []).forEach(group => {
+        const isExpanded = !!expandedState[group.tubeType];
+        const groupDiv = document.createElement('div');
+        groupDiv.className = 'tube-group';
+
+        const header = document.createElement('div');
+        header.className = 'tube-header';
+        header.dataset.tubeType = group.tubeType;
+        const headerText = isExpanded ? `▼ ${group.tubeType}` : `► ${group.tubeType}`;
+        const styledHeaderText = headerText.replace(/316/g, '<span class="material-316">316</span>');
+        header.innerHTML = `<span class="tube-header-label">${styledHeaderText}</span>
+            <button class="action-button icon-button tube-location-button" data-action="search-tube-location" data-tube-type="${escapeAttr(group.tubeType)}" title="Mostra ubicazioni tubo" aria-label="Mostra ubicazioni tubo">&#128269;</button>`;
+
+        const detailsDiv = document.createElement('div');
+        detailsDiv.className = 'tube-details';
+        detailsDiv.style.display = isExpanded ? 'block' : 'none';
+
+        if (isExpanded) {
+            const context = buildGroupNestingContext(group);
+            context.piecesToNest.forEach(segment => {
+                nextAvailableSegmentMap.set(segment.instanceKey, segment);
+            });
+
+            const { rods: cachedRods } = cachedNestingForGroup(group, context);
+            const isLoading = nestingLoadingGroups.has(group.tubeType);
+            const error = nestingErrorByTube.get(group.tubeType);
+            const nestedRods = cachedRods || [];
+
+            let statusHtml = '';
+            if (isLoading) {
+                statusHtml = '<div class="nesting-group-status">Calcolo nesting geometrico in corso...</div>';
+            } else if (error) {
+                statusHtml = `<div class="nesting-group-status nesting-group-error">Errore nesting: ${escapeHtml(error)}</div>`;
+            } else if (cachedRods === null) {
+                statusHtml = '<div class="nesting-group-status">Avvio calcolo nesting...</div>';
+                groupsToStart.push(group.tubeType);
+            }
+
+            detailsDiv.innerHTML = statusHtml;
+            detailsDiv.innerHTML += renderRodsHTML(
+                group.tubeType,
+                context.lockedForTube,
+                nestedRods
+            );
+            detailsDiv.innerHTML += renderPieceListHTML(
+                group.pieces,
+                group.tubeType
+            );
+        }
+
+        groupDiv.appendChild(header);
+        groupDiv.appendChild(detailsDiv);
+        mainContainer.appendChild(groupDiv);
+    });
+
+    // availableSegmentMap references the same Map object assigned above.
+    // Populate it after all expanded-group contexts were built.
+    availableSegmentMap = nextAvailableSegmentMap;
+    updateGuardedButtonStates();
+
+    groupsToStart.forEach(tubeType => {
+        setTimeout(() => ensureGroupNesting(tubeType), 0);
+    });
 }
 function renderIgsWarningBanner() {
     if (!unmatchedIgsFiles || unmatchedIgsFiles.length === 0) return;
@@ -2911,7 +3047,12 @@ async function nestGroupsBackend(groupRequests, rodLength = 6000) {
             };
         });
 
-        return { tubeType: group.tubeType, rods };
+        return {
+            tubeType: group.tubeType,
+            rods,
+            cacheHit: !!group.cacheHit,
+            signature: group.signature || null
+        };
     });
 }
 
