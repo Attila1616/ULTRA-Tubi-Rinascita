@@ -28,6 +28,75 @@ DEFAULT_GAP_MM = 2.0
 DEFAULT_BEAM_WIDTH = 120
 DEFAULT_MAX_CANDIDATE_TYPES = 24
 
+_PAIRWISE_FIT_CACHE = {}
+_PAIRWISE_FIT_CACHE_LIMIT = 50000
+
+
+def _part_fit_key(part):
+    if not isinstance(part, dict):
+        return None
+    fingerprint = part.get("part_fingerprint")
+    if fingerprint:
+        return ("fp", fingerprint)
+
+    profile = part.get("profile") or {}
+    ends = part.get("ends") or []
+    end_planes = []
+    for end in ends[:2]:
+        plane = end.get("plane_z_equals_c_plus_ax_plus_by") if isinstance(end, dict) else None
+        end_planes.append(tuple(round(float(v), 8) for v in plane) if plane else None)
+    return (
+        "geom",
+        round(float(part.get("overall_length") or 0.0), 8),
+        profile.get("kind"),
+        round(float(profile.get("outside_width") or 0.0), 8),
+        round(float(profile.get("outside_height") or 0.0), 8),
+        round(float(profile.get("outside_diameter") or 0.0), 8),
+        tuple(end_planes),
+    )
+
+
+def _pairwise_fit_key(previous_item, previous_pose, item, pose, gap_mm):
+    return (
+        _part_fit_key(previous_item.tube_part),
+        round(_normalize_angle(previous_pose.axial_rotation_degrees), 6),
+        bool(previous_pose.reversed_end_for_end),
+        _part_fit_key(item.tube_part),
+        round(_normalize_angle(pose.axial_rotation_degrees), 6),
+        bool(pose.reversed_end_for_end),
+        round(float(gap_mm), 6),
+    )
+
+
+def _cached_pairwise_fit(previous_item, previous_pose, item, pose, gap_mm):
+    key = _pairwise_fit_key(previous_item, previous_pose, item, pose, gap_mm)
+    cached = _PAIRWISE_FIT_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    fit = fit_adjacent_parts(
+        previous_item.tube_part,
+        previous_pose,
+        0.0,
+        item.tube_part,
+        pose,
+        gap_mm=gap_mm,
+        allow_common_line=True,
+    )
+    cached = (
+        float(fit.next_origin),
+        float(fit.minimum_clearance_mm),
+        bool(fit.common_line),
+        float(fit.slope_delta),
+        float(fit.overlap_of_axial_envelopes_mm),
+    )
+
+    if len(_PAIRWISE_FIT_CACHE) >= _PAIRWISE_FIT_CACHE_LIMIT:
+        _PAIRWISE_FIT_CACHE.pop(next(iter(_PAIRWISE_FIT_CACHE)))
+    _PAIRWISE_FIT_CACHE[key] = cached
+    return cached
+
+
 
 @dataclass
 class OptimizerItem:
@@ -343,21 +412,22 @@ def _append_candidate(
 
         if previous_item.geometry_available and item.geometry_available:
             try:
-                fit = fit_adjacent_parts(
-                    previous_item.tube_part,
+                (
+                    relative_origin,
+                    actual_gap,
+                    common_line,
+                    _slope_delta,
+                    overlap,
+                ) = _cached_pairwise_fit(
+                    previous_item,
                     previous_placed.pose,
-                    previous_placed.origin,
-                    item.tube_part,
+                    item,
                     pose,
-                    gap_mm=gap_mm,
-                    allow_common_line=True,
+                    gap_mm,
                 )
             except (ValueError, TypeError):
                 return None
-            origin = float(fit.next_origin)
-            common_line = bool(fit.common_line)
-            actual_gap = float(fit.minimum_clearance_mm)
-            overlap = float(fit.overlap_of_axial_envelopes_mm)
+            origin = float(previous_placed.origin) + float(relative_origin)
         else:
             # Geometry-less legacy arrays remain opaque. Keep a conservative
             # configured gap and never claim a common line.
