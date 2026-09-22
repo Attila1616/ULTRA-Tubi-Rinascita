@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import hashlib
 import math
 import os
 import struct
@@ -179,9 +180,18 @@ def _shape_points(shape_element, geos):
     return points, geometry.get("Class"), addr, curves
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def read_zzx(path):
     path = os.path.abspath(path)
     stat = os.stat(path)
+    source_sha256 = _sha256_file(path)
     archive = Archive.read(path)
     root = archive.xml("content.xml")
     doc_type = str(root.get("DocType") or "")
@@ -311,6 +321,7 @@ def read_zzx(path):
         document_type=doc_type,
         file_version=file_version,
         default_channel=default_channel,
+        source_sha256=source_sha256,
         segments=segments,
     )
 
