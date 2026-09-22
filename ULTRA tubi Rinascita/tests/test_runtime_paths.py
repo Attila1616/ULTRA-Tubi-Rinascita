@@ -15,7 +15,7 @@ class RuntimePathsTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("ULTRA_VARIABLES_DIR", None)
                 resolved = runtime_paths.resolve_variables_root(str(project))
-            self.assertEqual(Path(resolved), project.resolve())
+            self.assertTrue(os.path.samefile(resolved, project))
 
     def test_workspace_layout_finds_external_variables(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -30,13 +30,14 @@ class RuntimePathsTests(unittest.TestCase):
                 os.environ.pop("ULTRA_VARIABLES_DIR", None)
                 resolved = runtime_paths.resolve_variables_root(str(project))
 
-            self.assertEqual(Path(resolved), variables.resolve())
+            self.assertTrue(os.path.samefile(resolved, variables))
 
     def test_environment_override_has_priority(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "Program" / "ULTRA tubi Rinascita"
             override = Path(tmp) / "My Runtime Data"
             project.mkdir(parents=True)
+            override.mkdir()
 
             with mock.patch.dict(
                 os.environ,
@@ -45,7 +46,7 @@ class RuntimePathsTests(unittest.TestCase):
             ):
                 resolved = runtime_paths.resolve_variables_root(str(project))
 
-            self.assertEqual(Path(resolved), override.resolve())
+            self.assertTrue(os.path.samefile(resolved, override))
 
 
 if __name__ == "__main__":
