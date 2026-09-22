@@ -185,6 +185,32 @@ class GeometryOptimizerTests(unittest.TestCase):
         self.assertEqual(cache_size_after_first, cache_size_after_second)
         self.assertEqual(first, second)
 
+    def test_small_required_merge_ignores_beam_truncation(self):
+        parts = [
+            item("A", 1110, make_part(1110, start_plane=(25.0, 0.0, 0.5), end_plane=(1110.0, 0.0, 0.0))),
+            item("B", 722, make_part(722)),
+            item("C", 290, make_part(290)),
+            item("D", 810, make_part(810, start_plane=(25.0, 0.0, 0.5), end_plane=(785.0, 0.0, -0.5))),
+            item("E", 810, make_part(810, start_plane=(25.0, 0.0, 0.5), end_plane=(785.0, 0.0, -0.5))),
+        ]
+        normalized = optimizer_module._normalize_items(parts, 6000)
+        mask = (1 << len(normalized)) - 1
+
+        result = optimizer_module._search_single_rod(
+            normalized,
+            allowed_mask=mask,
+            rod_length=6000,
+            dead_zone_mm=400,
+            gap_mm=2.0,
+            require_all=True,
+            beam_width=1,
+            max_candidate_types=1,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.used_mask, mask)
+        self.assertLess(result.used_span, 5600.0)
+
     def test_diagnostic_reports_definite_cross_rod_merge(self):
         a = make_part(1000)
         b = make_part(1000)
