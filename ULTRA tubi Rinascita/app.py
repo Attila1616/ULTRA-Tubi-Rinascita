@@ -47,6 +47,7 @@ class Api:
     def get_config_settings(self):
         self.config = logic.load_config() or {}
         self.config.setdefault("nesting_gap_mm", 2.0)
+        self.config.setdefault("nesting_debug_enabled", True)
         return {"status": "success", "config": self.config}
 
     def save_config_settings(self, payload):
@@ -65,6 +66,7 @@ class Api:
             "codes_docx_output_dir",
             "inventory_xlsx_output_dir",
             "order_txt_output_dir",
+            "nested_zzx_output_dir",
             "inventory_request_folder",
         )
         for key in path_keys:
@@ -76,6 +78,9 @@ class Api:
             updated["nesting_gap_mm"] = 2.0
 
         updated["inventory_request_enabled"] = bool(payload.get("inventory_request_enabled"))
+        updated["nesting_debug_enabled"] = bool(
+            payload.get("nesting_debug_enabled", updated.get("nesting_debug_enabled", True))
+        )
         updated["order_include_low_priority"] = bool(
             payload.get("order_include_low_priority", updated.get("order_include_low_priority", True))
         )
@@ -205,6 +210,17 @@ class Api:
                 "status": "error",
                 "message": "Errore durante il debug nesting.",
                 "text": "Errore durante il debug nesting.",
+            }
+
+    def export_locked_rod_zzx(self, payload):
+        try:
+            return logic.export_locked_rod_zzx(payload or {})
+        except Exception:
+            print("--- PYTHON ERROR in export_locked_rod_zzx ---")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": "Errore durante l'esportazione ZZX della verga.",
             }
 
     def get_unmatched_igs_files(self):
