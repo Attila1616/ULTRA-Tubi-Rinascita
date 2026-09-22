@@ -117,8 +117,8 @@ header h1 {
 }
 
 .rod-bar {
-    display: flex;
-    height: 30px;
+    display: block;
+    height: 34px;
     width: 100%;
     background-color: #e0e0e0;
     border-radius: 5px;
@@ -129,20 +129,60 @@ header h1 {
 }
 
 .rod-segment {
-    position: relative;
+    position: absolute;
+    top: 0;
     display: flex;
     align-items: center;
     justify-content: center;
     height: 100%;
-    /* CHANGE THIS LINE */
-    border-right: 3px solid rgba(0,0,0,0.2); /* Was 1px */
+    min-width: 2px;
+    border: 0;
     box-sizing: border-box;
     font-size: 0.8em;
     font-weight: bold;
-    color: rgba(0,0,0,0.6);
+    color: rgba(0,0,0,0.68);
     overflow: hidden;
     white-space: nowrap;
     user-select: none;
+    z-index: 2;
+}
+
+.rod-segment > span:first-child {
+    position: relative;
+    z-index: 3;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+}
+
+.rod-chuck-dead-zone {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 6.6666667%;
+    height: 100%;
+    box-sizing: border-box;
+    border-left: 1px dashed rgba(170, 35, 35, 0.85);
+    background: rgba(220, 53, 69, 0.18);
+    z-index: 5;
+    pointer-events: none;
+}
+
+.rod-cut-angle {
+    position: absolute;
+    top: 1px;
+    z-index: 4;
+    font-size: 8px;
+    line-height: 1;
+    font-weight: 700;
+    color: rgba(0,0,0,0.58);
+    pointer-events: none;
+}
+
+.rod-cut-angle-left {
+    left: 3px;
+}
+
+.rod-cut-angle-right {
+    right: 3px;
 }
 .rod-segment:hover {
     filter: brightness(1.1);
@@ -207,6 +247,8 @@ header h1 {
     gap: 6px;
 }
 .rod-empty-label {
+    position: absolute;
+    inset: 0;
     width: 100%;
     display: flex;
     align-items: center;
