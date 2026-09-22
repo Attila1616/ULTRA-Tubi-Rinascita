@@ -3045,6 +3045,7 @@ async function nestGroupsBackend(groupRequests, rodLength = 6000) {
             });
 
             return {
+                ...rod,
                 rodLength: rod.rodLength,
                 used: rod.used,
                 remaining: rod.remaining,
