@@ -254,6 +254,38 @@ class GeometryOptimizerTests(unittest.TestCase):
         self.assertEqual(report["definiteMergeCount"], 1)
         self.assertIn("PUÒ DIVENTARE 1 VERGA", report["text"])
 
+    def test_nonplanar_boundaries_fall_back_instead_of_splitting_short_job(self):
+        pieces = []
+        for i in range(8):
+            part = make_part(69)
+            part["ends"][0]["plane_max_residual_mm"] = 0.2
+            part["ends"][1]["plane_max_residual_mm"] = 0.2
+            pieces.append(item(f"S{i}", 69, part))
+
+        for i in range(2):
+            part = make_part(1450)
+            part["ends"][0]["plane_max_residual_mm"] = 0.2
+            part["ends"][1]["plane_max_residual_mm"] = 0.2
+            pieces.append(item(f"L{i}", 1450, part))
+
+        rods = optimize_items_dict(
+            pieces,
+            rod_length=6000,
+            gap_mm=2.0,
+            dead_zone_mm=400,
+        )
+
+        self.assertEqual(len(rods), 1)
+        self.assertEqual(len(rods[0]["placements"]), 10)
+        self.assertLess(rods[0]["used"], 5600.0)
+        self.assertTrue(
+            any(
+                placement.get("geometry_fallback_before")
+                for placement in rods[0]["placements"][1:]
+            )
+        )
+        self.assertEqual(rods[0]["commonLineCount"], 0)
+
     def test_tail_feature_inside_last_400_blocks_flip(self):
         # Make the long piece ineligible too, otherwise the optimizer could
         # simply reorder and use it as the flip-tail instead.
