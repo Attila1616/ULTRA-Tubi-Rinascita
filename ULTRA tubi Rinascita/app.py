@@ -182,6 +182,8 @@ class Api:
     def get_debug_info(self):
         return {
             "project_folder_path": logic.PROJECT_ROOT,
+            "variables_root": logic.VARIABLES_ROOT,
+            "using_external_variables": logic.USING_EXTERNAL_VARIABLES,
             "app_data_path": logic.APP_DATA_PATH,
             "config_file_path": logic.CONFIG_FILE,
             "state_file_path": logic.UI_STATE_FILE,
