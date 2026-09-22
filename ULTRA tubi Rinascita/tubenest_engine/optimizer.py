@@ -885,6 +885,103 @@ def _possible_common_line_between_items(item_a, item_b):
     }
 
 
+def _placement_pose(placement):
+    return PartPose(
+        axial_rotation_degrees=float(placement.get("axial_rotation_degrees") or 0.0),
+        reversed_end_for_end=bool(placement.get("reversed_end_for_end")),
+    )
+
+
+def _signed_end_summary(end):
+    if not isinstance(end, dict):
+        return "?"
+    sx = float(end.get("slope_x") or 0.0)
+    sv = float(end.get("slope_vertical") or 0.0)
+    angle = float(end.get("angle_from_perpendicular_degrees") or 0.0)
+    return f"{angle:.1f}° [sx={sx:+.3f}, sv={sv:+.3f}]"
+
+
+def _boundary_pose_alternatives(items, rod):
+    placements = list((rod or {}).get("placements") or [])
+    item_by_instance = {item.instance_key: item for item in items}
+    results = []
+
+    for index in range(1, len(placements)):
+        prev_p = placements[index - 1]
+        next_p = placements[index]
+        prev_item = item_by_instance.get(str(prev_p.get("instance_key") or ""))
+        next_item = item_by_instance.get(str(next_p.get("instance_key") or ""))
+        if prev_item is None or next_item is None:
+            continue
+        if not prev_item.geometry_available or not next_item.geometry_available:
+            continue
+
+        prev_pose = _placement_pose(prev_p)
+        current_pose = _placement_pose(next_p)
+        previous_origin = float(prev_p.get("z_start") or 0.0)
+        current_origin = float(next_p.get("z_start") or 0.0)
+
+        rectangle_family = None
+        if _profile_kind(prev_item) == "Rect":
+            rectangle_family = _rectangle_family(prev_pose.axial_rotation_degrees)
+        poses = _next_pose_candidates(
+            prev_item,
+            prev_pose,
+            next_item,
+            rectangle_family,
+        )
+
+        alternatives = []
+        for pose in poses:
+            try:
+                fit = fit_adjacent_parts(
+                    prev_item.tube_part,
+                    prev_pose,
+                    previous_origin,
+                    next_item.tube_part,
+                    pose,
+                    gap_mm=float((rod or {}).get("gapMm") or DEFAULT_GAP_MM),
+                    allow_common_line=True,
+                )
+            except (ValueError, TypeError):
+                continue
+
+            candidate_end = float(fit.next_origin) + next_item.physical_length
+            alternatives.append({
+                "rotation": _normalize_angle(pose.axial_rotation_degrees),
+                "reversed": bool(pose.reversed_end_for_end),
+                "origin": float(fit.next_origin),
+                "end": candidate_end,
+                "commonLine": bool(fit.common_line),
+                "gap": float(fit.minimum_clearance_mm),
+                "overlap": float(fit.overlap_of_axial_envelopes_mm),
+                "deltaOrigin": float(fit.next_origin) - current_origin,
+            })
+
+        alternatives.sort(
+            key=lambda row: (
+                round(row["end"], 6),
+                0 if row["commonLine"] else 1,
+                abs(row["deltaOrigin"]),
+                row["reversed"],
+                row["rotation"],
+            )
+        )
+        results.append({
+            "boundaryIndex": index,
+            "previous": prev_p,
+            "next": next_p,
+            "alternatives": alternatives,
+            "currentPose": {
+                "rotation": _normalize_angle(current_pose.axial_rotation_degrees),
+                "reversed": bool(current_pose.reversed_end_for_end),
+                "origin": current_origin,
+            },
+        })
+
+    return results
+
+
 def diagnose_items_dict(
     items,
     rods,
@@ -1030,6 +1127,63 @@ def diagnose_items_dict(
             )
         if len(common_candidates) > 30:
             lines.append(f"... altre {len(common_candidates) - 30} compatibilità non mostrate.")
+    lines.append("")
+
+    lines.append("=== DEBUG CONFINI / POSE ALTERNATIVE ===")
+    for rod_index, rod in enumerate(rods or [], 1):
+        boundary_rows = _boundary_pose_alternatives(normalized, rod)
+        for row in boundary_rows:
+            current = row["currentPose"]
+            alternatives = row["alternatives"]
+            if not alternatives:
+                continue
+
+            current_match = None
+            for alt in alternatives:
+                if (
+                    abs(alt["rotation"] - current["rotation"]) <= 1e-5
+                    and alt["reversed"] == current["reversed"]
+                ):
+                    current_match = alt
+                    break
+
+            # Focus the report on boundaries where the current transition is not
+            # already common-line, or where another pose is materially better.
+            interesting = not bool(row["next"].get("common_line_before"))
+            if current_match is not None and alternatives:
+                best = alternatives[0]
+                if best["end"] < current_match["end"] - 1e-4:
+                    interesting = True
+                if best["commonLine"] and not current_match["commonLine"]:
+                    interesting = True
+            if not interesting:
+                continue
+
+            prev_len = float(row["previous"].get("nominal_length") or row["previous"].get("occupied_length") or 0.0)
+            next_len = float(row["next"].get("nominal_length") or row["next"].get("occupied_length") or 0.0)
+            lines.append(
+                f"Verga {rod_index}, confine {row['boundaryIndex']}: "
+                f"{prev_len:g}mm -> {next_len:g}mm"
+            )
+            lines.append(
+                f"  uscita attuale: {_signed_end_summary(row['previous'].get('end_b'))}"
+            )
+            lines.append(
+                f"  ingresso attuale: {_signed_end_summary(row['next'].get('end_a'))}; "
+                f"pose rotY={current['rotation']:g}° rev={current['reversed']}"
+            )
+
+            for alt in alternatives[:8]:
+                marker = "ATTUALE" if (
+                    abs(alt["rotation"] - current["rotation"]) <= 1e-5
+                    and alt["reversed"] == current["reversed"]
+                ) else "ALT"
+                lines.append(
+                    f"    {marker}: rotY={alt['rotation']:g}° rev={alt['reversed']} "
+                    f"-> origine {alt['origin']:.3f}, fine {alt['end']:.3f}, "
+                    f"CL={alt['commonLine']}, gap={alt['gap']:.3f}, "
+                    f"overlap={alt['overlap']:.3f}, Δorigine={alt['deltaOrigin']:+.3f}"
+                )
     lines.append("")
 
     lines.append("=== INTERPRETAZIONE ===")
