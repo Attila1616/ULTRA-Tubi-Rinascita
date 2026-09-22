@@ -11,6 +11,7 @@ import traceback
 import openpyxl
 import importlib.util
 import tube_database
+import runtime_paths
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 from collections import defaultdict, Counter
@@ -34,21 +35,19 @@ def get_app_data_path():
     return app_data_dir
 
 # --- Configuration & State Management ---
-IS_FROZEN = getattr(sys, "frozen", False)
-PROJECT_ROOT = (
-    os.path.dirname(os.path.abspath(sys.executable))
-    if IS_FROZEN
-    else os.path.dirname(os.path.abspath(__file__))
-)
-RESOURCE_ROOT = getattr(sys, "_MEIPASS", PROJECT_ROOT)
+IS_FROZEN = runtime_paths.IS_FROZEN
+PROJECT_ROOT = runtime_paths.PROJECT_ROOT
+RESOURCE_ROOT = runtime_paths.RESOURCE_ROOT
+VARIABLES_ROOT = runtime_paths.VARIABLES_ROOT
+USING_EXTERNAL_VARIABLES = runtime_paths.USING_EXTERNAL_VARIABLES
 APP_DATA_PATH = get_app_data_path()
-CONFIG_FILE = os.path.join(PROJECT_ROOT, 'config.json')
-UI_STATE_FILE = os.path.join(PROJECT_ROOT, 'state.json')
-HISTORY_FILE = os.path.join(PROJECT_ROOT, 'history.json')
+CONFIG_FILE = runtime_paths.CONFIG_FILE
+UI_STATE_FILE = runtime_paths.UI_STATE_FILE
+HISTORY_FILE = runtime_paths.HISTORY_FILE
 
 def load_config(silent=False):
     if not silent:
-        print(f"DEBUG: Attempting to load config from project folder: {CONFIG_FILE}")
+        print(f"DEBUG: Attempting to load config from runtime data folder: {CONFIG_FILE}")
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -69,8 +68,8 @@ def configure_tube_storage(config=None):
     code_catalog_file = str(config.get("codici_tubi_path") or "").strip()
     result = tube_database.configure_storage(database_path, code_catalog_file)
     return {
-        "database_dir": result["database_dir"] or os.path.join(PROJECT_ROOT, tube_database.DATABASE_DIR_NAME),
-        "code_catalog_path": result["code_catalog_path"] or os.path.join(PROJECT_ROOT, tube_database.CODE_CATALOG_NAME),
+        "database_dir": result["database_dir"] or os.path.join(VARIABLES_ROOT, tube_database.DATABASE_DIR_NAME),
+        "code_catalog_path": result["code_catalog_path"] or os.path.join(VARIABLES_ROOT, tube_database.CODE_CATALOG_NAME),
     }
 
 def save_config(data):
@@ -240,6 +239,8 @@ def _parse_size_tokens(tube_size: str):
 
 def _find_default_inventory_xlsx(da_fare_path):
     candidates = [
+        os.path.join(VARIABLES_ROOT, "Conteggio tubi.xlsx"),
+        os.path.join(VARIABLES_ROOT, "Conteggio Tubi.xlsx"),
         os.path.join(PROJECT_ROOT, "Conteggio tubi.xlsx"),
         os.path.join(PROJECT_ROOT, "Conteggio Tubi.xlsx"),
         os.path.join(APP_DATA_PATH, "Conteggio tubi.xlsx"),
@@ -259,15 +260,15 @@ def _configured_inventory_xlsx(da_fare_path=None):
 
 def ensure_tube_database(da_fare_path=None):
     excel_path = _configured_inventory_xlsx(da_fare_path)
-    return tube_database.ensure_database(PROJECT_ROOT, excel_path)
+    return tube_database.ensure_database(VARIABLES_ROOT, excel_path)
 
 def import_tube_database_from_excel(excel_path=None, replace=True, da_fare_path=None):
     target_excel = excel_path or _configured_inventory_xlsx(da_fare_path)
-    return tube_database.import_from_excel(PROJECT_ROOT, target_excel, replace=replace)
+    return tube_database.import_from_excel(VARIABLES_ROOT, target_excel, replace=replace)
 
 def get_tube_database_debug(da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
-    debug = tube_database.database_debug(PROJECT_ROOT)
+    debug = tube_database.database_debug(VARIABLES_ROOT)
     debug["ensure_result"] = ensure_result
     debug["configured_excel_path"] = _configured_inventory_xlsx(da_fare_path)
     return debug
@@ -281,49 +282,49 @@ def get_tube_database_rows(filters=None, da_fare_path=None):
             "rows": [],
         }
 
-    tube_database.ensure_order_priorities_for_inventory(PROJECT_ROOT)
-    rows = tube_database.summarize_inventory(PROJECT_ROOT, filters or {})
+    tube_database.ensure_order_priorities_for_inventory(VARIABLES_ROOT)
+    rows = tube_database.summarize_inventory(VARIABLES_ROOT, filters or {})
     return {
         "status": "success",
         "rows": rows,
-        "locations": tube_database.load_locations(PROJECT_ROOT, filters or {}),
-        "targets": tube_database.get_location_targets(PROJECT_ROOT),
-        "debug": tube_database.database_debug(PROJECT_ROOT),
+        "locations": tube_database.load_locations(VARIABLES_ROOT, filters or {}),
+        "targets": tube_database.get_location_targets(VARIABLES_ROOT),
+        "debug": tube_database.database_debug(VARIABLES_ROOT),
     }
 
 def validate_tube_database_against_excel(da_fare_path=None):
     excel_path = _configured_inventory_xlsx(da_fare_path)
-    return tube_database.validate_against_excel_summaries(PROJECT_ROOT, excel_path)
+    return tube_database.validate_against_excel_summaries(VARIABLES_ROOT, excel_path)
 
 def add_tube_database_item(payload, da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
-    return tube_database.add_tube(PROJECT_ROOT, payload or {})
+    return tube_database.add_tube(VARIABLES_ROOT, payload or {})
 
 def remove_tube_database_item(payload, da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
-    return tube_database.remove_tube(PROJECT_ROOT, payload or {})
+    return tube_database.remove_tube(VARIABLES_ROOT, payload or {})
 
 def set_tube_database_item_quantity(payload, da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
-    return tube_database.set_tube_quantity(PROJECT_ROOT, payload or {})
+    return tube_database.set_tube_quantity(VARIABLES_ROOT, payload or {})
 
 def move_tube_database_item(payload, da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
-    return tube_database.move_tube(PROJECT_ROOT, payload or {})
+    return tube_database.move_tube(VARIABLES_ROOT, payload or {})
 
 def import_tube_code_catalog():
-    return tube_database.import_codes_from_excel(PROJECT_ROOT)
+    return tube_database.import_codes_from_excel(VARIABLES_ROOT)
 
 def set_tube_code_catalog_entry(payload):
-    return tube_database.set_code_catalog_entry(PROJECT_ROOT, payload or {})
+    return tube_database.set_code_catalog_entry(VARIABLES_ROOT, payload or {})
 
 
 def _order_priority_thresholds(config=None):
@@ -355,7 +356,7 @@ def get_tube_order_priorities(da_fare_path=None):
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
     return {
         "status": "success",
-        "rows": tube_database.get_order_priority_rows(PROJECT_ROOT),
+        "rows": tube_database.get_order_priority_rows(VARIABLES_ROOT),
         "thresholds": _order_priority_thresholds(),
         "include_low_priority": _order_include_low_priority(),
     }
@@ -365,7 +366,7 @@ def set_tube_order_priorities(payload, da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
-    return tube_database.set_order_priorities(PROJECT_ROOT, payload or {})
+    return tube_database.set_order_priorities(VARIABLES_ROOT, payload or {})
 
 
 def _order_decimal_text(value):
@@ -406,7 +407,7 @@ def generate_tube_order_txt(da_fare_path=None):
         include_low_priority = _order_include_low_priority(config)
         priority_rank = {"alta": 0, "media": 1, "bassa": 2}
         eligible = []
-        for row in tube_database.get_order_priority_rows(PROJECT_ROOT):
+        for row in tube_database.get_order_priority_rows(VARIABLES_ROOT):
             priority = tube_database.normalize_order_priority(row.get("priorita"))
             quantity = int(row.get("quantitaTotale") or 0)
             if priority == "bassa" and not include_low_priority:
@@ -462,7 +463,7 @@ def reset_adhoc_baseline(da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
-    return tube_database.reset_adhoc_baseline(PROJECT_ROOT)
+    return tube_database.reset_adhoc_baseline(VARIABLES_ROOT)
 
 def generate_adhoc_docx(da_fare_path=None):
     if Document is None:
@@ -472,7 +473,7 @@ def generate_adhoc_docx(da_fare_path=None):
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
 
-    data = tube_database.get_adhoc_report_data(PROJECT_ROOT)
+    data = tube_database.get_adhoc_report_data(VARIABLES_ROOT)
     if data.get("status") != "success":
         return data
 
@@ -532,7 +533,7 @@ def generate_tube_codes_docx(da_fare_path=None):
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
 
     try:
-        rows = tube_database.summarize_inventory(PROJECT_ROOT, {})
+        rows = tube_database.summarize_inventory(VARIABLES_ROOT, {})
         rows = sorted(rows, key=lambda row: bool(row.get("hasCode")))
         missing_codes_count = sum(1 for row in rows if not row.get("hasCode"))
 
@@ -643,7 +644,7 @@ def generate_tube_inventory_xlsx(include_missing_codes=True, da_fare_path=None, 
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
 
     try:
-        rows = tube_database.summarize_inventory(PROJECT_ROOT, {})
+        rows = tube_database.summarize_inventory(VARIABLES_ROOT, {})
         if not include_missing_codes:
             rows = [row for row in rows if row.get("hasCode")]
 
@@ -816,28 +817,28 @@ def add_tube_database_scaffolding(payload, da_fare_path=None):
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
     name = (payload or {}).get("name")
-    return tube_database.add_scaffolding(PROJECT_ROOT, name)
+    return tube_database.add_scaffolding(VARIABLES_ROOT, name)
 
 def remove_tube_database_scaffolding(payload, da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
     name = (payload or {}).get("name")
-    return tube_database.remove_scaffolding(PROJECT_ROOT, name)
+    return tube_database.remove_scaffolding(VARIABLES_ROOT, name)
 
 def add_tube_database_ripiano(payload, da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
     payload = payload or {}
-    return tube_database.add_ripiano(PROJECT_ROOT, payload.get("location"), payload.get("ripiano"))
+    return tube_database.add_ripiano(VARIABLES_ROOT, payload.get("location"), payload.get("ripiano"))
 
 def remove_tube_database_ripiano(payload, da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
     payload = payload or {}
-    return tube_database.remove_ripiano(PROJECT_ROOT, payload.get("location"), payload.get("ripiano"))
+    return tube_database.remove_ripiano(VARIABLES_ROOT, payload.get("location"), payload.get("ripiano"))
 
 def load_inventory_map(excel_path: str):
     debug = {
@@ -1027,7 +1028,7 @@ def get_locations_for_tube_type(tube_type: str, da_fare_path=None):
     if ensure_result.get("status") != "success":
         return []
 
-    return tube_database.get_locations_for_tube(PROJECT_ROOT, misura_norm, spess_norm, material, finish)
+    return tube_database.get_locations_for_tube(VARIABLES_ROOT, misura_norm, spess_norm, material, finish)
 
 def _tube_identity_from_tube_type(tube_type: str):
     tokens = str(tube_type or "").split()
@@ -1558,7 +1559,7 @@ def search_tube_inventory(dimensione, spessore, materiale, finitura, da_fare_pat
                 "message": ensure_result.get("message", "Database Tubi non disponibile."),
             }
 
-        matches = tube_database.get_locations_for_tube(PROJECT_ROOT, dim, sp, mat, fin)
+        matches = tube_database.get_locations_for_tube(VARIABLES_ROOT, dim, sp, mat, fin)
         total_qty = sum(int(qty or 0) for _, qty in matches)
 
         lines = [f"[{tube_label}]", "Necessarie: -"]
