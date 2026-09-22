@@ -1,5 +1,6 @@
 import unittest
 
+import tubenest_engine.optimizer as optimizer_module
 from tubenest_engine.optimizer import optimize_items_dict
 
 
@@ -160,6 +161,29 @@ class GeometryOptimizerTests(unittest.TestCase):
 
         self.assertEqual(len(rods), 2)
         self.assertTrue(all(rod["used"] <= 5600.0 + 1e-6 for rod in rods))
+
+    def test_pairwise_geometry_fit_cache_is_reused(self):
+        optimizer_module._PAIRWISE_FIT_CACHE.clear()
+        a = make_part(
+            1000,
+            start_plane=(0.0, 0.0, 0.0),
+            end_plane=(950.0, 0.0, 1.0),
+        )
+        b = make_part(
+            1000,
+            start_plane=(50.0, 0.0, 0.5773502691896257),
+            end_plane=(1000.0, 0.0, 0.0),
+        )
+        pieces = [item("A", 1000, a), item("B", 1000, b)]
+
+        first = optimize_items_dict(pieces, gap_mm=2.0)
+        cache_size_after_first = len(optimizer_module._PAIRWISE_FIT_CACHE)
+        second = optimize_items_dict(pieces, gap_mm=2.0)
+        cache_size_after_second = len(optimizer_module._PAIRWISE_FIT_CACHE)
+
+        self.assertGreater(cache_size_after_first, 0)
+        self.assertEqual(cache_size_after_first, cache_size_after_second)
+        self.assertEqual(first, second)
 
     def test_tail_feature_inside_last_400_blocks_flip(self):
         # Make the long piece ineligible too, otherwise the optimizer could
