@@ -19,12 +19,12 @@ from .fit import (
     PartPose,
     PosedEnd,
     equivalent_axial_rotations,
-    fall_friendly_final_cut,
     fit_adjacent_parts,
     posed_ends,
     rectangular_rotation_family,
     tail_flip_eligibility,
 )
+from .toolpath import curve_start_parameter, point_at_composite_parameter
 from .reader import (
     clear_cache,
     describe_zzx,
@@ -48,11 +48,12 @@ __all__ = [
     "PartPose",
     "PosedEnd",
     "equivalent_axial_rotations",
-    "fall_friendly_final_cut",
     "fit_adjacent_parts",
     "posed_ends",
     "rectangular_rotation_family",
     "tail_flip_eligibility",
+    "curve_start_parameter",
+    "point_at_composite_parameter",
     "clear_cache",
     "describe_zzx",
     "read_zzx",
