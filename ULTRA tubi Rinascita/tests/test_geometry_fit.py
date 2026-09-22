@@ -123,6 +123,59 @@ class GeometryFitTests(unittest.TestCase):
         self.assertAlmostEqual(end.slope_x, -0.25)
         self.assertAlmostEqual(end.slope_vertical, 0.5)
 
+    def test_small_plane_residual_is_accepted_for_common_line(self):
+        previous = make_part(end_plane=(950.0, 0.0, 1.0))
+        following = make_part(start_plane=(50.0, 0.0, 1.0))
+        previous["ends"][1]["plane_max_residual_mm"] = 0.001
+        following["ends"][0]["plane_max_residual_mm"] = 0.002
+
+        fit = fit_adjacent_parts(
+            previous,
+            PartPose(),
+            0.0,
+            following,
+            PartPose(),
+            gap_mm=2.0,
+            allow_common_line=True,
+        )
+
+        self.assertTrue(fit.common_line)
+        self.assertEqual(fit.minimum_clearance_mm, 0.0)
+
+    def test_moderate_plane_residual_allows_gap_fit_but_not_common_line(self):
+        previous = make_part(end_plane=(950.0, 0.0, 1.0))
+        following = make_part(start_plane=(50.0, 0.0, 1.0))
+        following["ends"][0]["plane_max_residual_mm"] = 0.02
+
+        fit = fit_adjacent_parts(
+            previous,
+            PartPose(),
+            0.0,
+            following,
+            PartPose(),
+            gap_mm=2.0,
+            allow_common_line=True,
+        )
+
+        self.assertFalse(fit.common_line)
+        self.assertEqual(fit.minimum_clearance_mm, 2.0)
+
+    def test_large_plane_residual_is_rejected(self):
+        previous = make_part(end_plane=(950.0, 0.0, 1.0))
+        following = make_part(start_plane=(50.0, 0.0, 1.0))
+        following["ends"][0]["plane_max_residual_mm"] = 0.2
+
+        with self.assertRaisesRegex(ValueError, "residual"):
+            fit_adjacent_parts(
+                previous,
+                PartPose(),
+                0.0,
+                following,
+                PartPose(),
+                gap_mm=2.0,
+                allow_common_line=True,
+            )
+
     def test_rectangle_rotation_family_never_turns_long_side_into_short_side(self):
         self.assertEqual(rectangular_rotation_family(0), [0.0, 180.0])
         self.assertEqual(rectangular_rotation_family(90), [90.0, 270.0])
