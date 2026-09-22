@@ -2869,7 +2869,9 @@ async function nestGroupsBackend(groupRequests, rodLength = 6000) {
                     instanceKey: segment.instanceKey,
                     sourceId: segment.sourceId,
                     length: segment.length,
-                    tubePart: sourcePiece?.tubePart || null
+                    tubePart: sourcePiece?.tubePart || null,
+                    filePath: sourcePiece?.filePath || '',
+                    fileName: sourcePiece?.fileName || ''
                 };
             })
         };
