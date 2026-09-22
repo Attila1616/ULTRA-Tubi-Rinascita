@@ -998,6 +998,7 @@ def diagnose_items_dict(
     gap_mm=DEFAULT_GAP_MM,
     dead_zone_mm=DEFAULT_CHUCK_DEAD_ZONE,
     deep_pair_checks=24,
+    focus_rod_number=None,
 ):
     """Explain likely missed optimization opportunities in an existing plan.
 
@@ -1009,6 +1010,14 @@ def diagnose_items_dict(
     rod_masks = [_mask_from_rod_dict(rod, item_by_instance) for rod in rods or []]
     rod_count = len(rod_masks)
     total_pairs = rod_count * (rod_count - 1) // 2
+    focus_index = None
+    if focus_rod_number is not None:
+        try:
+            candidate = int(focus_rod_number) - 1
+        except (TypeError, ValueError):
+            candidate = -1
+        if 0 <= candidate < rod_count:
+            focus_index = candidate
 
     lines = []
     lines.append("=== DEBUG NESTING GEOMETRICO ===")
@@ -1031,6 +1040,8 @@ def diagnose_items_dict(
 
     lines.append("=== PIANO ATTUALE ===")
     for index, rod in enumerate(rods or [], 1):
+        if focus_index is not None and (index - 1) != focus_index:
+            continue
         lines.append(
             f"Verga {index}: usati {float(rod.get('used') or 0.0):.1f} mm, "
             f"rimasti {float(rod.get('remaining') or 0.0):.1f} mm, "
@@ -1039,107 +1050,110 @@ def diagnose_items_dict(
         lines.append(f"  {_rod_piece_summary(rod)}")
     lines.append("")
 
-    # Rank pair checks by how likely they are to improve material usage:
-    # low combined used span first, then pairs involving the shortest rod.
-    pair_candidates = []
-    for i in range(rod_count):
-        for j in range(i + 1, rod_count):
-            used_i = float((rods[i] or {}).get("used") or 0.0)
-            used_j = float((rods[j] or {}).get("used") or 0.0)
-            pair_ordinal = i * rod_count - (i * (i + 1)) // 2 + (j - i)
-            pair_candidates.append((
-                used_i + used_j,
-                min(used_i, used_j),
-                pair_ordinal,
-                i,
-                j,
-            ))
-    pair_candidates.sort()
+    if focus_index is None:
+        # Rank pair checks by how likely they are to improve material usage:
+        # low combined used span first, then pairs involving the shortest rod.
+        pair_candidates = []
+        for i in range(rod_count):
+            for j in range(i + 1, rod_count):
+                used_i = float((rods[i] or {}).get("used") or 0.0)
+                used_j = float((rods[j] or {}).get("used") or 0.0)
+                pair_ordinal = i * rod_count - (i * (i + 1)) // 2 + (j - i)
+                pair_candidates.append((
+                    used_i + used_j,
+                    min(used_i, used_j),
+                    pair_ordinal,
+                    i,
+                    j,
+                ))
+        pair_candidates.sort()
 
-    lines.append("=== CONTROLLO APPROFONDITO COPPIE PROMETTENTI ===")
-    definite_merges = []
-    checked = 0
-    for _combined, _shortest, ordinal, i, j in pair_candidates:
-        if checked >= int(deep_pair_checks):
-            break
-        union_mask = rod_masks[i] | rod_masks[j]
-        if not union_mask:
-            continue
-        checked += 1
+        lines.append("=== CONTROLLO APPROFONDITO COPPIE PROMETTENTI ===")
+        definite_merges = []
+        checked = 0
+        for _combined, _shortest, ordinal, i, j in pair_candidates:
+            if checked >= int(deep_pair_checks):
+                break
+            union_mask = rod_masks[i] | rod_masks[j]
+            if not union_mask:
+                continue
+            checked += 1
 
-        merged = _search_single_rod(
-            normalized,
-            allowed_mask=union_mask,
-            rod_length=float(rod_length),
-            dead_zone_mm=float(dead_zone_mm),
-            gap_mm=max(0.0, float(gap_mm)),
-            require_all=True,
-            beam_width=max(DEFAULT_BEAM_WIDTH * 4, 500),
-            max_candidate_types=100,
-        )
-
-        prefix = f"Verga {i + 1} + Verga {j + 1} (coppia #{ordinal})"
-        if merged is not None:
-            definite_merges.append((i + 1, j + 1, merged))
-            cap_note = f" [indice storico coppia #{ordinal}]" if ordinal > MERGE_PAIR_ATTEMPT_LIMIT else ""
-            lines.append(
-                f"{prefix}: PUÒ DIVENTARE 1 VERGA -> "
-                f"{merged.used_span:.1f} mm, CL={merged.common_lines}{cap_note}"
+            merged = _search_single_rod(
+                normalized,
+                allowed_mask=union_mask,
+                rod_length=float(rod_length),
+                dead_zone_mm=float(dead_zone_mm),
+                gap_mm=max(0.0, float(gap_mm)),
+                require_all=True,
+                beam_width=max(DEFAULT_BEAM_WIDTH * 4, 500),
+                max_candidate_types=100,
             )
+
+            prefix = f"Verga {i + 1} + Verga {j + 1} (coppia #{ordinal})"
+            if merged is not None:
+                definite_merges.append((i + 1, j + 1, merged))
+                cap_note = f" [indice storico coppia #{ordinal}]" if ordinal > MERGE_PAIR_ATTEMPT_LIMIT else ""
+                lines.append(
+                    f"{prefix}: PUÒ DIVENTARE 1 VERGA -> "
+                    f"{merged.used_span:.1f} mm, CL={merged.common_lines}{cap_note}"
+                )
+            else:
+                lines.append(f"{prefix}: non entra in una sola verga con le regole attuali")
+
+        if not definite_merges:
+            lines.append("Nessuna eliminazione certa di una verga trovata nelle coppie approfondite.")
+        lines.append("")
+
+        lines.append("=== COMMON-LINE POSSIBILI TRA VERGHE DIVERSE ===")
+        common_candidates = []
+        seen_types = set()
+        for i in range(rod_count):
+            placements_i = list((rods[i] or {}).get("placements") or [])
+            for j in range(i + 1, rod_count):
+                placements_j = list((rods[j] or {}).get("placements") or [])
+                for pa in placements_i:
+                    ia = item_by_instance.get(str(pa.get("instance_key") or ""))
+                    if ia is None:
+                        continue
+                    for pb in placements_j:
+                        ib = item_by_instance.get(str(pb.get("instance_key") or ""))
+                        if ib is None:
+                            continue
+                        type_pair = tuple(sorted((ia.type_key, ib.type_key), key=str))
+                        if type_pair in seen_types:
+                            continue
+                        seen_types.add(type_pair)
+                        match = _possible_common_line_between_items(ia, ib)
+                        if match is None:
+                            continue
+                        common_candidates.append((
+                            i + 1,
+                            j + 1,
+                            ia,
+                            ib,
+                            match,
+                        ))
+
+        if not common_candidates:
+            lines.append("Nessuna common-line geometrica trovata tra pezzi su verghe diverse.")
         else:
-            lines.append(f"{prefix}: non entra in una sola verga con le regole attuali")
-
-    if not definite_merges:
-        lines.append("Nessuna eliminazione certa di una verga trovata nelle coppie approfondite.")
-    lines.append("")
-
-    lines.append("=== COMMON-LINE POSSIBILI TRA VERGHE DIVERSE ===")
-    common_candidates = []
-    seen_types = set()
-    for i in range(rod_count):
-        placements_i = list((rods[i] or {}).get("placements") or [])
-        for j in range(i + 1, rod_count):
-            placements_j = list((rods[j] or {}).get("placements") or [])
-            for pa in placements_i:
-                ia = item_by_instance.get(str(pa.get("instance_key") or ""))
-                if ia is None:
-                    continue
-                for pb in placements_j:
-                    ib = item_by_instance.get(str(pb.get("instance_key") or ""))
-                    if ib is None:
-                        continue
-                    type_pair = tuple(sorted((ia.type_key, ib.type_key), key=str))
-                    if type_pair in seen_types:
-                        continue
-                    seen_types.add(type_pair)
-                    match = _possible_common_line_between_items(ia, ib)
-                    if match is None:
-                        continue
-                    common_candidates.append((
-                        i + 1,
-                        j + 1,
-                        ia,
-                        ib,
-                        match,
-                    ))
-
-    if not common_candidates:
-        lines.append("Nessuna common-line geometrica trovata tra pezzi su verghe diverse.")
-    else:
-        for i, j, ia, ib, match in common_candidates[:30]:
-            lines.append(
-                f"Verga {i} <-> Verga {j}: "
-                f"{ia.nominal_length:g}mm / {ib.nominal_length:g}mm "
-                f"può condividere un taglio; "
-                f"pose A rotY={match['aRotation']:g}° rev={match['aReversed']}, "
-                f"B rotY={match['bRotation']:g}° rev={match['bReversed']}"
-            )
-        if len(common_candidates) > 30:
-            lines.append(f"... altre {len(common_candidates) - 30} compatibilità non mostrate.")
-    lines.append("")
+            for i, j, ia, ib, match in common_candidates[:30]:
+                lines.append(
+                    f"Verga {i} <-> Verga {j}: "
+                    f"{ia.nominal_length:g}mm / {ib.nominal_length:g}mm "
+                    f"può condividere un taglio; "
+                    f"pose A rotY={match['aRotation']:g}° rev={match['aReversed']}, "
+                    f"B rotY={match['bRotation']:g}° rev={match['bReversed']}"
+                )
+            if len(common_candidates) > 30:
+                lines.append(f"... altre {len(common_candidates) - 30} compatibilità non mostrate.")
+        lines.append("")
 
     lines.append("=== DEBUG CONFINI / POSE ALTERNATIVE ===")
     for rod_index, rod in enumerate(rods or [], 1):
+        if focus_index is not None and (rod_index - 1) != focus_index:
+            continue
         boundary_rows = _boundary_pose_alternatives(normalized, rod)
         for row in boundary_rows:
             current = row["currentPose"]
@@ -1204,34 +1218,46 @@ def diagnose_items_dict(
     lines.append("")
 
     lines.append("=== INTERPRETAZIONE ===")
-    if definite_merges:
+    if focus_index is not None:
         lines.append(
-            "Almeno una coppia del piano attuale può essere compressa in una sola verga. "
-            "Questa è una prova concreta che il piano corrente non è ottimo nel numero di verghe."
+            "Debug focalizzato: confronta ATTUALE con le pose ALT del confine sospetto. "
+            "Una posa ALT con CL=True e fine minore o uguale indica che il pose/scoring corrente "
+            "sta perdendo una soluzione migliore."
         )
-        lines.append(
-            "Il merge pass normale ora ordina le coppie per probabilità di fusione, "
-            "quindi le verghe corte vengono controllate prima."
-        )
+        definite_merge_count = 0
+        cross_common_count = 0
+        checked = 0
     else:
-        lines.append(
-            "Nelle coppie approfondite non è stata trovata una fusione completa; "
-            "le inefficienze residue possono richiedere uno scambio di pezzi tra due o più verghe."
-        )
+        if definite_merges:
+            lines.append(
+                "Almeno una coppia del piano attuale può essere compressa in una sola verga. "
+                "Questa è una prova concreta che il piano corrente non è ottimo nel numero di verghe."
+            )
+            lines.append(
+                "Il merge pass normale ora ordina le coppie per probabilità di fusione, "
+                "quindi le verghe corte vengono controllate prima."
+            )
+        else:
+            lines.append(
+                "Nelle coppie approfondite non è stata trovata una fusione completa; "
+                "le inefficienze residue possono richiedere uno scambio di pezzi tra due o più verghe."
+            )
 
-    if common_candidates:
-        lines.append(
-            "Esistono common-line tra verghe diverse. Il refine corrente non può spostare "
-            "un singolo pezzo da una verga all'altra: riordina solo i pezzi già assegnati alla stessa verga."
-        )
+        if common_candidates:
+            lines.append(
+                "Esistono common-line tra verghe diverse. Il refine corrente non può spostare "
+                "un singolo pezzo da una verga all'altra: riordina solo i pezzi già assegnati alla stessa verga."
+            )
+        definite_merge_count = len(definite_merges)
+        cross_common_count = len(common_candidates)
 
     return {
         "text": "\n".join(lines),
         "rodCount": rod_count,
         "totalRodPairs": total_pairs,
         "deepPairsChecked": checked,
-        "definiteMergeCount": len(definite_merges),
-        "crossRodCommonLineCount": len(common_candidates),
+        "definiteMergeCount": definite_merge_count,
+        "crossRodCommonLineCount": cross_common_count,
     }
 
 
