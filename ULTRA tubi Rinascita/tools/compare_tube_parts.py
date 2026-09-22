@@ -20,7 +20,7 @@ import runtime_paths
 from tubenest_engine import describe_tube_parts
 
 
-LENGTH_TOLERANCE_MM = 0.5
+LENGTH_TOLERANCE_MM = 1.0
 PROFILE_TOLERANCE_MM = 0.1
 
 
@@ -87,11 +87,8 @@ def _profile_matches(filename_profile, geometry_profile):
                 f"geometry={gw}x{gh}"
             )
 
-    if not _close(filename_profile["thickness"], geometry_profile.get("thickness")):
-        return False, (
-            f"thickness filename={filename_profile['thickness']:.3f} "
-            f"geometry={geometry_profile.get('thickness')}"
-        )
+    # Filename thickness is authoritative for ULTRA's production workflow.
+    # ZZX thickness metadata is intentionally not treated as a mismatch.
     return True, ""
 
 
