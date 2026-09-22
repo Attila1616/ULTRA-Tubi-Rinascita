@@ -27,6 +27,8 @@ class ShapeInfo:
     sampled_bounds: Optional[list] = None
     primitive_types: list = field(default_factory=list)
     point_count: int = 0
+    start_parameter: Optional[float] = None
+    start_point: Optional[list] = None
     is_end_cut: bool = False
     is_marking: bool = False
 
@@ -40,6 +42,8 @@ class EndCutInfo:
     plane_max_residual_mm: Optional[float]
     cut_angle_to_axis_degrees: Optional[float]
     cut_angle_from_perpendicular_degrees: Optional[float]
+    start_parameter: Optional[float] = None
+    start_point: Optional[list] = None
 
 
 @dataclass
