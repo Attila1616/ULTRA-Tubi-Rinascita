@@ -10,6 +10,7 @@ import struct
 from .archive import Archive
 from .bcmp import FormatError
 from .geometry import Arc2D, Line, bounds, primitives
+from .toolpath import curve_start_parameter, point_at_composite_parameter
 from .models import (
     EndCutInfo,
     ProfileInfo,
@@ -250,6 +251,8 @@ def read_zzx(path):
                 layers.add(channel)
 
             points, geometry_class, geometry_addr, curves = _shape_points(xml_shape, geos)
+            start_parameter = curve_start_parameter(shape_record)
+            start_point = point_at_composite_parameter(curves, start_parameter)
             points_by_handle[shape_handle] = points
             is_end = shape_handle in end_handles
             if is_end:
@@ -269,6 +272,8 @@ def read_zzx(path):
                     sampled_bounds=bounds(points) if points else None,
                     primitive_types=primitive_names,
                     point_count=len(points),
+                    start_parameter=start_parameter,
+                    start_point=list(start_point) if start_point is not None else None,
                     is_end_cut=is_end,
                     is_marking=is_marking,
                 )
@@ -289,6 +294,8 @@ def read_zzx(path):
                     plane_max_residual_mm=residual,
                     cut_angle_to_axis_degrees=angle_axis,
                     cut_angle_from_perpendicular_degrees=angle_perp,
+                    start_parameter=shape_info.start_parameter if shape_info else None,
+                    start_point=shape_info.start_point if shape_info else None,
                 )
             )
 
