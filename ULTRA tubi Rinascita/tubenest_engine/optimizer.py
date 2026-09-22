@@ -722,7 +722,7 @@ def optimize_items(
         key=lambda state: (
             -round(state.used_span, 6),
             -state.common_lines,
-            tuple(items[p.item_index].instance_key for p in state.placed),
+            tuple(normalized[p.item_index].instance_key for p in state.placed),
         )
     )
     return rods
