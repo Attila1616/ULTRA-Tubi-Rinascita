@@ -350,12 +350,22 @@
                 <button class="action-button" data-settings-picker="settings-order-txt-output-dir" data-picker-type="folder">Sfoglia</button>
             </div>
 
+            <label for="settings-nested-zzx-output-dir">ZZX verghe annidate</label>
+            <div class="settings-path-row">
+                <input id="settings-nested-zzx-output-dir" type="text" class="search-input" placeholder="Cartella esportazione ZZX annidati" autocomplete="off">
+                <button class="action-button" data-settings-picker="settings-nested-zzx-output-dir" data-picker-type="folder">Sfoglia</button>
+            </div>
+
             <h3 class="settings-section-title">Nesting geometrico</h3>
             <div class="settings-threshold-grid">
                 <label for="settings-nesting-gap-mm">Gap pezzi</label>
                 <input id="settings-nesting-gap-mm" type="number" min="0" step="0.1" value="2" class="search-input search-input-small">
                 <span>mm di distanza minima tra superfici non common-line</span>
             </div>
+            <label class="settings-checkbox-row">
+                <input id="settings-nesting-debug-enabled" type="checkbox" checked>
+                <span>Mostra pulsanti debug nesting</span>
+            </label>
 
             <h3 class="settings-section-title">Soglie priorit&agrave; ordini</h3>
             <div class="settings-threshold-grid">
