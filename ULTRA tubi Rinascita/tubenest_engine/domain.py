@@ -38,6 +38,8 @@ class PartEnd:
     plane_max_residual_mm: Optional[float]
     angle_from_perpendicular_degrees: Optional[float]
     sampled_bounds: Optional[list]
+    start_parameter: Optional[float] = None
+    start_point: Optional[list] = None
 
 
 @dataclass
@@ -81,6 +83,15 @@ def _normalize_bounds(bounds_value, axial_min):
     if len(result[0]) >= 3:
         result[0][2] -= axial_min
         result[1][2] -= axial_min
+    return result
+
+
+def _normalize_point(point, axial_min):
+    if not point:
+        return None
+    result = list(map(float, point))
+    if len(result) >= 3:
+        result[2] -= axial_min
     return result
 
 
@@ -195,6 +206,8 @@ def build_tube_part(document: ZzxDocumentInfo, segment: TubeSegmentInfo):
                 plane_max_residual_mm=end.plane_max_residual_mm,
                 angle_from_perpendicular_degrees=end.cut_angle_from_perpendicular_degrees,
                 sampled_bounds=_normalize_bounds(end.sampled_bounds, axial_min),
+                start_parameter=end.start_parameter,
+                start_point=_normalize_point(end.start_point, axial_min),
             )
         )
 
