@@ -15,6 +15,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 import win32com.client
+import runtime_paths
 
 
 APP_TITLE = "TT DOCX Generator"
@@ -27,7 +28,7 @@ DEFAULT_CONFIG = {
 }
 
 def load_config():
-    cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    cfg_path = runtime_paths.CONFIG_FILE
     if os.path.exists(cfg_path):
         try:
             with open(cfg_path, "r", encoding="utf-8") as f:
