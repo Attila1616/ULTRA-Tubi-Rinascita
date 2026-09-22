@@ -1204,7 +1204,7 @@ def nest_piece_groups(groups, rod_length=6000):
         return {"status": "error", "message": str(exc), "groups": []}
 
 
-def debug_nesting_group(group, rods, rod_length=6000):
+def debug_nesting_group(group, rods, rod_length=6000, focus_rod_number=None):
     """Run an on-demand deep diagnostic for one already-calculated tube group."""
     try:
         config = load_config(silent=True) or {}
@@ -1232,6 +1232,7 @@ def debug_nesting_group(group, rods, rod_length=6000):
             gap_mm=gap_mm,
             dead_zone_mm=400.0,
             deep_pair_checks=32,
+            focus_rod_number=focus_rod_number,
         )
         return {"status": "success", **report}
     except Exception as exc:
