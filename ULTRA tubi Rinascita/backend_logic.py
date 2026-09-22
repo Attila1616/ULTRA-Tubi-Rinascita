@@ -8,6 +8,7 @@ import uuid
 import subprocess
 import sys
 import traceback
+import hashlib
 import openpyxl
 import importlib.util
 import tube_database
@@ -46,6 +47,37 @@ APP_DATA_PATH = get_app_data_path()
 CONFIG_FILE = runtime_paths.CONFIG_FILE
 UI_STATE_FILE = runtime_paths.UI_STATE_FILE
 HISTORY_FILE = runtime_paths.HISTORY_FILE
+
+_NESTING_GROUP_CACHE = {}
+_NESTING_GROUP_CACHE_LIMIT = 128
+
+def _nesting_group_signature(tube_type, pieces, rod_length, gap_mm, dead_zone_mm=400.0):
+    compact = []
+    for piece in pieces or []:
+        part = piece.get("tubePart") if isinstance(piece, dict) else None
+        compact.append({
+            "instanceKey": piece.get("instanceKey"),
+            "length": piece.get("length"),
+            "filePath": piece.get("filePath"),
+            "partFingerprint": part.get("part_fingerprint") if isinstance(part, dict) else None,
+            "sourceSha256": part.get("source_sha256") if isinstance(part, dict) else None,
+        })
+    payload = {
+        "tubeType": tube_type,
+        "rodLength": float(rod_length),
+        "gapMm": float(gap_mm),
+        "deadZoneMm": float(dead_zone_mm),
+        "pieces": compact,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _cache_nesting_group(signature, rods):
+    if len(_NESTING_GROUP_CACHE) >= _NESTING_GROUP_CACHE_LIMIT:
+        _NESTING_GROUP_CACHE.pop(next(iter(_NESTING_GROUP_CACHE)))
+    _NESTING_GROUP_CACHE[signature] = rods
+
 
 def load_config(silent=False):
     if not silent:
@@ -1139,17 +1171,32 @@ def nest_piece_groups(groups, rod_length=6000):
 
                 pieces.append(piece)
 
-            rods = tubenest_engine.optimize_items_dict(
+            signature = _nesting_group_signature(
+                tube_type,
                 pieces,
                 rod_length=rod_length,
                 gap_mm=gap_mm,
                 dead_zone_mm=400.0,
             )
+            cached = signature in _NESTING_GROUP_CACHE
+            if cached:
+                rods = _NESTING_GROUP_CACHE[signature]
+            else:
+                rods = tubenest_engine.optimize_items_dict(
+                    pieces,
+                    rod_length=rod_length,
+                    gap_mm=gap_mm,
+                    dead_zone_mm=400.0,
+                )
+                _cache_nesting_group(signature, rods)
+
             result_groups.append({
                 "tubeType": tube_type,
                 "rods": rods,
                 "optimizer": "geometry",
                 "gapMm": gap_mm,
+                "cacheHit": cached,
+                "signature": signature,
             })
         return {"status": "success", "groups": result_groups}
     except Exception as exc:
@@ -1210,19 +1257,12 @@ def get_current_state(da_fare_path):
     for piece in all_pieces:
         grouped_tubes[piece['tubeType']].append(piece)
 
+    # Startup/data refresh deliberately does not calculate any nesting.
+    # Geometry-aware plans are requested lazily when a specific tube group is
+    # opened (or explicitly needed by summary/lock-all actions).
     final_state = []
     for tube_type, pieces in grouped_tubes.items():
-        flat_pieces_to_nest = []
-        for p in pieces:
-            for instance_index in range(p['quantityNeeded']):
-                flat_pieces_to_nest.append({
-                    'length': p['length'],
-                    'id': p['id'],
-                    'instanceKey': f"{p['logicalKey']}::{instance_index + 1}",
-                    'tubePart': p.get('tubePart'),
-                })
-        nested_rods = nest_pieces(flat_pieces_to_nest)
-        final_state.append({"tubeType": tube_type, "pieces": pieces, "rods": nested_rods})
+        final_state.append({"tubeType": tube_type, "pieces": pieces, "rods": []})
     return final_state
 
 
