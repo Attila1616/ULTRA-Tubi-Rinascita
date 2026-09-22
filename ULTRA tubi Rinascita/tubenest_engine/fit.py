@@ -205,7 +205,19 @@ def fit_adjacent_parts(
     if target_gap < 0:
         raise ValueError("gap_mm cannot be negative")
 
-    support = support_radius(previous_part.get("profile") or {}, dsx, dsy)
+    # Evaluate the support in the previous part's local cross-section frame.
+    # This matters for rectangular stock when the whole rod uses the 90/270
+    # orientation family; squares and circles are rotationally invariant.
+    local_dsx, local_dsy = _rotate2(
+        dsx,
+        dsy,
+        -float(previous_pose.axial_rotation_degrees),
+    )
+    support = support_radius(
+        previous_part.get("profile") or {},
+        local_dsx,
+        local_dsy,
+    )
 
     # previous surface is previous_origin + c_prev + d_prev dot p
     # next surface is next_origin + c_next + d_next dot p.
