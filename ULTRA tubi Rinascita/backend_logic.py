@@ -1119,6 +1119,7 @@ def nest_piece_groups(groups, rod_length=6000):
             gap_mm = 2.0
 
         result_groups = []
+        validation_cache = {}
         for group in groups or []:
             tube_type = str(group.get("tubeType") or "")
             pieces = []
@@ -1128,10 +1129,12 @@ def nest_piece_groups(groups, rod_length=6000):
                 file_path = str(piece.get("filePath") or "").strip()
 
                 # If the drawing validator flags this ZZX, keep the piece in the
-                # plan but treat it as opaque nominal geometry. This prevents a
-                # known typo/discrepancy from influencing physical interlocking.
+                # plan but treat it as opaque nominal geometry. Cache by source
+                # path because one drawing may represent many requested pieces.
                 if file_path and os.path.isfile(file_path):
-                    if validate_zzx_file(file_path):
+                    if file_path not in validation_cache:
+                        validation_cache[file_path] = bool(validate_zzx_file(file_path))
+                    if validation_cache[file_path]:
                         piece["tubePart"] = None
 
                 pieces.append(piece)
