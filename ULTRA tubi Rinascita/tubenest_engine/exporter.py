@@ -426,6 +426,7 @@ def export_nested_rod(
     output_path,
     *,
     rod_length=6000.0,
+    gap_mm=2.0,
     title=None,
 ):
     """Export a locked ULTRA rod as one multi-segment ZZX."""
@@ -436,6 +437,12 @@ def export_nested_rod(
     resolved, all_layers = _resolve_placements(placements)
     template_item = _choose_template(resolved, all_layers)
     template = template_item.source_archive
+    gap_mm = float(gap_mm)
+    if not math.isfinite(gap_mm) or gap_mm < 0:
+        raise ValueError("gap_mm must be finite and non-negative")
+    used_span = max(float(item.placement.get("z_end") or 0.0) for item in resolved)
+    if not math.isfinite(used_span) or used_span <= 0:
+        raise ValueError("Locked rod has no valid used span")
 
     entries = copy.deepcopy(template.entries)
     _update_metadata(entries, title or Path(output_path).stem)
@@ -452,6 +459,7 @@ def export_nested_rod(
 
     _source_pack_xml, source_pack_record = _pack_template(template)
     pack_record = copy.deepcopy(source_pack_record)
+    _set_pack_gap(pack_record, gap_mm)
     segments_stream.records.append(pack_record)
 
     source_doc_xml, source_portion_record = _portion_template(template)
@@ -459,7 +467,7 @@ def export_nested_rod(
     _patch_portion_bounds(
         portion_record,
         template_item.source_part.profile,
-        rod_length,
+        used_span,
     )
     portions_stream = Stream([portion_record])
     portions_root = _empty_root_like(template.xml("Portions/content.xml"))
@@ -501,10 +509,11 @@ def export_nested_rod(
 
         segment_xml = copy.deepcopy(source_segment)
         segment_xml.set("Handle", str(segment_handle))
-        segment_xml.set(
-            "Name",
-            f"{ordinal:02d} | {item.source_file_name} | {item.instance_key}",
-        )
+        source_name = str(source_segment.get("Name") or "").strip()
+        if not source_name:
+            source_name = Path(item.source_file_name).stem
+        safe_segment_name = re.sub(r"[\\/|<>]", "_", source_name).strip()
+        segment_xml.set("Name", f"{safe_segment_name[:48]}_{ordinal:02d}")
         segment_xml.attrib.pop("DataAddr", None)
 
         source_curve_records = _record_by_address(archive, "Curves")
@@ -666,7 +675,14 @@ def export_nested_rod(
     root_content = ET.fromstring(entries["content.xml"])
     header = root_content.find("Header")
     if header is not None:
-        header.set("HandleSeed", str(max(used_handles, default=1000) + 1))
+        # Retained Viewport/root handles participate in the document-wide
+        # handle space. HandleSeed must stay above all of them.
+        entries["content.xml"] = xml_bytes(root_content)
+        maximum_handle = max(
+            max(used_handles, default=1000),
+            _max_explicit_xml_handle(entries),
+        )
+        header.set("HandleSeed", str(maximum_handle + 1))
     entries["content.xml"] = xml_bytes(root_content)
 
     entries["Segments/data.bin"] = segments_data
@@ -702,6 +718,7 @@ def export_nested_rod_to_directory(
     tube_type="Tube",
     rod_id="rod",
     rod_length=6000.0,
+    gap_mm=2.0,
 ):
     if not str(output_dir or "").strip():
         raise ValueError("Nested ZZX output directory is not configured")
@@ -712,5 +729,6 @@ def export_nested_rod_to_directory(
         placements,
         output_path,
         rod_length=rod_length,
+        gap_mm=gap_mm,
         title=output_path.stem,
     )
