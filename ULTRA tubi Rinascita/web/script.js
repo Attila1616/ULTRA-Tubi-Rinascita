@@ -411,6 +411,10 @@ async function openSettingsModal() {
         document.getElementById('settings-order-high-quantity').value = parseNonNegativeInteger(config.order_priority_high_quantity, 5);
         document.getElementById('settings-nesting-gap-mm').value = Number.isFinite(Number(config.nesting_gap_mm)) ? Number(config.nesting_gap_mm) : 2;
         document.getElementById('settings-nesting-debug-enabled').checked = config.nesting_debug_enabled !== false;
+        document.getElementById('settings-nested-text-marking-enabled').checked = !!config.nested_text_marking_enabled;
+        document.getElementById('settings-nested-text-marking-height-mm').value = Number.isFinite(Number(config.nested_text_marking_height_mm))
+            ? Math.min(10, Math.max(1, Number(config.nested_text_marking_height_mm)))
+            : 5;
         document.getElementById('settings-order-include-low-priority').checked = config.order_include_low_priority !== false;
         settingsIgnoredFolders = Array.isArray(config.ignore_folders) ? [...config.ignore_folders] : [];
         settingsIgnoreInput.value = '';
@@ -524,6 +528,14 @@ async function saveSettings() {
             order_include_low_priority: document.getElementById('settings-order-include-low-priority').checked,
             nesting_gap_mm: Math.max(0, Number(document.getElementById('settings-nesting-gap-mm').value) || 0),
             nesting_debug_enabled: document.getElementById('settings-nesting-debug-enabled').checked,
+            nested_text_marking_enabled: document.getElementById('settings-nested-text-marking-enabled').checked,
+            nested_text_marking_height_mm: Math.min(
+                10,
+                Math.max(
+                    1,
+                    Number(document.getElementById('settings-nested-text-marking-height-mm').value) || 5
+                )
+            ),
         };
         Object.entries(settingsPathFieldIds).forEach(([configKey, elementId]) => {
             payload[configKey] = document.getElementById(elementId)?.value || '';
@@ -2256,6 +2268,8 @@ async function exportLockedRodZzx(tubeType, rodId) {
             instanceKey: segment.instanceKey,
             filePath: segment.currentFilePath || segment.filePath || sourcePiece?.filePath || '',
             fileName: segment.fileName || sourcePiece?.fileName || '',
+            mainFolder: segment.mainFolder || sourcePiece?.mainFolder || '',
+            length: segment.length ?? sourcePiece?.length ?? null,
             segmentHandle: segment.segmentHandle ?? sourcePiece?.tubePart?.segment_handle ?? null,
             nestPlacement: segment.nestPlacement || null,
         };
