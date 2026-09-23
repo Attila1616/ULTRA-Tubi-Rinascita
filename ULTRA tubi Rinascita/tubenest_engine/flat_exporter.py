@@ -22,6 +22,7 @@ from .bcmp import FormatError, read_vector, vector
 from .domain import read_tube_parts
 from .geometry import Line, Polyline, Spline, primitives
 from .zzx_merge import nest_singletons
+from .text_marking import build_marking_records, validate_romans_font
 
 
 WRITABLE_FILE_VERSION = "65542"
@@ -35,6 +36,7 @@ class _InputPart:
     source_path: str
     file_name: str
     instance_key: str
+    marking_text: str | None = None
 
 
 def _sanitize_name(value):
@@ -188,6 +190,10 @@ def _resolve_inputs(placements):
                 source_path=source_path,
                 file_name=str(raw.get("fileName") or path.name),
                 instance_key=str(raw.get("instanceKey") or f"piece-{index}"),
+                marking_text=(
+                    str(raw.get("markingText") or "").strip()
+                    or None
+                ),
             )
         )
 
@@ -573,7 +579,66 @@ def _transform_xml_line(element, item, base_rotation, rod_shift):
         direction.set(axis, format(value, ".17g"))
 
 
-def _flat_transform(archive, resolved, rod_length):
+def _shape_z_bounds(shape_xml, lite_by_addr):
+    points = []
+    for child in shape_xml:
+        if child.get("GeoAddr") is None:
+            continue
+        record = lite_by_addr.get(int(child.get("GeoAddr")))
+        if record is None:
+            continue
+        for curve in primitives(record):
+            points.extend(curve.sample(96))
+    z_values = [
+        float(point[2])
+        for point in points
+        if len(point) >= 3 and math.isfinite(float(point[2]))
+    ]
+    if not z_values:
+        raise FormatError(
+            f"Shape {shape_xml.get('Handle')} has no usable 3D Z bounds"
+        )
+    return min(z_values), max(z_values)
+
+
+def _next_export_handle(archive):
+    values = []
+    for name, data in archive.entries.items():
+        if not name.endswith("content.xml"):
+            continue
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError:
+            continue
+        for element in root.iter():
+            value = element.get("Handle")
+            if value is None:
+                continue
+            try:
+                values.append(int(value))
+            except ValueError:
+                continue
+
+    try:
+        seed = int(
+            archive.xml("content.xml").find("Header").get("HandleSeed")
+        )
+        values.append(seed)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return max(values or [1000]) + 1
+
+
+def _flat_transform(
+    archive,
+    resolved,
+    rod_length,
+    *,
+    text_marking_enabled=False,
+    text_marking_height_mm=5.0,
+    text_marking_font_path=None,
+    text_marking_offset_mm=5.0,
+):
     segments_root = archive.xml("Segments/content.xml")
     shapes_root = archive.xml("Shapes/content.xml")
     segments = segments_root.findall("TubeSegment")
@@ -605,6 +670,27 @@ def _flat_transform(archive, resolved, rod_length):
     last_far_handle = None
     warnings = []
     placement_audit = []
+    marking_reports = []
+    marking_pending = []
+    next_marking_handle = _next_export_handle(archive)
+
+    if text_marking_enabled:
+        if text_marking_font_path is None:
+            raise ValueError("Text marking font path is not configured")
+        validate_romans_font(text_marking_font_path)
+        text_marking_height_mm = float(text_marking_height_mm)
+        if not (1.0 <= text_marking_height_mm <= 10.0):
+            raise ValueError("Text marking height must be between 1 and 10 mm")
+
+        stock_profile = resolved[0].part.profile
+        if stock_profile.kind not in {"Square", "Rect"}:
+            raise ValueError(
+                "TEXT marking is currently validated only for square/"
+                "rectangular tubes"
+            )
+        marking_face_width = float(stock_profile.outside_width or 0.0)
+        marking_face_y = float(stock_profile.outside_height or 0.0) / 2.0
+        marking_corner_radius = float(stock_profile.corner_radius or 0.0)
 
     for segment, item in zip(segments, resolved):
         references = list(segment.find("Shapes") or [])
@@ -706,6 +792,94 @@ def _flat_transform(archive, resolved, rod_length):
                 "piece's boundary cut remains active."
             )
 
+        if text_marking_enabled:
+            if not item.marking_text:
+                raise ValueError(
+                    f"{item.file_name}: marking metadata is missing"
+                )
+
+            near_xml = shapes_by_handle.get(str(near_handle))
+            far_xml = shapes_by_handle.get(str(far_handle))
+            if near_xml is None or far_xml is None:
+                raise FormatError(
+                    f"{item.file_name}: cannot resolve end cuts for text marking"
+                )
+
+            near_min_z, near_max_z = _shape_z_bounds(
+                near_xml,
+                lite_by_addr,
+            )
+            far_min_z, far_max_z = _shape_z_bounds(
+                far_xml,
+                lite_by_addr,
+            )
+            marking_start_z = near_max_z + float(text_marking_offset_mm)
+            marking_max_z = far_min_z
+
+            source_marking_record = shape_record_by_addr.get(
+                int(near_xml.get("DataAddr"))
+            )
+            if source_marking_record is None:
+                raise FormatError(
+                    f"{item.file_name}: incoming cut record is missing"
+                )
+
+            addition = build_marking_records(
+                source_shape_record=source_marking_record,
+                font_path=text_marking_font_path,
+                text=item.marking_text,
+                height_mm=text_marking_height_mm,
+                start_z=marking_start_z,
+                face_width=marking_face_width,
+                face_y=marking_face_y,
+                corner_radius=marking_corner_radius,
+                max_z=marking_max_z,
+                first_handle=next_marking_handle,
+            )
+            next_marking_handle = addition["next_handle"]
+
+            segment_shapes = segment.find("Shapes")
+            if segment_shapes is None:
+                raise FormatError(
+                    f"{item.file_name}: TubeSegment has no Shapes list"
+                )
+
+            for (
+                shape_record,
+                geometry_record,
+                (shape_element, geometry_element),
+                segment_ref,
+            ) in zip(
+                addition["shape_records"],
+                addition["geometry_records"],
+                addition["shape_elements"],
+                addition["segment_refs"],
+            ):
+                shapes_stream.records.append(shape_record)
+                lite_stream.records.append(geometry_record)
+                shapes_root.append(shape_element)
+                segment_shapes.append(segment_ref)
+                shapes_by_handle[shape_element.get("Handle")] = shape_element
+                marking_pending.append(
+                    (
+                        shape_element,
+                        geometry_element,
+                        shape_record,
+                        geometry_record,
+                    )
+                )
+
+            report = dict(addition["report"])
+            report.update(
+                {
+                    "instanceKey": item.instance_key,
+                    "fileName": item.file_name,
+                    "nearCutZBounds": [near_min_z, near_max_z],
+                    "farCutZBounds": [far_min_z, far_max_z],
+                }
+            )
+            marking_reports.append(report)
+
         placement_audit.append(
             {
                 "instanceKey": item.instance_key,
@@ -721,10 +895,36 @@ def _flat_transform(archive, resolved, rod_length):
             }
         )
 
-    # Serialize transformed records before collapsing the segment records.
+    # Serialize transformed/or newly appended records before collapsing.
     archive.entries["LiteGeos/data.bin"] = lite_stream.encode()
     archive.entries["Shapes/data.bin"] = shapes_stream.encode()
+
+    for (
+        shape_element,
+        geometry_element,
+        shape_record,
+        geometry_record,
+    ) in marking_pending:
+        shape_element.set("DataAddr", str(shape_record.address))
+        geometry_element.set("GeoAddr", str(geometry_record.address))
+
+    root_content = archive.xml("content.xml")
+    header = root_content.find("Header")
+    if header is not None and marking_pending:
+        header.set("HandleSeed", str(next_marking_handle))
+        archive.entries["content.xml"] = xml_bytes(root_content)
+
     archive.entries["Shapes/content.xml"] = xml_bytes(shapes_root)
+
+    # Addresses are now final, so include new markings in the ordering maps.
+    lite_by_addr = {
+        record.address: record
+        for record in lite_stream.records
+    }
+    shape_record_by_addr = {
+        record.address: record
+        for record in shapes_stream.records
+    }
 
     first = segments[0]
     first.set("Name", "ULTRA positioned stock contours")
@@ -796,7 +996,7 @@ def _flat_transform(archive, resolved, rod_length):
 
     archive.refresh_checksums()
     checks = archive.validate()
-    return archive, placement_audit, warnings, used_end
+    return archive, placement_audit, warnings, used_end, marking_reports
 
 
 def export_flat_nested_rod(
@@ -806,6 +1006,9 @@ def export_flat_nested_rod(
     rod_length=6000.0,
     gap_mm=2.0,
     title=None,
+    text_marking_enabled=False,
+    text_marking_height_mm=5.0,
+    text_marking_font_path=None,
 ):
     """Export one locked rod using the TubePro-verified single-segment form."""
     rod_length = float(rod_length)
@@ -825,10 +1028,13 @@ def export_flat_nested_rod(
         template_archive=template,
     )
 
-    archive, audit, warnings, used_end = _flat_transform(
+    archive, audit, warnings, used_end, marking_reports = _flat_transform(
         intermediate,
         resolved,
         rod_length,
+        text_marking_enabled=bool(text_marking_enabled),
+        text_marking_height_mm=float(text_marking_height_mm),
+        text_marking_font_path=text_marking_font_path,
     )
     _update_metadata(archive.entries, title or Path(output_path).stem)
     archive.refresh_checksums()
@@ -843,6 +1049,8 @@ def export_flat_nested_rod(
         "warnings": warnings,
         "validation": checks,
         "placements": audit,
+        "textMarkings": marking_reports,
+        "textMarkingEnabled": bool(text_marking_enabled),
         "fileVersion": WRITABLE_FILE_VERSION,
         "exportMode": "single_segment_positioned_contours",
     }
@@ -856,6 +1064,9 @@ def export_flat_nested_rod_to_directory(
     rod_id="rod",
     rod_length=6000.0,
     gap_mm=2.0,
+    text_marking_enabled=False,
+    text_marking_height_mm=5.0,
+    text_marking_font_path=None,
 ):
     if not str(output_dir or "").strip():
         raise ValueError("Nested ZZX output directory is not configured")
@@ -868,4 +1079,7 @@ def export_flat_nested_rod_to_directory(
         rod_length=rod_length,
         gap_mm=gap_mm,
         title=output_path.stem,
+        text_marking_enabled=text_marking_enabled,
+        text_marking_height_mm=text_marking_height_mm,
+        text_marking_font_path=text_marking_font_path,
     )
