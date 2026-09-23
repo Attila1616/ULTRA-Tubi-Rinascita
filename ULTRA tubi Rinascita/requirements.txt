@@ -4,3 +4,4 @@ python-docx
 keyboard
 pywin32
 bottle
+ezdxf==1.4.3
