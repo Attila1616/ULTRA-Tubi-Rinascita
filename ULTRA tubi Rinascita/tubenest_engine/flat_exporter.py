@@ -364,29 +364,30 @@ def _outer_shape_curves(shape_xml, lite_by_addr):
     return list(primitives(record))
 
 
-def _top_start_parameter(curves, samples_per_curve=96):
-    """Return the contour parameter for the machine-top, falling-friendly start.
+def _falling_start_parameter(
+    curves,
+    samples_per_curve=256,
+    axial_tolerance_mm=1e-5,
+):
+    """Pick the falling-friendly point requested for angled end cuts.
 
-    The user's validated square-tube sample B starts at the upper midpoint.
-    After nesting we choose maximum machine Y; ties prefer the point extending
-    toward the already-cut left side (minimum Z), then the section center.
+    In final nested coordinates, smaller Z is toward the already-cut/falling
+    piece on the left. The cut should begin at that pointiest axial location.
+    If the minimum-Z locus is an edge, choose its lower machine-Y endpoint so
+    the final ligament releases downward instead of making the falling piece
+    pivot against the tube that remains clamped.
+
+    Primitive endpoints are always candidates, so square/rectangular tangent
+    points are selected exactly. Dense samples cover arbitrary imported round
+    or spline contours whose minimum-Z point may lie inside a primitive.
     """
     curves = list(curves or [])
     if not curves:
         return None
 
-    best = None
+    candidates = []
     for index, curve in enumerate(curves):
         candidate_ts = {0.0, 1.0}
-        # Dense sampling works for arbitrary imported rational splines and
-        # polylines. Add the analytically centered point of a flat Line when
-        # possible so a top straight edge selects its midpoint exactly.
-        if isinstance(curve, Line):
-            dx = float(curve.direction[0]) if len(curve.direction) > 0 else 0.0
-            if abs(dx) > 1e-12:
-                centered = -float(curve.start[0]) / dx
-                if 0.0 <= centered <= 1.0:
-                    candidate_ts.add(centered)
         for step in range(1, int(samples_per_curve)):
             candidate_ts.add(step / float(samples_per_curve))
 
@@ -395,24 +396,44 @@ def _top_start_parameter(curves, samples_per_curve=96):
             if len(point) < 3:
                 continue
             x, y, z = map(float, point[:3])
-            # Max Y = top. At equal top height, use the pointiest side toward
-            # the left/falling piece (min Z), then prefer section center.
-            score = (
-                round(y, 9),
-                -round(z, 9),
-                -round(abs(x), 9),
-                -round(min(local_t, 1.0 - local_t), 9),
-                -index,
+            if not all(math.isfinite(value) for value in (x, y, z)):
+                continue
+            candidates.append(
+                (
+                    float(index) + float(local_t),
+                    x,
+                    y,
+                    z,
+                )
             )
-            if best is None or score > best[0]:
-                best = (score, float(index) + float(local_t))
 
-    return None if best is None else best[1]
+    if not candidates:
+        return None
+
+    minimum_z = min(row[3] for row in candidates)
+    axial_tolerance_mm = max(0.0, float(axial_tolerance_mm))
+    pointy_candidates = [
+        row
+        for row in candidates
+        if row[3] <= minimum_z + axial_tolerance_mm
+    ]
+
+    # Minimum Y is the lower end of a minimum-Z edge. Then use |X| and the
+    # composite parameter only as deterministic tie-breakers.
+    parameter, _x, _y, _z = min(
+        pointy_candidates,
+        key=lambda row: (
+            row[2],
+            abs(row[1]),
+            row[0],
+        ),
+    )
+    return parameter
 
 
 def _set_falling_friendly_start(shape_record, shape_xml, lite_by_addr):
     curves = _outer_shape_curves(shape_xml, lite_by_addr)
-    parameter = _top_start_parameter(curves)
+    parameter = _falling_start_parameter(curves)
     if parameter is None:
         return None
     _set_curve_start_parameter(shape_record, parameter)
@@ -615,8 +636,8 @@ def _flat_transform(archive, resolved, rod_length):
 
         # Toolpath start is intentionally applied after the nesting pose is
         # frozen. Never rotate a nested piece merely to change where a cut
-        # starts. Every angled end cut starts at machine-top, matching the
-        # user's validated "B" start-position behavior.
+        # starts. Every angled end cut starts at its minimum-Z point toward the
+        # already-cut/falling piece; minimum-Z edges use their lower endpoint.
         for end_index, cutoff_attr in enumerate(("CutOffA", "CutOffB")):
             angle = float(
                 item.part.ends[end_index].angle_from_perpendicular_degrees
