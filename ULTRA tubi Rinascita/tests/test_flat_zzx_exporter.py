@@ -282,7 +282,7 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
                 sorted(machining_centers),
             )
 
-    def test_falling_start_prefers_lower_end_of_minimum_z_edge(self):
+    def test_falling_start_centres_minimum_z_square_face(self):
         curves = [
             Line((50.0, -44.0, 10.0), (0.0, 88.0, 0.0)),
             Line((50.0, 44.0, 10.0), (-100.0, 0.0, 100.0)),
@@ -291,7 +291,7 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
         ]
         self.assertAlmostEqual(
             _falling_start_parameter(curves),
-            0.0,
+            0.5,
             places=6,
         )
 
