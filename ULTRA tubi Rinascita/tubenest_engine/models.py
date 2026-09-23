@@ -29,6 +29,11 @@ class ShapeInfo:
     point_count: int = 0
     start_parameter: Optional[float] = None
     start_point: Optional[list] = None
+    boundary_signature: Optional[str] = None
+    process_signature: Optional[str] = None
+    work_flags: Optional[int] = None
+    curve_flags: Optional[int] = None
+    curve_normal: Optional[list] = None
     is_end_cut: bool = False
     is_marking: bool = False
 

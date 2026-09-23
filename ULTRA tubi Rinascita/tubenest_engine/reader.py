@@ -8,7 +8,7 @@ import os
 import struct
 
 from .archive import Archive
-from .bcmp import FormatError
+from .bcmp import FormatError, read_vector
 from .geometry import Arc2D, Line, bounds, primitives
 from .toolpath import curve_start_parameter, point_at_composite_parameter
 from .models import (
@@ -35,6 +35,95 @@ def _object_channel(shape_record):
         return None
     channel = struct.unpack_from("<I", block.payload)[0]
     return channel if channel > 0 else None
+
+
+def _shape_work_flags(shape_record):
+    block = next(
+        (b for b in shape_record.blocks if b.name == "Shape" and len(b.payload) >= 12),
+        None,
+    )
+    return None if block is None else int(struct.unpack_from("<I", block.payload, 8)[0])
+
+
+def _curve_metadata(shape_record):
+    block = next(
+        (b for b in shape_record.blocks if b.name == "Curve" and len(b.payload) >= 44),
+        None,
+    )
+    if block is None:
+        return None, None
+    return (
+        int(struct.unpack_from("<I", block.payload, 12)[0]),
+        list(map(float, read_vector(block.payload, 16))),
+    )
+
+
+def _normalized_process_signature(shape_record):
+    digest = hashlib.sha256()
+    for block in shape_record.blocks:
+        if block.name == "Object":
+            continue
+        raw = bytearray(block.payload)
+        if block.name == "Shape" and len(raw) >= 12:
+            raw[:4] = bytes(4)
+            flags = struct.unpack_from("<I", raw, 8)[0]
+            struct.pack_into("<I", raw, 8, flags & ~0x2)
+        if block.name == "Curve" and len(raw) >= 44:
+            raw[4:12] = bytes(8)
+            # Normal is pose-dependent and is compared after posing in fit.py.
+            raw[16:44] = bytes(28)
+        digest.update(block.name.encode("ascii", "strict"))
+        digest.update(struct.pack("<I", int(block.version)))
+        digest.update(struct.pack("<I", len(raw)))
+        digest.update(raw)
+    digest.update(shape_record.tail)
+    return digest.hexdigest()
+
+
+def _shape_curves(shape_element, geos, tag):
+    element = shape_element.find(tag)
+    if element is None or element.get("GeoAddr") is None:
+        return None
+    record = geos.get(int(element.get("GeoAddr")))
+    if record is None:
+        raise FormatError(f"Missing {tag} LiteGeos record at {element.get('GeoAddr')}")
+    return list(primitives(record))
+
+
+def _rigid_contour_signature(curves):
+    if not curves:
+        return None
+    samples = [
+        tuple(float(value) for value in curve.at(step / 8.0))
+        for curve in curves
+        for step in range(9)
+    ]
+    distances = sorted(
+        round(math.dist(samples[i], samples[j]), 6)
+        for i in range(len(samples))
+        for j in range(i + 1, len(samples))
+    )
+    topology = sorted(Counter(type(curve).__name__ for curve in curves).items())
+    digest = hashlib.sha256()
+    digest.update(repr(topology).encode("ascii"))
+    digest.update(struct.pack("<II", len(curves), len(samples)))
+    for value in distances:
+        digest.update(struct.pack("<d", value))
+    return digest.hexdigest()
+
+
+def _boundary_signature(shape_element, geos):
+    outer = _shape_curves(shape_element, geos, "Geometry")
+    if not outer:
+        return None
+    inner = _shape_curves(shape_element, geos, "InnerGeometry")
+    digest = hashlib.sha256()
+    digest.update((_rigid_contour_signature(outer) or "").encode("ascii"))
+    digest.update(b"|")
+    digest.update(
+        ("NONE" if inner is None else (_rigid_contour_signature(inner) or "")).encode("ascii")
+    )
+    return digest.hexdigest()
 
 
 def _profile_from_unknown_outline(source_section_class, thickness, native_record_class, curves):
@@ -285,6 +374,17 @@ def read_zzx(path):
             points = points_by_handle.get(end_handle, [])
             plane, residual, angle_axis, angle_perp = _fit_plane(points)
             shape_info = shape_by_handle.get(end_handle)
+            end_xml = shapes_xml.get(end_handle)
+            end_record = (
+                shape_records.get(int(end_xml.get("DataAddr")))
+                if end_xml is not None
+                else None
+            )
+            end_curve_flags, end_curve_normal = (
+                _curve_metadata(end_record)
+                if end_record is not None
+                else (None, None)
+            )
             end_cuts.append(
                 EndCutInfo(
                     handle=end_handle,
@@ -296,6 +396,23 @@ def read_zzx(path):
                     cut_angle_from_perpendicular_degrees=angle_perp,
                     start_parameter=shape_info.start_parameter if shape_info else None,
                     start_point=shape_info.start_point if shape_info else None,
+                    boundary_signature=(
+                        _boundary_signature(end_xml, geos)
+                        if end_xml is not None
+                        else None
+                    ),
+                    process_signature=(
+                        _normalized_process_signature(end_record)
+                        if end_record is not None
+                        else None
+                    ),
+                    work_flags=(
+                        _shape_work_flags(end_record)
+                        if end_record is not None
+                        else None
+                    ),
+                    curve_flags=end_curve_flags,
+                    curve_normal=end_curve_normal,
                 )
             )
 

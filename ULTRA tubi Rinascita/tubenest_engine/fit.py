@@ -24,6 +24,10 @@ ANGLE_EPS = 1e-7
 PLANE_EPS = 1e-5
 PLANAR_FIT_TOLERANCE_MM = 0.05
 COMMON_LINE_RESIDUAL_TOLERANCE_MM = 0.01
+COMMON_LINE_PROFILE_TOLERANCE_MM = 0.002
+COMMON_LINE_NORMAL_TOLERANCE = 1e-6
+CUTOFF_FLAG = 32
+EXCLUSION_WORK_BIT = 0x2
 STRAIGHT_SLOPE_EPS = 1e-5
 
 
@@ -41,6 +45,11 @@ class PosedEnd:
     source_label: str
     operation_layer: Optional[int] = None
     residual_mm: Optional[float] = None
+    boundary_signature: Optional[str] = None
+    process_signature: Optional[str] = None
+    work_flags: Optional[int] = None
+    curve_flags: Optional[int] = None
+    curve_normal: Optional[tuple] = None
 
     @property
     def slope_magnitude(self):
@@ -72,14 +81,112 @@ def _raw_end(end):
     plane = end.get("plane_z_equals_c_plus_ax_plus_by")
     if not plane or len(plane) != 3:
         return None
-    return (
-        float(plane[0]),
-        float(plane[1]),
-        float(plane[2]),
-        str(end.get("label") or "?"),
-        end.get("operation_layer"),
-        end.get("plane_max_residual_mm"),
+    normal = end.get("curve_normal")
+    return {
+        "c": float(plane[0]),
+        "sx": float(plane[1]),
+        "sv": float(plane[2]),
+        "label": str(end.get("label") or "?"),
+        "layer": end.get("operation_layer"),
+        "residual": end.get("plane_max_residual_mm"),
+        "boundary_signature": end.get("boundary_signature"),
+        "process_signature": end.get("process_signature"),
+        "work_flags": end.get("work_flags"),
+        "curve_flags": end.get("curve_flags"),
+        "curve_normal": (
+            tuple(map(float, normal))
+            if isinstance(normal, (list, tuple)) and len(normal) == 3
+            else None
+        ),
+    }
+
+
+def _pose_curve_normal(normal, pose, reverse_transform):
+    if normal is None:
+        return None
+    x, y, z = map(float, normal)
+    if reverse_transform:
+        x = -x
+        z = -z
+    x, y = _rotate2(x, y, pose.axial_rotation_degrees)
+    return (x, y, z)
+
+
+def _close_optional(left, right, tolerance):
+    if left is None and right is None:
+        return True
+    if left is None or right is None:
+        return False
+    return abs(float(left) - float(right)) <= float(tolerance)
+
+
+def _profiles_common_line_compatible(previous_profile, next_profile):
+    previous_profile = previous_profile or {}
+    next_profile = next_profile or {}
+    if str(previous_profile.get("kind") or "") != str(next_profile.get("kind") or ""):
+        return False
+    if not _close_optional(
+        previous_profile.get("thickness"),
+        next_profile.get("thickness"),
+        COMMON_LINE_PROFILE_TOLERANCE_MM,
+    ):
+        return False
+    kind = str(previous_profile.get("kind") or "")
+    keys = (
+        ("outside_diameter",)
+        if kind == "Circle"
+        else ("outside_width", "outside_height", "corner_radius")
+        if kind in ("Square", "Rect")
+        else ()
     )
+    return bool(keys) and all(
+        _close_optional(
+            previous_profile.get(key),
+            next_profile.get(key),
+            COMMON_LINE_PROFILE_TOLERANCE_MM,
+        )
+        for key in keys
+    )
+
+
+def _common_line_boundary_compatible(previous_part, previous_end, next_part, next_start):
+    if not _profiles_common_line_compatible(
+        (previous_part or {}).get("profile") or {},
+        (next_part or {}).get("profile") or {},
+    ):
+        return False
+    if (
+        not previous_end.boundary_signature
+        or previous_end.boundary_signature != next_start.boundary_signature
+    ):
+        return False
+    if (
+        not previous_end.process_signature
+        or previous_end.process_signature != next_start.process_signature
+    ):
+        return False
+    if (
+        previous_end.work_flags is None
+        or next_start.work_flags is None
+        or int(previous_end.work_flags) & EXCLUSION_WORK_BIT
+        or int(next_start.work_flags) & EXCLUSION_WORK_BIT
+    ):
+        return False
+    if (
+        previous_end.curve_flags is None
+        or next_start.curve_flags is None
+        or not (int(previous_end.curve_flags) & CUTOFF_FLAG)
+        or int(previous_end.curve_flags) != int(next_start.curve_flags)
+    ):
+        return False
+    if (
+        previous_end.curve_normal is None
+        or next_start.curve_normal is None
+        or math.dist(previous_end.curve_normal, next_start.curve_normal)
+        > COMMON_LINE_NORMAL_TOLERANCE
+    ):
+        return False
+    return True
 
 
 def posed_ends(part, pose: PartPose):
@@ -95,13 +202,11 @@ def posed_ends(part, pose: PartPose):
         return (None, None)
 
     def make(raw, reverse_transform=False):
-        c, sx, sv, label, layer, residual = raw
+        c = raw["c"]
+        sx = raw["sx"]
+        sv = raw["sv"]
         if reverse_transform:
-            # Physical 180 degree reversal about the machine vertical axis:
-            # axial -> -axial, horizontal cross axis -> -horizontal,
-            # vertical cross axis remains vertical. This is a proper 3D rotation.
             c = length - c
-            sx = sx
             sv = -sv
 
         sx, sv = _rotate2(sx, sv, pose.axial_rotation_degrees)
@@ -109,9 +214,16 @@ def posed_ends(part, pose: PartPose):
             c=c,
             slope_x=sx,
             slope_vertical=sv,
-            source_label=label,
-            operation_layer=layer,
-            residual_mm=residual,
+            source_label=raw["label"],
+            operation_layer=raw["layer"],
+            residual_mm=raw["residual"],
+            boundary_signature=raw["boundary_signature"],
+            process_signature=raw["process_signature"],
+            work_flags=raw["work_flags"],
+            curve_flags=raw["curve_flags"],
+            curve_normal=_pose_curve_normal(
+                raw["curve_normal"], pose, reverse_transform
+            ),
         )
 
     if pose.reversed_end_for_end:
@@ -228,11 +340,18 @@ def fit_adjacent_parts(
         previous_end.operation_layer == 1
         and next_start.operation_layer == 1
     )
+    boundary_compatible = _common_line_boundary_compatible(
+        previous_part,
+        previous_end,
+        next_part,
+        next_start,
+    )
     common_line = bool(
         allow_common_line
         and channel1_pair
         and same_plane_shape
         and residuals_precise_enough_for_common_line
+        and boundary_compatible
     )
     target_gap = 0.0 if common_line else float(gap_mm)
     if target_gap < 0:

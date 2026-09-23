@@ -18,7 +18,10 @@ from .release_starts import select_face_start, select_round_start
 
 CUTOFF_FLAG = 32
 EXCLUSION_WORK_BIT = 0x2
-DEFAULT_DEDUP_TOLERANCE_MM = 0.002
+DEFAULT_DUPLICATE_TOLERANCE_MM = 0.002
+DEFAULT_JOIN_TOLERANCE_MM = 0.01
+DEFAULT_PLANARITY_TOLERANCE_MM = 0.002
+DEFAULT_DEDUP_TOLERANCE_MM = DEFAULT_DUPLICATE_TOLERANCE_MM
 
 
 def shape_channel(record):
@@ -132,27 +135,28 @@ def sampled_distance(left, right):
     )
 
 
-def whole_planar_contour(curves, tolerance):
+def whole_planar_contour(
+    curves,
+    *,
+    join_tolerance_mm=DEFAULT_JOIN_TOLERANCE_MM,
+    planarity_tolerance_mm=DEFAULT_PLANARITY_TOLERANCE_MM,
+):
+    """Validate one saved cutoff loop without modifying its geometry.
+
+    Junction tolerance only answers whether successive serialized primitives
+    belong to one loop. It is deliberately separate from the much tighter
+    tolerance used to decide whether two different contours coincide.
+    """
     if not curves:
         return False
     if any(
-        math.dist(
-            curve.at(1),
-            next_curve.at(0),
-        ) > tolerance
-        for curve, next_curve in zip(
-            curves,
-            curves[1:] + curves[:1],
-        )
+        math.dist(curve.at(1), next_curve.at(0)) > join_tolerance_mm
+        for curve, next_curve in zip(curves, curves[1:] + curves[:1])
     ):
         return False
 
     points = np.asarray(
-        [
-            point
-            for curve in curves
-            for point in curve.sample(16)
-        ]
+        [point for curve in curves for point in curve.sample(16)]
     )
     center = points.mean(axis=0)
     _, singular, vectors = np.linalg.svd(
@@ -161,10 +165,9 @@ def whole_planar_contour(curves, tolerance):
     )
     return (
         len(singular) == 3
-        and singular[1] > tolerance
-        and max(
-            abs((points - center) @ vectors[-1])
-        ) <= tolerance
+        and singular[1] > planarity_tolerance_mm
+        and max(abs((points - center) @ vectors[-1]))
+        <= planarity_tolerance_mm
     )
 
 
@@ -250,7 +253,9 @@ def _verify_duplicate_pair(
     shapes_by_handle,
     records_by_handle,
     lite_by_addr,
-    tolerance,
+    duplicate_tolerance_mm,
+    join_tolerance_mm,
+    planarity_tolerance_mm,
 ):
     left_xml = shapes_by_handle[left_handle]
     right_xml = shapes_by_handle[right_handle]
@@ -289,7 +294,8 @@ def _verify_duplicate_pair(
 
     if not whole_planar_contour(
         left_outer,
-        tolerance,
+        join_tolerance_mm=join_tolerance_mm,
+        planarity_tolerance_mm=planarity_tolerance_mm,
     ):
         raise ValueError(
             f"Shared-boundary Shape {left_handle} is not "
@@ -297,7 +303,8 @@ def _verify_duplicate_pair(
         )
     if not whole_planar_contour(
         right_outer,
-        tolerance,
+        join_tolerance_mm=join_tolerance_mm,
+        planarity_tolerance_mm=planarity_tolerance_mm,
     ):
         raise ValueError(
             f"Shared-boundary Shape {right_handle} is not "
@@ -322,12 +329,12 @@ def _verify_duplicate_pair(
         np.max(
             abs(left_box - right_box)
         )
-        > tolerance
+        > duplicate_tolerance_mm
     ):
         raise ValueError(
             f"Shared-boundary Shapes {left_handle}/"
             f"{right_handle} have a real gap larger than "
-            f"{tolerance:g} mm"
+            f"{duplicate_tolerance_mm:g} mm"
         )
 
     left_inner = _shape_geometry(
@@ -353,7 +360,7 @@ def _verify_duplicate_pair(
         left_outer,
         right_outer,
     )
-    if outer_error > tolerance:
+    if outer_error > duplicate_tolerance_mm:
         raise ValueError(
             f"Shared-boundary Shapes {left_handle}/"
             f"{right_handle} outer contours differ by "
@@ -366,7 +373,7 @@ def _verify_duplicate_pair(
             left_inner,
             right_inner,
         )
-        if inner_error > tolerance:
+        if inner_error > duplicate_tolerance_mm:
             raise ValueError(
                 f"Shared-boundary Shapes {left_handle}/"
                 f"{right_handle} inner contours differ by "
@@ -446,7 +453,9 @@ def repair_single_segment_cut_release(
     outside_diameter=None,
     shared_pairs=(),
     release_handles=(),
-    tolerance=DEFAULT_DEDUP_TOLERANCE_MM,
+    duplicate_tolerance_mm=DEFAULT_DUPLICATE_TOLERANCE_MM,
+    join_tolerance_mm=DEFAULT_JOIN_TOLERANCE_MM,
+    planarity_tolerance_mm=DEFAULT_PLANARITY_TOLERANCE_MM,
 ):
     """Repair exact release starts and adjacent shared-cut duplicates.
 
@@ -455,13 +464,24 @@ def repair_single_segment_cut_release(
     mathematically/file validated by the handoff but remains pending
     manual TubePro confirmation.
     """
+    duplicate_tolerance_mm = float(duplicate_tolerance_mm)
+    join_tolerance_mm = float(join_tolerance_mm)
+    planarity_tolerance_mm = float(planarity_tolerance_mm)
     if (
-        not math.isfinite(tolerance)
-        or not 0 < tolerance <= 0.01
+        not math.isfinite(duplicate_tolerance_mm)
+        or not 0 < duplicate_tolerance_mm <= 0.01
     ):
-        raise ValueError(
-            "Dedup tolerance must be >0 and <=0.01 mm"
-        )
+        raise ValueError("Duplicate tolerance must be >0 and <=0.01 mm")
+    if (
+        not math.isfinite(join_tolerance_mm)
+        or not 0 < join_tolerance_mm <= 0.05
+    ):
+        raise ValueError("Contour join tolerance must be >0 and <=0.05 mm")
+    if (
+        not math.isfinite(planarity_tolerance_mm)
+        or not 0 < planarity_tolerance_mm <= 0.01
+    ):
+        raise ValueError("Planarity tolerance must be >0 and <=0.01 mm")
 
     segments_root = archive.xml(
         "Segments/content.xml"
@@ -549,7 +569,9 @@ def repair_single_segment_cut_release(
                 shapes_by_handle=shapes_by_handle,
                 records_by_handle=records_by_handle,
                 lite_by_addr=lite_by_addr,
-                tolerance=tolerance,
+                duplicate_tolerance_mm=duplicate_tolerance_mm,
+                join_tolerance_mm=join_tolerance_mm,
+                planarity_tolerance_mm=planarity_tolerance_mm,
             )
         except ValueError as exc:
             # A common-line candidate is not automatically a duplicate. If
@@ -854,9 +876,14 @@ def repair_single_segment_cut_release(
             removed_flags
         ),
         "profile": profile_kind,
-        "comparison_tolerance_mm": (
-            tolerance
-        ),
+        "candidate_shared_pairs": [
+            [str(left), str(right)]
+            for left, right in shared_pairs
+        ],
+        "duplicate_tolerance_mm": duplicate_tolerance_mm,
+        "join_tolerance_mm": join_tolerance_mm,
+        "planarity_tolerance_mm": planarity_tolerance_mm,
+        "comparison_tolerance_mm": duplicate_tolerance_mm,
         "axis_convention": (
             "+Z toward chuck; positioned-stock coordinates "
             "are nonnegative"

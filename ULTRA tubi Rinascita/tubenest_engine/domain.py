@@ -40,6 +40,11 @@ class PartEnd:
     sampled_bounds: Optional[list]
     start_parameter: Optional[float] = None
     start_point: Optional[list] = None
+    boundary_signature: Optional[str] = None
+    process_signature: Optional[str] = None
+    work_flags: Optional[int] = None
+    curve_flags: Optional[int] = None
+    curve_normal: Optional[list] = None
 
 
 @dataclass
@@ -208,6 +213,15 @@ def build_tube_part(document: ZzxDocumentInfo, segment: TubeSegmentInfo):
                 sampled_bounds=_normalize_bounds(end.sampled_bounds, axial_min),
                 start_parameter=end.start_parameter,
                 start_point=_normalize_point(end.start_point, axial_min),
+                boundary_signature=end.boundary_signature,
+                process_signature=end.process_signature,
+                work_flags=end.work_flags,
+                curve_flags=end.curve_flags,
+                curve_normal=(
+                    list(end.curve_normal)
+                    if end.curve_normal is not None
+                    else None
+                ),
             )
         )
 
