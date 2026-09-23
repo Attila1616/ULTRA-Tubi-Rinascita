@@ -94,6 +94,16 @@ def _set_object_handle(record, handle):
     block.payload = bytes(payload)
 
 
+def _shape_channel(record):
+    block = next(
+        (block for block in record.blocks if block.name == "Shape" and len(block.payload) >= 4),
+        None,
+    )
+    if block is None:
+        return 0
+    return int(struct.unpack_from("<I", block.payload, 0)[0])
+
+
 def _read_segment_frame(record):
     block = next(
         (block for block in record.blocks if block.name == "TubeSegment"),
@@ -636,8 +646,9 @@ def export_nested_rod(
                 int(old_handle),
             )
             master_handle = master_shape_handles.get(master_key)
+            copyable_machining_geometry = bool(geometry_children) and _shape_channel(source_record) > 0
 
-            if geometry_children and master_handle is not None:
+            if copyable_machining_geometry and master_handle is not None:
                 # Native TubesT duplication semantics: copied machining
                 # curves carry their own Shape/Curve metadata record but the
                 # XML points to the original shape through CopyHandle and
@@ -668,7 +679,7 @@ def export_nested_rod(
                         child.attrib.pop("GeoAddr", None)
                         child.set("_SourceGeoAddr", str(old_geo_addr))
                     cloned_xml.append(child)
-                if geometry_children:
+                if copyable_machining_geometry:
                     master_shape_handles[master_key] = new_handle
 
             shapes_root.append(cloned_xml)
