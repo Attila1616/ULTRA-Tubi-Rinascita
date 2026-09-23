@@ -32,7 +32,7 @@ DEFAULT_MAX_CANDIDATE_TYPES = 24
 EXACT_REQUIRE_ALL_MAX_PIECES = 8
 MERGE_PAIR_ATTEMPT_LIMIT = 160
 PARALLEL_MIN_ITEMS = 20
-MAX_CPU_WORKERS = 12
+MAX_CPU_WORKERS = 20
 
 _PAIRWISE_FIT_CACHE = {}
 _PAIRWISE_FIT_CACHE_LIMIT = 50000
@@ -621,7 +621,7 @@ def _search_single_rod(
     return min(terminals, key=lambda state: _terminal_score(state, require_all))
 
 
-def _build_initial_rods(items, rod_length, dead_zone_mm, gap_mm):
+def _build_initial_rods(items, rod_length, dead_zone_mm, gap_mm, executor=None):
     all_mask = (1 << len(items)) - 1
     remaining_mask = all_mask
     rods = []
@@ -634,6 +634,7 @@ def _build_initial_rods(items, rod_length, dead_zone_mm, gap_mm):
             dead_zone_mm=dead_zone_mm,
             gap_mm=gap_mm,
             require_all=False,
+            executor=executor,
         )
         if state is None or state.used_mask == 0:
             missing = [item.instance_key for item in items if remaining_mask & (1 << item.index)]
@@ -655,11 +656,11 @@ _PROCESS_GAP_MM = None
 
 
 def nesting_cpu_worker_count():
-    """Use roughly the physical-core count on SMT desktop CPUs."""
+    """Use most logical CPUs while leaving a little headroom for Windows/UI."""
     logical = max(1, int(os.cpu_count() or 1))
     if logical <= 2:
         return 1
-    return max(2, min(MAX_CPU_WORKERS, logical // 2))
+    return max(2, min(MAX_CPU_WORKERS, logical - 2))
 
 
 def _init_search_worker(items, rod_length, dead_zone_mm, gap_mm):
@@ -719,6 +720,18 @@ def _expand_state_worker(task):
     return candidates
 
 
+def _expand_state_chunk_worker(task):
+    states, allowed_mask, max_candidate_types = task
+    result = []
+    for state in states:
+        result.extend(
+            _expand_state_worker(
+                (state, allowed_mask, max_candidate_types)
+            )
+        )
+    return result
+
+
 def _search_mask_worker(task):
     mask, beam_width, max_candidate_types = task
     return _search_single_rod(
@@ -739,6 +752,7 @@ def _parallel_search_masks(
     rod_length,
     dead_zone_mm,
     gap_mm,
+    executor=None,
 ):
     tasks = list(tasks)
     workers = nesting_cpu_worker_count()
@@ -761,17 +775,26 @@ def _parallel_search_masks(
             for mask, beam_width, max_types in tasks
         ]
 
+    own_executor = executor is None
+    local_executor = executor
     try:
-        active_workers = min(workers, len(tasks))
-        _PARALLEL_STATS["pool_runs"] += 1
+        if own_executor:
+            _PARALLEL_STATS["pool_runs"] += 1
+            local_executor = ProcessPoolExecutor(
+                max_workers=min(workers, len(tasks)),
+                initializer=_init_search_worker,
+                initargs=(items, rod_length, dead_zone_mm, gap_mm),
+            )
+
         _PARALLEL_STATS["mask_pool_runs"] += 1
         _PARALLEL_STATS["tasks"] += len(tasks)
-        with ProcessPoolExecutor(
-            max_workers=active_workers,
-            initializer=_init_search_worker,
-            initargs=(items, rod_length, dead_zone_mm, gap_mm),
-        ) as executor:
-            return list(executor.map(_search_mask_worker, tasks, chunksize=1))
+        return list(
+            local_executor.map(
+                _search_mask_worker,
+                tasks,
+                chunksize=1,
+            )
+        )
     except Exception as exc:
         _PARALLEL_STATS["fallbacks"] += 1
         _PARALLEL_STATS["last_error"] = f"{type(exc).__name__}: {exc}"
@@ -792,6 +815,9 @@ def _parallel_search_masks(
             )
             for mask, beam_width, max_types in tasks
         ]
+    finally:
+        if own_executor and local_executor is not None:
+            local_executor.shutdown(wait=True)
 
 
 def _search_single_rod_parallel(
@@ -803,8 +829,9 @@ def _search_single_rod_parallel(
     require_all=False,
     beam_width=DEFAULT_BEAM_WIDTH,
     max_candidate_types=DEFAULT_MAX_CANDIDATE_TYPES,
+    executor=None,
 ):
-    """Same beam semantics as _search_single_rod, but expand beam states in workers."""
+    """Same beam semantics, with coarse beam chunks expanded in worker processes."""
     workers = nesting_cpu_worker_count()
     if workers <= 1 or len(items) < PARALLEL_MIN_ITEMS:
         return _search_single_rod(
@@ -825,8 +852,6 @@ def _search_single_rod_parallel(
         and target_mask.bit_count() <= EXACT_REQUIRE_ALL_MAX_PIECES
     )
 
-    # First expansion is one state, so doing it locally avoids paying IPC for
-    # a task that cannot use more than one worker anyway.
     initial = RodSearchState()
     next_states = []
     reps = _representative_indices(
@@ -864,65 +889,85 @@ def _search_single_rod_parallel(
     beam = ordered_states if exact_mode else ordered_states[:beam_width]
     terminals = []
 
+    own_executor = executor is None
+    local_executor = executor
     try:
-        _PARALLEL_STATS["pool_runs"] += 1
+        if own_executor:
+            _PARALLEL_STATS["pool_runs"] += 1
+            local_executor = ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_init_search_worker,
+                initargs=(items, rod_length, dead_zone_mm, gap_mm),
+            )
+
         _PARALLEL_STATS["initial_pool_runs"] += 1
-        with ProcessPoolExecutor(
-            max_workers=workers,
-            initializer=_init_search_worker,
-            initargs=(items, rod_length, dead_zone_mm, gap_mm),
-        ) as executor:
-            for _depth in range(1, len(items) + 1):
-                expandable = []
-                for state in beam:
-                    if state.used_mask:
-                        terminals.append(state)
-                        if require_all and state.used_mask == target_mask:
-                            continue
-                    if state.tail_used:
+
+        for _depth in range(1, len(items) + 1):
+            expandable = []
+            for state in beam:
+                if state.used_mask:
+                    terminals.append(state)
+                    if require_all and state.used_mask == target_mask:
                         continue
-                    expandable.append(state)
+                if state.tail_used:
+                    continue
+                expandable.append(state)
 
-                if not expandable:
-                    break
+            if not expandable:
+                break
 
-                _PARALLEL_STATS["tasks"] += len(expandable)
-                task_iter = (
-                    (state, allowed_mask, max_candidate_types)
-                    for state in expandable
-                )
-                batches = executor.map(
-                    _expand_state_worker,
-                    task_iter,
-                    chunksize=max(1, len(expandable) // max(1, workers * 4)),
-                )
-                next_states = [
-                    candidate
-                    for batch in batches
-                    for candidate in batch
-                ]
-                if not next_states:
-                    break
+            # Send coarse chunks, not one IPC job per beam state. This keeps
+            # all cores busy while greatly reducing Windows pickle/pipe cost.
+            target_chunks = min(
+                len(expandable),
+                max(1, workers * 2),
+            )
+            chunk_size = max(
+                1,
+                math.ceil(len(expandable) / target_chunks),
+            )
+            chunks = [
+                expandable[index:index + chunk_size]
+                for index in range(0, len(expandable), chunk_size)
+            ]
+            _PARALLEL_STATS["tasks"] += len(chunks)
 
-                best_by_key = {}
-                for state in next_states:
-                    key = _state_dedupe_key(state)
-                    previous = best_by_key.get(key)
-                    if (
-                        previous is None
-                        or _partial_score(state) < _partial_score(previous)
-                    ):
-                        best_by_key[key] = state
+            task_iter = (
+                (chunk, allowed_mask, max_candidate_types)
+                for chunk in chunks
+            )
+            batches = local_executor.map(
+                _expand_state_chunk_worker,
+                task_iter,
+                chunksize=1,
+            )
+            next_states = [
+                candidate
+                for batch in batches
+                for candidate in batch
+            ]
+            if not next_states:
+                break
 
-                ordered_states = sorted(
-                    best_by_key.values(),
-                    key=_partial_score,
-                )
-                beam = (
-                    ordered_states
-                    if exact_mode
-                    else ordered_states[:beam_width]
-                )
+            best_by_key = {}
+            for state in next_states:
+                key = _state_dedupe_key(state)
+                previous = best_by_key.get(key)
+                if (
+                    previous is None
+                    or _partial_score(state) < _partial_score(previous)
+                ):
+                    best_by_key[key] = state
+
+            ordered_states = sorted(
+                best_by_key.values(),
+                key=_partial_score,
+            )
+            beam = (
+                ordered_states
+                if exact_mode
+                else ordered_states[:beam_width]
+            )
     except Exception as exc:
         _PARALLEL_STATS["fallbacks"] += 1
         _PARALLEL_STATS["last_error"] = f"{type(exc).__name__}: {exc}"
@@ -940,6 +985,9 @@ def _search_single_rod_parallel(
             beam_width=beam_width,
             max_candidate_types=max_candidate_types,
         )
+    finally:
+        if own_executor and local_executor is not None:
+            local_executor.shutdown(wait=True)
 
     terminals.extend(beam)
     if require_all:
@@ -959,7 +1007,7 @@ def _search_single_rod_parallel(
     )
 
 
-def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
+def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm, executor=None):
     # Test the most promising rod pairs first. On large jobs, independent pair
     # searches from the current round are distributed across CPU processes.
     attempts = 0
@@ -1002,6 +1050,7 @@ def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
             rod_length=rod_length,
             dead_zone_mm=dead_zone_mm,
             gap_mm=gap_mm,
+            executor=executor,
         )
 
         best_merge = None
@@ -1029,7 +1078,7 @@ def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
 
     return rods
 
-def _refine_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
+def _refine_rods(items, rods, rod_length, dead_zone_mm, gap_mm, executor=None):
     if not rods:
         return []
 
@@ -1043,6 +1092,7 @@ def _refine_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
         rod_length=rod_length,
         dead_zone_mm=dead_zone_mm,
         gap_mm=gap_mm,
+        executor=executor,
     )
     return [
         refined or original
@@ -1143,22 +1193,8 @@ def optimize_items(
     if not normalized:
         return []
 
-    rods = _build_initial_rods(
+    rods = _optimize_normalized(
         normalized,
-        rod_length=rod_length,
-        dead_zone_mm=dead_zone_mm,
-        gap_mm=gap_mm,
-    )
-    rods = _try_merge_rods(
-        normalized,
-        rods,
-        rod_length=rod_length,
-        dead_zone_mm=dead_zone_mm,
-        gap_mm=gap_mm,
-    )
-    rods = _refine_rods(
-        normalized,
-        rods,
         rod_length=rod_length,
         dead_zone_mm=dead_zone_mm,
         gap_mm=gap_mm,
@@ -1660,6 +1696,62 @@ def diagnose_items_dict(
     }
 
 
+def _optimize_normalized(
+    normalized,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    workers = nesting_cpu_worker_count()
+    use_pool = (
+        workers > 1
+        and len(normalized) >= PARALLEL_MIN_ITEMS
+    )
+
+    executor = None
+    try:
+        if use_pool:
+            _PARALLEL_STATS["pool_runs"] += 1
+            executor = ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_init_search_worker,
+                initargs=(
+                    normalized,
+                    rod_length,
+                    dead_zone_mm,
+                    gap_mm,
+                ),
+            )
+
+        rods = _build_initial_rods(
+            normalized,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+            executor=executor,
+        )
+        rods = _try_merge_rods(
+            normalized,
+            rods,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+            executor=executor,
+        )
+        rods = _refine_rods(
+            normalized,
+            rods,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+            executor=executor,
+        )
+        return rods
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
+
+
 def optimize_items_dict(
     items,
     rod_length=DEFAULT_ROD_LENGTH,
@@ -1671,22 +1763,8 @@ def optimize_items_dict(
     if not normalized:
         return []
 
-    rods = _build_initial_rods(
+    rods = _optimize_normalized(
         normalized,
-        rod_length=float(rod_length),
-        dead_zone_mm=float(dead_zone_mm),
-        gap_mm=max(0.0, float(gap_mm)),
-    )
-    rods = _try_merge_rods(
-        normalized,
-        rods,
-        rod_length=float(rod_length),
-        dead_zone_mm=float(dead_zone_mm),
-        gap_mm=max(0.0, float(gap_mm)),
-    )
-    rods = _refine_rods(
-        normalized,
-        rods,
         rod_length=float(rod_length),
         dead_zone_mm=float(dead_zone_mm),
         gap_mm=max(0.0, float(gap_mm)),
