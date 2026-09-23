@@ -1153,6 +1153,14 @@ def _flat_transform(
         release_handles=release_handles,
     )
 
+    if cut_release_report["rejected_shared_pairs"]:
+        for rejected in cut_release_report["rejected_shared_pairs"]:
+            warnings.append(
+                "Shared-boundary candidate "
+                f"{rejected['a']}/{rejected['b']} was preserved as two cuts: "
+                f"{rejected['reason']}"
+            )
+
     if cut_release_report["disabled_duplicate_groups"]:
         warnings.append(
             "Shared cutoff group left disabled because no enabled channel-1 "

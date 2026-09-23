@@ -220,8 +220,17 @@ def fit_adjacent_parts(
         previous_residual <= COMMON_LINE_RESIDUAL_TOLERANCE_MM
         and next_residual <= COMMON_LINE_RESIDUAL_TOLERANCE_MM
     )
+    # The verified shared-cut cleanup is defined for ordinary enabled
+    # channel-1 cutoff contours. Other end-operation channels may still be
+    # valid machining, but they are not automatically interchangeable as one
+    # shared physical cut.
+    channel1_pair = (
+        previous_end.operation_layer == 1
+        and next_start.operation_layer == 1
+    )
     common_line = bool(
         allow_common_line
+        and channel1_pair
         and same_plane_shape
         and residuals_precise_enough_for_common_line
     )

@@ -226,5 +226,61 @@ class GeometryFitTests(unittest.TestCase):
         self.assertTrue(reversed_result["eligible"])
 
 
+    def test_common_line_requires_both_end_operations_on_channel_1(self):
+        previous = {
+            "overall_length": 100.0,
+            "profile": {
+                "kind": "Circle",
+                "outside_diameter": 30.0,
+            },
+            "ends": [
+                {
+                    "label": "A",
+                    "plane_z_equals_c_plus_ax_plus_by": [0.0, 0.0, 0.0],
+                    "plane_max_residual_mm": 0.0,
+                    "operation_layer": 1,
+                },
+                {
+                    "label": "B",
+                    "plane_z_equals_c_plus_ax_plus_by": [100.0, 0.0, 0.0],
+                    "plane_max_residual_mm": 0.0,
+                    "operation_layer": 4,
+                },
+            ],
+        }
+        following = {
+            "overall_length": 100.0,
+            "profile": {
+                "kind": "Circle",
+                "outside_diameter": 30.0,
+            },
+            "ends": [
+                {
+                    "label": "A",
+                    "plane_z_equals_c_plus_ax_plus_by": [0.0, 0.0, 0.0],
+                    "plane_max_residual_mm": 0.0,
+                    "operation_layer": 1,
+                },
+                {
+                    "label": "B",
+                    "plane_z_equals_c_plus_ax_plus_by": [100.0, 0.0, 0.0],
+                    "plane_max_residual_mm": 0.0,
+                    "operation_layer": 1,
+                },
+            ],
+        }
+        fit = fit_adjacent_parts(
+            previous,
+            PartPose(),
+            0.0,
+            following,
+            PartPose(),
+            gap_mm=2.0,
+            allow_common_line=True,
+        )
+        self.assertFalse(fit.common_line)
+        self.assertAlmostEqual(fit.minimum_clearance_mm, 2.0)
+
+
 if __name__ == "__main__":
     unittest.main()

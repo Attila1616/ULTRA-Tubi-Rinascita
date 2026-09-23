@@ -508,6 +508,7 @@ def repair_single_segment_cut_release(
 
     removed_to_retained = {}
     duplicate_audit = []
+    rejected_pairs = []
     disabled_groups = []
 
     for raw_left, raw_right in shared_pairs:
@@ -541,8 +542,8 @@ def repair_single_segment_cut_release(
                 "operation list"
             )
 
-        duplicate_audit.append(
-            _verify_duplicate_pair(
+        try:
+            comparison = _verify_duplicate_pair(
                 left_handle,
                 right_handle,
                 shapes_by_handle=shapes_by_handle,
@@ -550,7 +551,20 @@ def repair_single_segment_cut_release(
                 lite_by_addr=lite_by_addr,
                 tolerance=tolerance,
             )
-        )
+        except ValueError as exc:
+            # A common-line candidate is not automatically a duplicate. If
+            # complete contour/process verification fails, preserve both
+            # operations exactly as they are rather than deleting a real cut.
+            rejected_pairs.append(
+                {
+                    "a": left_handle,
+                    "b": right_handle,
+                    "reason": str(exc),
+                }
+            )
+            continue
+
+        duplicate_audit.append(comparison)
 
         pair = [
             left_handle,
@@ -828,6 +842,9 @@ def repair_single_segment_cut_release(
         ),
         "duplicate_comparisons": (
             duplicate_audit
+        ),
+        "rejected_shared_pairs": (
+            rejected_pairs
         ),
         "disabled_duplicate_groups": (
             disabled_groups
