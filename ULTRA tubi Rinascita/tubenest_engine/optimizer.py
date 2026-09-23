@@ -1151,6 +1151,10 @@ def diagnose_items_dict(
     lines.append(f"Gap: {float(gap_mm):g} mm")
     lines.append(f"Beam normale: {DEFAULT_BEAM_WIDTH}")
     lines.append(f"Tipi candidati per livello: {DEFAULT_MAX_CANDIDATE_TYPES}")
+    lines.append(
+        f"CPU nesting: fino a {nesting_cpu_worker_count()} processi "
+        f"(parallelismo da {PARALLEL_MIN_ITEMS} pezzi)"
+    )
     lines.append(f"Coppie di verghe possibili: {total_pairs}")
     lines.append(
         f"Limite merge corrente: {MERGE_PAIR_ATTEMPT_LIMIT} tentativi, "
