@@ -1,3 +1,4 @@
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -144,8 +145,18 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
                 places=4,
             )
 
-    def test_common_line_is_explicitly_reported_as_unresolved(self):
+    def test_common_line_marks_only_next_incoming_cut_do_not_cut(self):
         source = APP_ROOT / "Round tube Ø30 L1215, first cut 0° layer 1, second cut 45° layer 4.zzx"
+        source_archive = Archive.read(source)
+        source_segment = source_archive.xml("Segments/content.xml").find("TubeSegment")
+        source_refs = list(source_segment.find("Shapes"))
+        source_cut_a = source_segment.get("CutOffA")
+        cut_a_index = next(
+            index
+            for index, ref in enumerate(source_refs)
+            if ref.get("Handle") == source_cut_a
+        )
+
         part = read_tube_parts(source)[0]
         length = float(part.overall_length)
         placements = [
@@ -180,8 +191,35 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
             output = Path(temp_dir) / "flat_common_line.zzx"
             result = export_flat_nested_rod(placements, output)
             self.assertTrue(
-                any("common-line" in warning for warning in result["warnings"])
+                any("do not cut" in warning for warning in result["warnings"])
             )
+
+            archive = Archive.read(output)
+            segment = archive.xml("Segments/content.xml").find("TubeSegment")
+            refs = list(segment.find("Shapes"))
+            shape_xml = {
+                element.get("Handle"): element
+                for element in archive.xml("Shapes/content.xml")
+                if element.tag != "MD5"
+            }
+            shape_records = {
+                record.address: record
+                for record in archive.stream("Shapes").records
+            }
+
+            first_cut_handle = refs[cut_a_index].get("Handle")
+            second_cut_handle = refs[len(source_refs) + cut_a_index].get("Handle")
+            first_record = shape_records[int(shape_xml[first_cut_handle].get("DataAddr"))]
+            second_record = shape_records[int(shape_xml[second_cut_handle].get("DataAddr"))]
+
+            first_shape_block = next(
+                block for block in first_record.blocks if block.name == "Shape"
+            )
+            second_shape_block = next(
+                block for block in second_record.blocks if block.name == "Shape"
+            )
+            self.assertEqual(struct.unpack_from("<I", first_shape_block.payload, 8)[0], 0)
+            self.assertEqual(struct.unpack_from("<I", second_shape_block.payload, 8)[0], 2)
 
 
 if __name__ == "__main__":
