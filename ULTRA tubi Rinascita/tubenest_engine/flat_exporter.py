@@ -369,17 +369,19 @@ def _falling_start_parameter(
     samples_per_curve=256,
     axial_tolerance_mm=1e-5,
 ):
-    """Pick the falling-friendly point requested for angled end cuts.
+    """Pick the falling-friendly start of an angled end contour.
 
-    In final nested coordinates, smaller Z is toward the already-cut/falling
-    piece on the left. The cut should begin at that pointiest axial location.
-    If the minimum-Z locus is an edge, choose its lower machine-Y endpoint so
-    the final ligament releases downward instead of making the falling piece
-    pivot against the tube that remains clamped.
+    Primary rule:
+      choose the contour locus with minimum machine Z, i.e. the side closest
+      to the already-cut/falling stock on the left.
 
-    Primitive endpoints are always candidates, so square/rectangular tangent
-    points are selected exactly. Dense samples cover arbitrary imported round
-    or spline contours whose minimum-Z point may lie inside a primitive.
+    Square/rectangular profiles can have an entire straight face at that same
+    minimum Z. In that case choose the point on the face closest to the
+    cross-section centre (X=0,Y=0). This puts the start in the middle of the
+    straight face instead of at the tangent between the face and corner radius.
+
+    Round profiles normally have a unique minimum-Z point, so the same rule
+    naturally selects the point closest toward the rod origin.
     """
     curves = list(curves or [])
     if not curves:
@@ -387,7 +389,20 @@ def _falling_start_parameter(
 
     candidates = []
     for index, curve in enumerate(curves):
-        candidate_ts = {0.0, 1.0}
+        candidate_ts = {0.0, 0.5, 1.0}
+
+        # For a straight 3D face, include the exact point on the segment that
+        # is closest to the cross-section centre. This avoids relying on a
+        # sampling grid for square/rectangular face centres.
+        if isinstance(curve, Line) and len(curve.start) >= 3:
+            x0, y0 = float(curve.start[0]), float(curve.start[1])
+            dx, dy = float(curve.direction[0]), float(curve.direction[1])
+            denom = dx * dx + dy * dy
+            if denom > 1e-18:
+                centred_t = -(x0 * dx + y0 * dy) / denom
+                if 0.0 <= centred_t <= 1.0:
+                    candidate_ts.add(float(centred_t))
+
         for step in range(1, int(samples_per_curve)):
             candidate_ts.add(step / float(samples_per_curve))
 
@@ -418,18 +433,16 @@ def _falling_start_parameter(
         if row[3] <= minimum_z + axial_tolerance_mm
     ]
 
-    # Minimum Y is the lower end of a minimum-Z edge. Then use |X| and the
-    # composite parameter only as deterministic tie-breakers.
+    # On a flat minimum-Z face, radial distance to (0,0) is smallest at the
+    # face centre. For a round tube the minimum-Z point is normally unique.
     parameter, _x, _y, _z = min(
         pointy_candidates,
         key=lambda row: (
-            row[2],
-            abs(row[1]),
+            row[1] * row[1] + row[2] * row[2],
             row[0],
         ),
     )
     return parameter
-
 
 def _set_falling_friendly_start(shape_record, shape_xml, lite_by_addr):
     curves = _outer_shape_curves(shape_xml, lite_by_addr)
