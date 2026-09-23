@@ -1,6 +1,4 @@
-import base64
 import hashlib
-import io
 import math
 import struct
 import unittest
@@ -23,8 +21,11 @@ from tubenest_engine.cut_release import (
 from tubenest_engine.geometry import Spline, primitives
 
 
-FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
-FIXTURE_PREFIX = "duplicate_cut_20260924.zzx.b64.part"
+FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "Nested_50x50x2_304_2B_locked-1790190392777-ea489ec4fd24f_20260924_005148.zzx"
+)
 FIXTURE_SHA256 = "d9f0a9317cceb31df8e6de0791f2f4fb60a0fcd4ed98d554fff4388468efbac2"
 
 DUPLICATE_PAIRS = [
@@ -39,11 +40,7 @@ ALL_CANDIDATE_PAIRS = DUPLICATE_PAIRS + [INCOMPATIBLE_PAIR]
 
 
 def _fixture_bytes():
-    parts = sorted(FIXTURE_DIR.glob(FIXTURE_PREFIX + "*"))
-    if len(parts) != 7:
-        raise AssertionError(f"Expected 7 regression-fixture chunks, found {len(parts)}")
-    encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
-    raw = base64.b64decode(encoded, validate=True)
+    raw = FIXTURE.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     if digest != FIXTURE_SHA256:
         raise AssertionError(
@@ -53,8 +50,8 @@ def _fixture_bytes():
 
 
 def _fresh_archive():
-    return Archive.read(io.BytesIO(_fixture_bytes()))
-
+    _fixture_bytes()
+    return Archive.read(FIXTURE)
 
 def _shape_maps(archive):
     root = archive.xml("Shapes/content.xml")
@@ -174,7 +171,7 @@ class DuplicateCutFixtureTests(unittest.TestCase):
     def test_fixture_hash_and_archive_are_stable(self):
         raw = _fixture_bytes()
         self.assertEqual(len(raw), 18679)
-        archive = Archive.read(io.BytesIO(raw))
+        archive = Archive.read(FIXTURE)
         archive.validate()
         self.assertEqual(len(_active_layer1_cutoffs(archive)), 16)
 
