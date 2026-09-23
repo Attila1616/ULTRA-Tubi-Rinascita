@@ -314,6 +314,10 @@ def build_marking_records(
             "height_mm": height_mm,
             "face": "+Y",
             "marking_shapes": len(shape_records),
+            "new_shape_handles": [
+                int(element.get("Handle"))
+                for element, _geometry in shape_elements
+            ],
             "new_shape_channels": [MARKING_CHANNEL],
             "start_z": start_z,
             "max_z": max_z,
