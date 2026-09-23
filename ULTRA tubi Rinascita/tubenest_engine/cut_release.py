@@ -48,6 +48,14 @@ def active_layer1(record):
     )
 
 
+def enabled_machining(record):
+    """Enabled machining operation regardless of its preserved channel."""
+    return (
+        shape_channel(record) > 0
+        and not (work_flags(record) & EXCLUSION_WORK_BIT)
+    )
+
+
 def curve_flags(record):
     block = next(
         block for block in record.blocks
@@ -654,7 +662,7 @@ def repair_single_segment_cut_release(
             continue
 
         if (
-            not active_layer1(record)
+            not enabled_machining(record)
             or not (
                 curve_flags(record)
                 & CUTOFF_FLAG
