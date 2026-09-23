@@ -10,7 +10,9 @@ legal axial rotations, then performs a rod-merge pass to reduce stock count.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from concurrent.futures import ProcessPoolExecutor
 import math
+import os
 from typing import Optional
 
 from .fit import (
@@ -29,6 +31,8 @@ DEFAULT_BEAM_WIDTH = 120
 DEFAULT_MAX_CANDIDATE_TYPES = 24
 EXACT_REQUIRE_ALL_MAX_PIECES = 8
 MERGE_PAIR_ATTEMPT_LIMIT = 160
+PARALLEL_MIN_ITEMS = 20
+MAX_CPU_WORKERS = 12
 
 _PAIRWISE_FIT_CACHE = {}
 _PAIRWISE_FIT_CACHE_LIMIT = 50000
