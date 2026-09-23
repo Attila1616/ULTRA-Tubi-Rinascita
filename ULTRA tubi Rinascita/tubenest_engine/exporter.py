@@ -402,6 +402,34 @@ def _patch_portion_bounds(record, profile, used_span):
     return True
 
 
+def _remap_viewport_handles(entries, reserved_handles):
+    """Move VPort object handles outside generated segment/shape handle space.
+
+    VPort handles are global object handles in native ZZX. Reusing one for a
+    Shape makes TubePro resolve the wrong object type and can crash while
+    opening the document.
+    """
+    name = "Viewports/content.xml"
+    if name not in entries:
+        return set()
+
+    root = ET.fromstring(entries[name])
+    used = set(int(value) for value in reserved_handles)
+    remapped = set()
+    next_handle = max(used, default=1000) + 1
+
+    for viewport in root.findall(".//VPort"):
+        while next_handle in used:
+            next_handle += 1
+        viewport.set("Handle", str(next_handle))
+        used.add(next_handle)
+        remapped.add(next_handle)
+        next_handle += 1
+
+    entries[name] = xml_bytes(root)
+    return remapped
+
+
 def _max_explicit_xml_handle(entries):
     maximum = 0
     for name, data in entries.items():
@@ -762,12 +790,15 @@ def export_nested_rod(
     doc_xml.set("DataAddr", str(portion_record.address))
     pack_xml.set("DataAddr", str(pack_record.address))
 
+    # Viewport objects also live in the document-wide handle space. The
+    # original single-part viewport handle can fall inside the generated
+    # segment/shape range, so move it out before calculating HandleSeed.
+    viewport_handles = _remap_viewport_handles(entries, used_handles)
+    used_handles.update(viewport_handles)
+
     root_content = ET.fromstring(entries["content.xml"])
     header = root_content.find("Header")
     if header is not None:
-        # Retained Viewport/root handles participate in the document-wide
-        # handle space. HandleSeed must stay above all of them.
-        entries["content.xml"] = xml_bytes(root_content)
         maximum_handle = max(
             max(used_handles, default=1000),
             _max_explicit_xml_handle(entries),
