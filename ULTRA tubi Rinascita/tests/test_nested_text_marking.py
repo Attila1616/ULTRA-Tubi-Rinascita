@@ -17,8 +17,8 @@ class NestedTextMarkingTests(unittest.TestCase):
         config = {"da_fare_path": r"C:\DA FARE"}
         segment = {
             "filePath": (
-                r"C:\DA FARE\05 PROD 219\TD1901A00438\TT\"
-                r"pezzo 100x100x3 aisi 304 L1110 2pz.zzx"
+                "C:/DA FARE/05 PROD 219/TD1901A00438/TT/"
+                "pezzo 100x100x3 aisi 304 L1110 2pz.zzx"
             ),
             "fileName": "pezzo 100x100x3 aisi 304 L1110 2pz.zzx",
             "mainFolder": "05 PROD 219",
@@ -32,8 +32,8 @@ class NestedTextMarkingTests(unittest.TestCase):
     def test_ta_code_and_decimal_length_are_supported(self):
         segment = {
             "filePath": (
-                r"C:\DA FARE\07 PROD 310\TA1234B56789\"
-                r"part L1250.5 1pz.zzx"
+                "C:/DA FARE/07 PROD 310/TA1234B56789/"
+                "part L1250.5 1pz.zzx"
             ),
             "fileName": "part L1250.5 1pz.zzx",
             "mainFolder": "07 PROD 310",
@@ -46,7 +46,7 @@ class NestedTextMarkingTests(unittest.TestCase):
 
     def test_missing_td_is_rejected(self):
         segment = {
-            "filePath": r"C:\DA FARE\05 PROD 219\TT\part L500 1pz.zzx",
+            "filePath": "C:/DA FARE/05 PROD 219/TT/part L500 1pz.zzx",
             "fileName": "part L500 1pz.zzx",
             "mainFolder": "05 PROD 219",
             "length": 500,
