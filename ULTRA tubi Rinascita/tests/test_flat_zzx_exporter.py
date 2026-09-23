@@ -6,6 +6,7 @@ from pathlib import Path
 from tubenest_engine.archive import Archive
 from tubenest_engine.domain import read_tube_parts
 from tubenest_engine.flat_exporter import export_flat_nested_rod
+from tubenest_engine.reader import read_zzx_cached
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -207,19 +208,111 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
                 for record in archive.stream("Shapes").records
             }
 
-            first_cut_handle = refs[cut_a_index].get("Handle")
-            second_cut_handle = refs[len(source_refs) + cut_a_index].get("Handle")
-            first_record = shape_records[int(shape_xml[first_cut_handle].get("DataAddr"))]
-            second_record = shape_records[int(shape_xml[second_cut_handle].get("DataAddr"))]
+            machining_flags = []
+            for ref in refs:
+                record = shape_records[int(shape_xml[ref.get("Handle")].get("DataAddr"))]
+                shape_block = next(
+                    block for block in record.blocks if block.name == "Shape"
+                )
+                channel = struct.unpack_from("<I", shape_block.payload, 0)[0]
+                if channel <= 0:
+                    continue
+                machining_flags.append(
+                    struct.unpack_from("<I", shape_block.payload, 8)[0]
+                )
 
-            first_shape_block = next(
-                block for block in first_record.blocks if block.name == "Shape"
+            self.assertEqual(machining_flags.count(2), 1)
+            self.assertGreaterEqual(machining_flags.count(0), 1)
+
+
+    def test_machining_shapes_are_ordered_left_to_right_after_reversal(self):
+        source = APP_ROOT / "Round tube Ø30 L1215, first cut 0° layer 1, second cut 45° layer 4.zzx"
+        part = read_tube_parts(source)[0]
+        length = float(part.overall_length)
+        placements = [
+            {
+                "instanceKey": "round::1",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "nestPlacement": {
+                    "z_start": 0.0,
+                    "z_end": length,
+                    "axial_rotation_degrees": 0.0,
+                    "reversed_end_for_end": True,
+                    "common_line_before": False,
+                },
+            },
+            {
+                "instanceKey": "round::2",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "nestPlacement": {
+                    "z_start": length + 2.0,
+                    "z_end": 2.0 * length + 2.0,
+                    "axial_rotation_degrees": 180.0,
+                    "reversed_end_for_end": False,
+                    "common_line_before": False,
+                },
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "ordered.zzx"
+            export_flat_nested_rod(placements, output)
+            document = read_zzx_cached(output)
+            machining_centers = []
+            for shape in document.segments[0].shapes:
+                if shape.operation_layer is None or not shape.sampled_bounds:
+                    continue
+                machining_centers.append(
+                    (
+                        float(shape.sampled_bounds[0][2])
+                        + float(shape.sampled_bounds[1][2])
+                    )
+                    / 2.0
+                )
+
+            self.assertEqual(
+                machining_centers,
+                sorted(machining_centers),
             )
-            second_shape_block = next(
-                block for block in second_record.blocks if block.name == "Shape"
+
+    def test_angled_end_cut_start_is_machine_top_after_pose(self):
+        source = APP_ROOT / "Round tube Ø30 L1215, first cut 0° layer 1, second cut 45° layer 4.zzx"
+        part = read_tube_parts(source)[0]
+        length = float(part.overall_length)
+        placements = [
+            {
+                "instanceKey": "round::1",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "nestPlacement": {
+                    "z_start": 0.0,
+                    "z_end": length,
+                    "axial_rotation_degrees": 270.0,
+                    "reversed_end_for_end": False,
+                    "common_line_before": False,
+                },
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "top_start.zzx"
+            export_flat_nested_rod(placements, output)
+            document = read_zzx_cached(output)
+            angled = next(
+                end
+                for end in document.segments[0].end_cuts
+                if float(end.cut_angle_from_perpendicular_degrees or 0.0) > 1.0
             )
-            self.assertEqual(struct.unpack_from("<I", first_shape_block.payload, 8)[0], 0)
-            self.assertEqual(struct.unpack_from("<I", second_shape_block.payload, 8)[0], 2)
+            self.assertIsNotNone(angled.start_point)
+            self.assertIsNotNone(angled.sampled_bounds)
+            self.assertAlmostEqual(
+                float(angled.start_point[1]),
+                float(angled.sampled_bounds[1][1]),
+                delta=0.25,
+            )
 
 
 if __name__ == "__main__":
