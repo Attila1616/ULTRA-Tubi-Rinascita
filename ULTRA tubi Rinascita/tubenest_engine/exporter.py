@@ -345,7 +345,7 @@ def _pack_template(archive):
     return pack, record
 
 
-def _patch_portion_bounds(record, profile, rod_length):
+def _patch_portion_bounds(record, profile, used_span):
     block = next(
         (block for block in record.blocks if block.name == "DocPortion" and len(block.payload) >= 60),
         None,
@@ -360,13 +360,35 @@ def _patch_portion_bounds(record, profile, rod_length):
         hx = float(profile.outside_width or 0.0) / 2.0
         hy = float(profile.outside_height or profile.outside_width or 0.0) / 2.0
 
-    extent = max(hx, hy)
+    used_span = float(used_span)
+    if not math.isfinite(used_span) or used_span <= 0:
+        raise ValueError("used_span must be finite and positive")
+
     payload = bytearray(block.payload)
-    payload[4:32] = vector((-extent, -extent, 0.0))
-    payload[32:60] = vector((extent, extent, float(rod_length)))
+    payload[4:32] = vector((-hx, -hy, 0.0))
+    payload[32:60] = vector((hx, hy, used_span))
     block.payload = bytes(payload)
     return True
 
+
+def _max_explicit_xml_handle(entries):
+    maximum = 0
+    for name, data in entries.items():
+        if not name.endswith("content.xml"):
+            continue
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError:
+            continue
+        for element in root.iter():
+            value = element.get("Handle")
+            if value is None:
+                continue
+            try:
+                maximum = max(maximum, int(value))
+            except (TypeError, ValueError):
+                pass
+    return maximum
 
 def _update_metadata(entries, title):
     now = datetime.now(timezone.utc)
