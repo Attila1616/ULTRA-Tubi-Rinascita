@@ -22,7 +22,13 @@ from .bcmp import FormatError, read_vector, vector
 from .domain import read_tube_parts
 from .geometry import Line, Polyline, Spline, primitives
 from .zzx_merge import nest_singletons
-from .text_marking import build_marking_records, validate_romans_font
+from .text_marking import (
+    MarkingFitError,
+    build_marking_records,
+    build_round_marking_records,
+    marking_layout_candidates,
+    validate_romans_font,
+)
 
 
 WRITABLE_FILE_VERSION = "65542"
@@ -683,14 +689,22 @@ def _flat_transform(
             raise ValueError("Text marking height must be between 1 and 10 mm")
 
         stock_profile = resolved[0].part.profile
-        if stock_profile.kind not in {"Square", "Rect"}:
+        marking_profile_kind = str(stock_profile.kind or "")
+        if marking_profile_kind in {"Square", "Rect"}:
+            marking_face_width = float(stock_profile.outside_width or 0.0)
+            marking_face_y = float(stock_profile.outside_height or 0.0) / 2.0
+            marking_corner_radius = float(stock_profile.corner_radius or 0.0)
+            if marking_face_width <= 0.0 or marking_face_y <= 0.0:
+                raise ValueError("Invalid flat tube dimensions for TEXT marking")
+        elif marking_profile_kind == "Circle":
+            marking_diameter = float(stock_profile.outside_diameter or 0.0)
+            if not math.isfinite(marking_diameter) or marking_diameter <= 0.0:
+                raise ValueError("Invalid round tube diameter for TEXT marking")
+            marking_radius = marking_diameter / 2.0
+        else:
             raise ValueError(
-                "TEXT marking is currently validated only for square/"
-                "rectangular tubes"
+                f"TEXT marking is not supported for profile {marking_profile_kind!r}"
             )
-        marking_face_width = float(stock_profile.outside_width or 0.0)
-        marking_face_y = float(stock_profile.outside_height or 0.0) / 2.0
-        marking_corner_radius = float(stock_profile.corner_radius or 0.0)
 
     for segment, item in zip(segments, resolved):
         references = list(segment.find("Shapes") or [])
@@ -824,61 +838,115 @@ def _flat_transform(
                     f"{item.file_name}: incoming cut record is missing"
                 )
 
-            addition = build_marking_records(
-                source_shape_record=source_marking_record,
-                font_path=text_marking_font_path,
-                text=item.marking_text,
-                height_mm=text_marking_height_mm,
-                start_z=marking_start_z,
-                face_width=marking_face_width,
-                face_y=marking_face_y,
-                corner_radius=marking_corner_radius,
-                max_z=marking_max_z,
-                first_handle=next_marking_handle,
-            )
-            next_marking_handle = addition["next_handle"]
+            layouts = marking_layout_candidates(item.marking_text)
+            addition = None
+            fit_errors = []
+            selected_layout_index = None
 
-            segment_shapes = segment.find("Shapes")
-            if segment_shapes is None:
-                raise FormatError(
-                    f"{item.file_name}: TubeSegment has no Shapes list"
+            for layout_index, layout_lines in enumerate(layouts):
+                try:
+                    if marking_profile_kind in {"Square", "Rect"}:
+                        addition = build_marking_records(
+                            source_shape_record=source_marking_record,
+                            font_path=text_marking_font_path,
+                            lines=layout_lines,
+                            height_mm=text_marking_height_mm,
+                            start_z=marking_start_z,
+                            face_width=marking_face_width,
+                            face_y=marking_face_y,
+                            corner_radius=marking_corner_radius,
+                            max_z=marking_max_z,
+                            first_handle=next_marking_handle,
+                        )
+                    else:
+                        addition = build_round_marking_records(
+                            source_shape_record=source_marking_record,
+                            font_path=text_marking_font_path,
+                            lines=layout_lines,
+                            height_mm=text_marking_height_mm,
+                            start_z=marking_start_z,
+                            radius=marking_radius,
+                            max_z=marking_max_z,
+                            first_handle=next_marking_handle,
+                        )
+                    selected_layout_index = layout_index
+                    break
+                except MarkingFitError as exc:
+                    fit_errors.append(str(exc))
+
+            if addition is None:
+                reason = (
+                    fit_errors[-1]
+                    if fit_errors
+                    else "no safe marking layout was available"
                 )
+                warnings.append(
+                    f"{item.file_name}: TEXT marking omitted; none of the "
+                    f"{len(layouts)} label layouts fits safely. {reason}"
+                )
+                marking_reports.append(
+                    {
+                        "status": "skipped",
+                        "instanceKey": item.instance_key,
+                        "fileName": item.file_name,
+                        "profileKind": marking_profile_kind,
+                        "originalText": item.marking_text,
+                        "attemptedLayouts": layouts,
+                        "fitErrors": fit_errors,
+                        "nearCutZBounds": [near_min_z, near_max_z],
+                        "farCutZBounds": [far_min_z, far_max_z],
+                    }
+                )
+            else:
+                next_marking_handle = addition["next_handle"]
 
-            for (
-                shape_record,
-                geometry_record,
-                (shape_element, geometry_element),
-                segment_ref,
-            ) in zip(
-                addition["shape_records"],
-                addition["geometry_records"],
-                addition["shape_elements"],
-                addition["segment_refs"],
-            ):
-                shapes_stream.records.append(shape_record)
-                lite_stream.records.append(geometry_record)
-                shapes_root.append(shape_element)
-                segment_shapes.append(segment_ref)
-                shapes_by_handle[shape_element.get("Handle")] = shape_element
-                marking_pending.append(
-                    (
-                        shape_element,
-                        geometry_element,
-                        shape_record,
-                        geometry_record,
+                segment_shapes = segment.find("Shapes")
+                if segment_shapes is None:
+                    raise FormatError(
+                        f"{item.file_name}: TubeSegment has no Shapes list"
                     )
-                )
 
-            report = dict(addition["report"])
-            report.update(
-                {
-                    "instanceKey": item.instance_key,
-                    "fileName": item.file_name,
-                    "nearCutZBounds": [near_min_z, near_max_z],
-                    "farCutZBounds": [far_min_z, far_max_z],
-                }
-            )
-            marking_reports.append(report)
+                for (
+                    shape_record,
+                    geometry_record,
+                    (shape_element, geometry_element),
+                    segment_ref,
+                ) in zip(
+                    addition["shape_records"],
+                    addition["geometry_records"],
+                    addition["shape_elements"],
+                    addition["segment_refs"],
+                ):
+                    shapes_stream.records.append(shape_record)
+                    lite_stream.records.append(geometry_record)
+                    shapes_root.append(shape_element)
+                    segment_shapes.append(segment_ref)
+                    shapes_by_handle[shape_element.get("Handle")] = shape_element
+                    marking_pending.append(
+                        (
+                            shape_element,
+                            geometry_element,
+                            shape_record,
+                            geometry_record,
+                        )
+                    )
+
+                report = dict(addition["report"])
+                report.update(
+                    {
+                        "status": "generated",
+                        "instanceKey": item.instance_key,
+                        "fileName": item.file_name,
+                        "profileKind": marking_profile_kind,
+                        "originalText": item.marking_text,
+                        "layoutAttempt": selected_layout_index + 1,
+                        "fallbackUsed": bool(selected_layout_index),
+                        "fitErrorsBeforeSuccess": fit_errors,
+                        "nearCutZBounds": [near_min_z, near_max_z],
+                        "farCutZBounds": [far_min_z, far_max_z],
+                    }
+                )
+                marking_reports.append(report)
 
         placement_audit.append(
             {
