@@ -1290,6 +1290,19 @@ def _format_marking_length(value, file_name=""):
     return f"{number:.3f}".rstrip("0").rstrip(".")
 
 
+def _resolve_nested_marking_font_path():
+    candidates = [
+        os.path.join(RESOURCE_ROOT, "assets", "fonts", "romans.shx"),
+        os.path.join(VARIABLES_ROOT, "romans.shx"),
+        r"C:\Program Files (x86)\Friendess\CypCut\Fonts\romans.shx",
+        r"C:\Program Files\Friendess\CypCut\Fonts\romans.shx",
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
 def _build_nested_marking_text(segment, config):
     file_path = str(segment.get("filePath") or "").strip()
     file_name = str(segment.get("fileName") or os.path.basename(file_path))
@@ -1355,18 +1368,14 @@ def export_locked_rod_zzx(payload):
 
         text_marking_font_path = None
         if text_marking_enabled:
-            text_marking_font_path = os.path.join(
-                RESOURCE_ROOT,
-                "assets",
-                "fonts",
-                "romans.shx",
-            )
-            if not os.path.isfile(text_marking_font_path):
+            text_marking_font_path = _resolve_nested_marking_font_path()
+            if not text_marking_font_path:
                 return {
                     "status": "error",
                     "message": (
-                        "Font romans.shx per la marcatura TEXT non trovato: "
-                        f"{text_marking_font_path}"
+                        "Font romans.shx per la marcatura TEXT non trovato. "
+                        "Percorsi controllati: risorse ULTRA, Variables, "
+                        "Friendess CypCut Fonts."
                     ),
                 }
             for segment in segments:
