@@ -620,6 +620,98 @@ def _build_initial_rods(items, rod_length, dead_zone_mm, gap_mm):
     return rods
 
 
+_PROCESS_ITEMS = None
+_PROCESS_ROD_LENGTH = None
+_PROCESS_DEAD_ZONE_MM = None
+_PROCESS_GAP_MM = None
+
+
+def nesting_cpu_worker_count():
+    """Use roughly the physical-core count on SMT desktop CPUs."""
+    logical = max(1, int(os.cpu_count() or 1))
+    if logical <= 2:
+        return 1
+    return max(2, min(MAX_CPU_WORKERS, logical // 2))
+
+
+def _init_search_worker(items, rod_length, dead_zone_mm, gap_mm):
+    global _PROCESS_ITEMS
+    global _PROCESS_ROD_LENGTH
+    global _PROCESS_DEAD_ZONE_MM
+    global _PROCESS_GAP_MM
+    _PROCESS_ITEMS = items
+    _PROCESS_ROD_LENGTH = float(rod_length)
+    _PROCESS_DEAD_ZONE_MM = float(dead_zone_mm)
+    _PROCESS_GAP_MM = float(gap_mm)
+
+
+def _search_mask_worker(task):
+    mask, beam_width, max_candidate_types = task
+    return _search_single_rod(
+        _PROCESS_ITEMS,
+        allowed_mask=int(mask),
+        rod_length=_PROCESS_ROD_LENGTH,
+        dead_zone_mm=_PROCESS_DEAD_ZONE_MM,
+        gap_mm=_PROCESS_GAP_MM,
+        require_all=True,
+        beam_width=int(beam_width),
+        max_candidate_types=int(max_candidate_types),
+    )
+
+
+def _parallel_search_masks(
+    items,
+    tasks,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    tasks = list(tasks)
+    workers = nesting_cpu_worker_count()
+    if (
+        workers <= 1
+        or len(items) < PARALLEL_MIN_ITEMS
+        or len(tasks) < 2
+    ):
+        return [
+            _search_single_rod(
+                items,
+                allowed_mask=int(mask),
+                rod_length=rod_length,
+                dead_zone_mm=dead_zone_mm,
+                gap_mm=gap_mm,
+                require_all=True,
+                beam_width=int(beam_width),
+                max_candidate_types=int(max_types),
+            )
+            for mask, beam_width, max_types in tasks
+        ]
+
+    try:
+        with ProcessPoolExecutor(
+            max_workers=min(workers, len(tasks)),
+            initializer=_init_search_worker,
+            initargs=(items, rod_length, dead_zone_mm, gap_mm),
+        ) as executor:
+            return list(executor.map(_search_mask_worker, tasks, chunksize=1))
+    except Exception:
+        # Embedded/frozen Python can restrict multiprocessing. Never sacrifice
+        # correctness: transparently fall back to the serial search.
+        return [
+            _search_single_rod(
+                items,
+                allowed_mask=int(mask),
+                rod_length=rod_length,
+                dead_zone_mm=dead_zone_mm,
+                gap_mm=gap_mm,
+                require_all=True,
+                beam_width=int(beam_width),
+                max_candidate_types=int(max_types),
+            )
+            for mask, beam_width, max_types in tasks
+        ]
+
+
 def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
     # Test the most promising rod pairs first instead of raw rod-index order.
     # This prevents a short orphan rod near the end of the list from being
