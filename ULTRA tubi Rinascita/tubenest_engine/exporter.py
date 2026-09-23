@@ -73,7 +73,7 @@ def _set_object_handle(record, handle):
     block.payload = bytes(payload)
 
 
-def _set_segment_transform(record, part, placement):
+def _read_segment_frame(record):
     block = next(
         (block for block in record.blocks if block.name == "TubeSegment"),
         None,
@@ -81,23 +81,67 @@ def _set_segment_transform(record, part, placement):
     if block is None or len(block.payload) < 120:
         raise FormatError("Unsupported TubeSegment transform payload")
 
+    from .bcmp import read_vector
+
+    return (
+        tuple(read_vector(block.payload, 8)),
+        tuple(read_vector(block.payload, 36)),
+        tuple(read_vector(block.payload, 64)),
+        tuple(read_vector(block.payload, 92)),
+    )
+
+
+def _linear_combination(basis, coefficients):
+    return tuple(
+        sum(float(basis[column][row]) * float(coefficients[column]) for column in range(3))
+        for row in range(3)
+    )
+
+
+def _set_segment_transform(record, part, placement):
+    """Compose only the physical pose onto the source-local segment frame.
+
+    Native TubesT multi-piece ZZX keeps every segment in its source-local
+    axial coordinate system. PackSegments + WorkSeq performs the axial packing.
+    Therefore z_start/z_end MUST NOT be written into the TubeSegment
+    translation.
+    """
+    block = next(
+        (block for block in record.blocks if block.name == "TubeSegment"),
+        None,
+    )
+    if block is None or len(block.payload) < 120:
+        raise FormatError("Unsupported TubeSegment transform payload")
+
+    source_x, source_y, source_z, source_origin = _read_segment_frame(record)
+
     angle = math.radians(float(placement.get("axial_rotation_degrees") or 0.0))
     co, si = math.cos(angle), math.sin(angle)
     reversed_end = bool(placement.get("reversed_end_for_end"))
-    z_start = float(placement.get("z_start") or 0.0)
 
     if reversed_end:
-        # Proper 180-degree end-for-end rotation followed by the requested
-        # axial rotation. Source local coordinates are (X,Y,Z), with Z axial.
-        basis_x = (-co, -si, 0.0)
-        basis_y = (-si, co, 0.0)
-        basis_z = (0.0, 0.0, -1.0)
-        origin = (0.0, 0.0, z_start + float(part.axial_max))
+        pose_x = (-co, -si, 0.0)
+        pose_y = (-si, co, 0.0)
+        pose_z = (0.0, 0.0, -1.0)
+        # Preserve the original raw axial interval while swapping its ends:
+        # z' = axial_min + axial_max - z.
+        pose_translation = (
+            0.0,
+            0.0,
+            float(part.axial_min) + float(part.axial_max),
+        )
     else:
-        basis_x = (co, si, 0.0)
-        basis_y = (-si, co, 0.0)
-        basis_z = (0.0, 0.0, 1.0)
-        origin = (0.0, 0.0, z_start - float(part.axial_min))
+        pose_x = (co, si, 0.0)
+        pose_y = (-si, co, 0.0)
+        pose_z = (0.0, 0.0, 1.0)
+        pose_translation = (0.0, 0.0, 0.0)
+
+    basis = (source_x, source_y, source_z)
+    basis_x = _linear_combination(basis, pose_x)
+    basis_y = _linear_combination(basis, pose_y)
+    basis_z = _linear_combination(basis, pose_z)
+    translated = _linear_combination(basis, pose_translation)
+    origin = tuple(float(source_origin[i]) + translated[i] for i in range(3))
 
     payload = bytearray(block.payload)
     for offset, values in (
@@ -109,6 +153,20 @@ def _set_segment_transform(record, part, placement):
         payload[offset:offset + 28] = vector(values)
     block.payload = bytes(payload)
 
+
+def _set_pack_gap(record, gap_mm):
+    block = next(
+        (block for block in record.blocks if block.name == "TubeSegments"),
+        None,
+    )
+    if block is None or len(block.payload) < 16:
+        raise FormatError("Unsupported PackSegments payload")
+    gap_mm = float(gap_mm)
+    if not math.isfinite(gap_mm) or gap_mm < 0:
+        raise ValueError("gap_mm must be finite and non-negative")
+    payload = bytearray(block.payload)
+    struct.pack_into("<d", payload, 0, gap_mm)
+    block.payload = bytes(payload)
 
 def _set_common_line_flag(shape_record):
     block = next(
