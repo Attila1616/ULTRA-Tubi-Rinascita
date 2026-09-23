@@ -1244,6 +1244,82 @@ def debug_nesting_group(group, rods, rod_length=6000, focus_rod_number=None):
         }
 
 
+_TEXT_TD_RE = re.compile(r"(?i)(T[DA]\d{4}[A-Z]\d{5})")
+
+
+def _clean_marking_prod_folder(value):
+    name = re.sub(r"\s+", " ", str(value or "").strip())
+    if not name:
+        return ""
+    # Leading 01..12 is only the shipping month in the user's PROD folders.
+    name = re.sub(
+        r"^(?:0[1-9]|1[0-2])(?=(?:\s|[-_.]|PROD\b))[\s._-]*",
+        "",
+        name,
+        flags=re.IGNORECASE,
+    ).strip()
+    return name
+
+
+def _find_marking_td_code(file_path):
+    parts = os.path.normpath(str(file_path or "")).split(os.path.sep)
+    for part in reversed(parts[:-1]):
+        match = _TEXT_TD_RE.search(part)
+        if match:
+            return match.group(1).upper()
+    return ""
+
+
+def _format_marking_length(value, file_name=""):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        match = re.search(
+            r"(?i)\bL(\d+(?:[.,]\d+)?)",
+            str(file_name or ""),
+        )
+        if not match:
+            return ""
+        number = float(match.group(1).replace(",", "."))
+
+    if not math.isfinite(number) or number <= 0:
+        return ""
+    if abs(number - round(number)) <= 1e-6:
+        return str(int(round(number)))
+    return f"{number:.3f}".rstrip("0").rstrip(".")
+
+
+def _build_nested_marking_text(segment, config):
+    file_path = str(segment.get("filePath") or "").strip()
+    file_name = str(segment.get("fileName") or os.path.basename(file_path))
+
+    prod = _clean_marking_prod_folder(segment.get("mainFolder"))
+    if not prod:
+        da_fare = str((config or {}).get("da_fare_path") or "").strip()
+        if file_path and da_fare:
+            prod = _clean_marking_prod_folder(
+                get_product_folder_name(file_path, da_fare)
+            )
+
+    td_code = _find_marking_td_code(file_path)
+    length = _format_marking_length(segment.get("length"), file_name)
+
+    missing = []
+    if not prod:
+        missing.append("PROD")
+    if not td_code:
+        missing.append("TD/TA")
+    if not length:
+        missing.append("lunghezza")
+    if missing:
+        raise ValueError(
+            f"{file_name}: impossibile creare la marcatura testo; "
+            f"manca {', '.join(missing)}."
+        )
+
+    return f"{prod}  |  {td_code}  | L{length}"
+
+
 def export_locked_rod_zzx(payload):
     """Export one locked UI rod as a structurally validated multi-segment ZZX."""
     try:
@@ -1255,9 +1331,48 @@ def export_locked_rod_zzx(payload):
                 "message": "Imposta prima la cartella 'ZZX verghe annidate' nelle Impostazioni.",
             }
 
-        segments = list((payload or {}).get("segments") or [])
+        segments = [
+            dict(segment)
+            for segment in ((payload or {}).get("segments") or [])
+        ]
         if not segments:
             return {"status": "error", "message": "La verga bloccata non contiene pezzi."}
+
+        text_marking_enabled = bool(
+            config.get("nested_text_marking_enabled", False)
+        )
+        try:
+            text_marking_height_mm = float(
+                config.get("nested_text_marking_height_mm", 5.0)
+            )
+        except (TypeError, ValueError):
+            text_marking_height_mm = 5.0
+        text_marking_height_mm = min(
+            10.0,
+            max(1.0, text_marking_height_mm),
+        )
+
+        text_marking_font_path = None
+        if text_marking_enabled:
+            text_marking_font_path = os.path.join(
+                RESOURCE_ROOT,
+                "assets",
+                "fonts",
+                "romans.shx",
+            )
+            if not os.path.isfile(text_marking_font_path):
+                return {
+                    "status": "error",
+                    "message": (
+                        "Font romans.shx per la marcatura TEXT non trovato: "
+                        f"{text_marking_font_path}"
+                    ),
+                }
+            for segment in segments:
+                segment["markingText"] = _build_nested_marking_text(
+                    segment,
+                    config,
+                )
 
         try:
             gap_mm = max(0.0, float(config.get("nesting_gap_mm", 2.0)))
@@ -1271,6 +1386,9 @@ def export_locked_rod_zzx(payload):
             rod_id=str((payload or {}).get("rodId") or "rod"),
             rod_length=float((payload or {}).get("rodLength") or 6000.0),
             gap_mm=gap_mm,
+            text_marking_enabled=text_marking_enabled,
+            text_marking_height_mm=text_marking_height_mm,
+            text_marking_font_path=text_marking_font_path,
         )
         return {
             "status": "success",
