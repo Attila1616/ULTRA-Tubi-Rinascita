@@ -713,9 +713,8 @@ def _parallel_search_masks(
 
 
 def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
-    # Test the most promising rod pairs first instead of raw rod-index order.
-    # This prevents a short orphan rod near the end of the list from being
-    # skipped just because the group has many earlier rod combinations.
+    # Test the most promising rod pairs first. On large jobs, independent pair
+    # searches from the current round are distributed across CPU processes.
     attempts = 0
 
     while attempts < MERGE_PAIR_ATTEMPT_LIMIT:
@@ -733,29 +732,35 @@ def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
                 ))
         pair_candidates.sort()
 
-        best_merge = None
+        remaining_budget = MERGE_PAIR_ATTEMPT_LIMIT - attempts
+        selected = []
         for _combined_used, _shortest, union_nominal, i, j in pair_candidates:
-            if attempts >= MERGE_PAIR_ATTEMPT_LIMIT:
+            if len(selected) >= remaining_budget:
                 break
-            attempts += 1
-
             if union_nominal > float(rod_length) + 3000.0:
                 continue
+            selected.append((i, j, rods[i].used_mask | rods[j].used_mask))
 
-            union_mask = rods[i].used_mask | rods[j].used_mask
-            merged = _search_single_rod(
-                items,
-                allowed_mask=union_mask,
-                rod_length=rod_length,
-                dead_zone_mm=dead_zone_mm,
-                gap_mm=gap_mm,
-                require_all=True,
-                beam_width=max(DEFAULT_BEAM_WIDTH * 2, 220),
-                max_candidate_types=100,
-            )
+        if not selected:
+            break
+
+        attempts += len(selected)
+        tasks = [
+            (mask, max(DEFAULT_BEAM_WIDTH * 2, 220), 100)
+            for _i, _j, mask in selected
+        ]
+        merged_states = _parallel_search_masks(
+            items,
+            tasks,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+        )
+
+        best_merge = None
+        for (i, j, _mask), merged in zip(selected, merged_states):
             if merged is None:
                 continue
-
             key = (
                 round(merged.used_span, 6),
                 -merged.common_lines,
@@ -778,20 +783,24 @@ def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
     return rods
 
 def _refine_rods(items, rods, rod_length, dead_zone_mm, gap_mm):
-    result = []
-    for rod in rods:
-        refined = _search_single_rod(
-            items,
-            allowed_mask=rod.used_mask,
-            rod_length=rod_length,
-            dead_zone_mm=dead_zone_mm,
-            gap_mm=gap_mm,
-            require_all=True,
-            beam_width=max(DEFAULT_BEAM_WIDTH * 2, 220),
-            max_candidate_types=40,
-        )
-        result.append(refined or rod)
-    return result
+    if not rods:
+        return []
+
+    tasks = [
+        (rod.used_mask, max(DEFAULT_BEAM_WIDTH * 2, 220), 40)
+        for rod in rods
+    ]
+    refined_states = _parallel_search_masks(
+        items,
+        tasks,
+        rod_length=rod_length,
+        dead_zone_mm=dead_zone_mm,
+        gap_mm=gap_mm,
+    )
+    return [
+        refined or original
+        for original, refined in zip(rods, refined_states)
+    ]
 
 
 def _posed_end_dict(end):
