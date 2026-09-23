@@ -1,6 +1,7 @@
 import webview
 import backend_logic as logic
 import os
+import multiprocessing
 import re
 import traceback
 import threading
@@ -542,6 +543,7 @@ class Api:
         return logic.search_tube_inventory_by_type(tube_type, self.da_fare_path)
 
 if __name__ == '__main__':
+    multiprocessing.freeze_support()
     api = Api()
     window = webview.create_window(
         'Tubi Nesting Manager',
