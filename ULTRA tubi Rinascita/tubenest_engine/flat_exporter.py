@@ -297,6 +297,30 @@ def _transform_geometry_record(record, item, base_rotation, rod_shift):
             )
 
 
+def _set_do_not_cut_flag(shape_record):
+    """Apply the exact no-cut marker observed in the supplied TubesT sample.
+
+    Sample:
+      ordinary cut Shape block: <III> = (1, 0, 0)
+      "do not cut" Shape block: <III> = (1, 0, 2)
+
+    Keep the machining channel untouched and change only the observed third
+    uint32 field. Do not generalize this marker to unrelated shapes.
+    """
+    block = next(
+        (
+            block for block in shape_record.blocks
+            if block.name == "Shape" and len(block.payload) >= 12
+        ),
+        None,
+    )
+    if block is None:
+        raise FormatError("Cut Shape record has no writable Shape block")
+    payload = bytearray(block.payload)
+    struct.pack_into("<I", payload, 8, 2)
+    block.payload = bytes(payload)
+
+
 def _transform_shape_record(record, item, base_rotation):
     # Curve normals are directions: rotate/reverse them, never translate them.
     curve_block = next(
@@ -421,10 +445,21 @@ def _flat_transform(archive, resolved, rod_length):
         last_far_handle = far_handle
 
         if item.placement.get("common_line_before"):
+            near_xml = shapes_by_handle.get(str(near_handle))
+            if near_xml is None:
+                raise FormatError(
+                    f"Incoming common-line cut Shape {near_handle} is missing"
+                )
+            near_record = shape_record_by_addr.get(int(near_xml.get("DataAddr")))
+            if near_record is None:
+                raise FormatError(
+                    f"Incoming common-line cut record {near_handle} is missing"
+                )
+            _set_do_not_cut_flag(near_record)
             warnings.append(
-                f"{item.file_name}: common-line boundary is exported as "
-                "coincident ordinary source contours; native common-line cutting "
-                "is not yet serialized by the verified flat method."
+                f"{item.file_name}: incoming co-edge cut {near_handle} marked "
+                "'do not cut' using the observed TubesT Shape flag; the previous "
+                "piece's boundary cut remains active."
             )
 
         placement_audit.append(
