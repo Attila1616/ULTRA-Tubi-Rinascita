@@ -151,8 +151,11 @@ class Archive:
                 obj=next((b for b in rec.blocks if b.name=='Object' and len(b.payload)>=4),None)
                 if obj is not None:
                     explicit_handles.append(struct.unpack_from('<I',obj.payload,0)[0])
-        if handle_seed is None or (explicit_handles and handle_seed<=max(explicit_handles)):
-            raise FormatError('HandleSeed does not exceed all serialized handles')
+        # HandleSeed is not a strict max-handle invariant: several real,
+        # TubesT-accepted source files retain viewport/object handles above it.
+        # We only require it to be parseable when present.
+        if handle_seed is None:
+            raise FormatError('Missing root HandleSeed')
 
         checks.append('Root signature and geometry/object references OK')
         return checks
