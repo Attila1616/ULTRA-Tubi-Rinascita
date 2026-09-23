@@ -82,6 +82,33 @@ class NestedZzxExporterTests(unittest.TestCase):
             segments = archive.xml("Segments/content.xml").findall("TubeSegment")
             self.assertEqual(len(segments), 2)
 
+            source_segment_handle = int(source_segment.get("Handle"))
+            source_first_shape_handle = int(source_refs[0].get("Handle"))
+            source_first_shape_delta = source_first_shape_handle - source_segment_handle
+            self.assertEqual(
+                int(segments[0].find("Shapes")[0].get("Handle"))
+                - int(segments[0].get("Handle")),
+                source_first_shape_delta,
+            )
+            self.assertGreaterEqual(source_first_shape_delta, 3)
+
+            first_output_shape_handle = int(segments[0].find("Shapes")[0].get("Handle"))
+            second_output_shape_handle = int(segments[1].find("Shapes")[0].get("Handle"))
+            output_shapes_xml = {
+                int(element.get("Handle")): element
+                for element in archive.xml("Shapes/content.xml")
+                if element.tag != "MD5"
+            }
+            first_output_shape = output_shapes_xml[first_output_shape_handle]
+            second_output_shape = output_shapes_xml[second_output_shape_handle]
+            self.assertIsNone(first_output_shape.get("CopyHandle"))
+            self.assertEqual(
+                second_output_shape.get("CopyHandle"),
+                str(first_output_shape_handle),
+            )
+            self.assertGreater(len(list(first_output_shape)), 0)
+            self.assertEqual(len(list(second_output_shape)), 0)
+
             pack_xml = archive.xml("Portions/content.xml").find("DocPortion/PackSegments")
             pack_records = {
                 record.address: record
