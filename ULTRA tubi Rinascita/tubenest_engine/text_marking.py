@@ -766,9 +766,14 @@ def build_round_marking_records(
         planar_normal=(0.0, 0.0, 0.0),
     )
     report.update(geometry_report)
+    all_points = [point for path in paths for point in path]
     report.update(
         {
             "text": "\n".join(report["layout_lines"]),
+            "geometry_3d_bounds": [
+                list(map(min, zip(*all_points))),
+                list(map(max, zip(*all_points))),
+            ],
             "height_mm": height_mm,
             "face": "round outside cylinder centered at local +Y",
             "profile_kind": "Circle",
