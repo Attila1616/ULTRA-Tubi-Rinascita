@@ -147,7 +147,7 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
                 places=4,
             )
 
-    def test_noncoincident_common_line_is_preserved_not_merged(self):
+    def test_noncoincident_forced_common_line_stops_export(self):
         source = APP_ROOT / (
             "Round tube Ø30 L1215, first cut 0° layer 1, "
             "second cut 45° layer 4.zzx"
@@ -184,24 +184,16 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
         ]
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "must_not_merge_gap.zzx"
-            result = export_flat_nested_rod(
-                placements,
-                output,
-            )
-            self.assertTrue(output.is_file())
-            rejected = result["cutReleaseRepair"]["rejected_shared_pairs"]
-            self.assertEqual(len(rejected), 1)
-            self.assertRegex(
-                rejected[0]["reason"],
-                "real gap|outer contours differ",
-            )
-            self.assertTrue(
-                any(
-                    "preserved as two cuts" in warning
-                    for warning in result["warnings"]
+            output = Path(temp_dir) / "must_not_export_overlap.zzx"
+            with self.assertRaisesRegex(
+                ValueError,
+                "Shared-cut verification failed",
+            ):
+                export_flat_nested_rod(
+                    placements,
+                    output,
                 )
-            )
+            self.assertFalse(output.exists())
 
 
     def test_machining_shapes_are_ordered_left_to_right_after_reversal(self):

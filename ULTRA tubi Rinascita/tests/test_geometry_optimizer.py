@@ -35,12 +35,22 @@ def make_part(
                 "operation_layer": 1,
                 "plane_z_equals_c_plus_ax_plus_by": list(start_plane),
                 "plane_max_residual_mm": 0.0,
+                "boundary_signature": "end-A",
+                "process_signature": "process-1",
+                "work_flags": 0,
+                "curve_flags": 34,
+                "curve_normal": [0.0, 1.0, 0.0],
             },
             {
                 "label": "B",
                 "operation_layer": 1,
                 "plane_z_equals_c_plus_ax_plus_by": list(end_plane),
                 "plane_max_residual_mm": 0.0,
+                "boundary_signature": "end-B",
+                "process_signature": "process-1",
+                "work_flags": 0,
+                "curve_flags": 34,
+                "curve_normal": [0.0, 1.0, 0.0],
             },
         ],
         "features": features or [],
@@ -93,6 +103,8 @@ class GeometryOptimizerTests(unittest.TestCase):
             start_plane=(50.0, 0.0, 1.0),
             end_plane=(1000.0, 0.0, 0.0),
         )
+        a["ends"][1]["boundary_signature"] = "shared-boundary"
+        b["ends"][0]["boundary_signature"] = "shared-boundary"
 
         rods = optimize_items_dict(
             [item("A", 1000, a), item("B", 1000, b)],
