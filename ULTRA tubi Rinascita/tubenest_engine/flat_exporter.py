@@ -1154,12 +1154,17 @@ def _flat_transform(
     )
 
     if cut_release_report["rejected_shared_pairs"]:
-        for rejected in cut_release_report["rejected_shared_pairs"]:
-            warnings.append(
-                "Shared-boundary candidate "
-                f"{rejected['a']}/{rejected['b']} was preserved as two cuts: "
-                f"{rejected['reason']}"
-            )
+        details = "; ".join(
+            f"{item['a']}/{item['b']}: {item['reason']}"
+            for item in cut_release_report["rejected_shared_pairs"]
+        )
+        raise ValueError(
+            "Shared-cut verification failed after final positioning. "
+            "A zero-gap common-line boundary is not a complete compatible "
+            "outer/inner contour with matching process metadata: "
+            f"{details}. Recalculate and re-lock the nesting with the current "
+            "common-line rules, or use a normal gap, before exporting."
+        )
 
     if cut_release_report["disabled_duplicate_groups"]:
         warnings.append(

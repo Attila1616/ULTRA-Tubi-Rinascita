@@ -32,12 +32,22 @@ def make_part(
                 "operation_layer": 1,
                 "plane_z_equals_c_plus_ax_plus_by": list(start_plane),
                 "plane_max_residual_mm": 0.0,
+                "boundary_signature": "end-A",
+                "process_signature": "process-1",
+                "work_flags": 0,
+                "curve_flags": 34,
+                "curve_normal": [0.0, 1.0, 0.0],
             },
             {
                 "label": "B",
                 "operation_layer": 1,
                 "plane_z_equals_c_plus_ax_plus_by": list(end_plane),
                 "plane_max_residual_mm": 0.0,
+                "boundary_signature": "end-B",
+                "process_signature": "process-1",
+                "work_flags": 0,
+                "curve_flags": 34,
+                "curve_normal": [0.0, 1.0, 0.0],
             },
         ],
         "features": features or [],
@@ -67,6 +77,8 @@ class GeometryFitTests(unittest.TestCase):
     def test_parallel_matching_faces_become_common_line(self):
         previous = make_part(end_plane=(950.0, 0.0, 1.0))
         following = make_part(start_plane=(50.0, 0.0, 1.0))
+        previous["ends"][1]["boundary_signature"] = "shared-boundary"
+        following["ends"][0]["boundary_signature"] = "shared-boundary"
 
         fit = fit_adjacent_parts(
             previous,
@@ -126,6 +138,8 @@ class GeometryFitTests(unittest.TestCase):
     def test_small_plane_residual_is_accepted_for_common_line(self):
         previous = make_part(end_plane=(950.0, 0.0, 1.0))
         following = make_part(start_plane=(50.0, 0.0, 1.0))
+        previous["ends"][1]["boundary_signature"] = "shared-boundary"
+        following["ends"][0]["boundary_signature"] = "shared-boundary"
         previous["ends"][1]["plane_max_residual_mm"] = 0.001
         following["ends"][0]["plane_max_residual_mm"] = 0.002
 
@@ -145,6 +159,8 @@ class GeometryFitTests(unittest.TestCase):
     def test_moderate_plane_residual_allows_gap_fit_but_not_common_line(self):
         previous = make_part(end_plane=(950.0, 0.0, 1.0))
         following = make_part(start_plane=(50.0, 0.0, 1.0))
+        previous["ends"][1]["boundary_signature"] = "shared-boundary"
+        following["ends"][0]["boundary_signature"] = "shared-boundary"
         following["ends"][0]["plane_max_residual_mm"] = 0.02
 
         fit = fit_adjacent_parts(
@@ -227,48 +243,79 @@ class GeometryFitTests(unittest.TestCase):
 
 
     def test_common_line_requires_both_end_operations_on_channel_1(self):
-        previous = {
-            "overall_length": 100.0,
-            "profile": {
-                "kind": "Circle",
-                "outside_diameter": 30.0,
+        previous = make_part(end_plane=(950.0, 0.0, 1.0))
+        following = make_part(start_plane=(50.0, 0.0, 1.0))
+        previous["ends"][1]["boundary_signature"] = "shared-boundary"
+        following["ends"][0]["boundary_signature"] = "shared-boundary"
+        previous["ends"][1]["operation_layer"] = 4
+
+        fit = fit_adjacent_parts(
+            previous,
+            PartPose(),
+            0.0,
+            following,
+            PartPose(),
+            gap_mm=2.0,
+            allow_common_line=True,
+        )
+        self.assertFalse(fit.common_line)
+        self.assertAlmostEqual(fit.minimum_clearance_mm, 2.0)
+
+    def test_common_line_rejects_incompatible_profile_before_zero_gap(self):
+        previous = make_part(
+            end_plane=(950.0, 0.0, 1.0),
+            profile={
+                "kind": "Square",
+                "outside_width": 50.0,
+                "outside_height": 50.0,
+                "corner_radius": 3.2,
+                "thickness": 2.0,
             },
-            "ends": [
-                {
-                    "label": "A",
-                    "plane_z_equals_c_plus_ax_plus_by": [0.0, 0.0, 0.0],
-                    "plane_max_residual_mm": 0.0,
-                    "operation_layer": 1,
-                },
-                {
-                    "label": "B",
-                    "plane_z_equals_c_plus_ax_plus_by": [100.0, 0.0, 0.0],
-                    "plane_max_residual_mm": 0.0,
-                    "operation_layer": 4,
-                },
-            ],
-        }
-        following = {
-            "overall_length": 100.0,
-            "profile": {
-                "kind": "Circle",
-                "outside_diameter": 30.0,
+        )
+        following = make_part(
+            start_plane=(50.0, 0.0, 1.0),
+            profile={
+                "kind": "Square",
+                "outside_width": 50.0,
+                "outside_height": 50.0,
+                "corner_radius": 5.0,
+                "thickness": 2.0,
             },
-            "ends": [
-                {
-                    "label": "A",
-                    "plane_z_equals_c_plus_ax_plus_by": [0.0, 0.0, 0.0],
-                    "plane_max_residual_mm": 0.0,
-                    "operation_layer": 1,
-                },
-                {
-                    "label": "B",
-                    "plane_z_equals_c_plus_ax_plus_by": [100.0, 0.0, 0.0],
-                    "plane_max_residual_mm": 0.0,
-                    "operation_layer": 1,
-                },
-            ],
-        }
+        )
+        previous["ends"][1]["boundary_signature"] = "shared-boundary"
+        following["ends"][0]["boundary_signature"] = "shared-boundary"
+
+        fit = fit_adjacent_parts(
+            previous,
+            PartPose(),
+            0.0,
+            following,
+            PartPose(),
+            gap_mm=2.0,
+            allow_common_line=True,
+        )
+        self.assertFalse(fit.common_line)
+        self.assertAlmostEqual(fit.minimum_clearance_mm, 2.0)
+
+    def test_common_line_rejects_boundary_and_process_mismatch(self):
+        previous = make_part(end_plane=(950.0, 0.0, 1.0))
+        following = make_part(start_plane=(50.0, 0.0, 1.0))
+
+        previous["ends"][1]["boundary_signature"] = "boundary-A"
+        following["ends"][0]["boundary_signature"] = "boundary-B"
+        fit = fit_adjacent_parts(
+            previous,
+            PartPose(),
+            0.0,
+            following,
+            PartPose(),
+            gap_mm=2.0,
+            allow_common_line=True,
+        )
+        self.assertFalse(fit.common_line)
+
+        following["ends"][0]["boundary_signature"] = "boundary-A"
+        following["ends"][0]["process_signature"] = "different-process"
         fit = fit_adjacent_parts(
             previous,
             PartPose(),

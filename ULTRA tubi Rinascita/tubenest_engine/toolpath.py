@@ -4,15 +4,16 @@ Observed from TubesT 7.1.27.1 fixtures: changing only the user-selected start
 position of a GeoCurve changes one double in the Shape record's Curve block,
 at payload offset 4. The geometric LiteGeos contour remains identical.
 
-For CompositeCurve3D contours, the observed scalar parameter uses one unit per
-ordered primitive: integer part selects a primitive, fractional part is that
-primitive's local t in [0,1]. A value equal to len(curves) denotes the closing
-endpoint of the last primitive.
+For CompositeCurve3D contours, PathStartParam accumulates each child's native
+parameter span. Imported spline knot domains can be unequal or negative, so
+primitive_index + normalized_fraction is not generally valid.
 """
 from __future__ import annotations
 
 import math
 import struct
+
+from .curve_parameters import evaluate_parameter
 
 
 def curve_start_parameter(shape_record):
@@ -32,17 +33,10 @@ def point_at_composite_parameter(curves, parameter, epsilon=1e-7):
         return None
 
     value = float(parameter)
-    if not math.isfinite(value) or value < -epsilon or value > len(curves) + epsilon:
+    if not math.isfinite(value) or value < -epsilon:
         return None
-
-    if value <= 0:
-        return tuple(curves[0].at(0.0))
-    if value >= len(curves):
-        return tuple(curves[-1].at(1.0))
-
-    index = int(math.floor(value))
-    local_t = value - index
-    if index >= len(curves):
-        index = len(curves) - 1
-        local_t = 1.0
-    return tuple(curves[index].at(local_t))
+    value = max(0.0, value)
+    try:
+        return tuple(evaluate_parameter(curves, value))
+    except ValueError:
+        return None
