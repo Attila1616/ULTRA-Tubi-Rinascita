@@ -140,9 +140,21 @@ class NestedZzxExporterTests(unittest.TestCase):
             handle_seed = int(root.find("Header").get("HandleSeed"))
             viewport_handles = [
                 int(element.get("Handle"))
-                for element in archive.xml("Viewports/content.xml").iter()
+                for element in archive.xml("Viewports/content.xml").findall(".//VPort")
                 if element.get("Handle") is not None
             ]
+            segment_handles = {
+                int(element.get("Handle"))
+                for element in archive.xml("Segments/content.xml").findall("TubeSegment")
+            }
+            shape_handles = {
+                int(element.get("Handle"))
+                for element in archive.xml("Shapes/content.xml")
+                if element.tag != "MD5" and element.get("Handle") is not None
+            }
+            self.assertTrue(viewport_handles)
+            self.assertFalse(set(viewport_handles) & segment_handles)
+            self.assertFalse(set(viewport_handles) & shape_handles)
             self.assertGreater(handle_seed, max(viewport_handles))
 
             shape_xml = {
