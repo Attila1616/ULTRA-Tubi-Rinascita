@@ -114,6 +114,21 @@ class Archive:
             refs={r.get('Handle') for r in s.find('Shapes')}
             if not refs<=shape_handles or s.get('CutOffA') not in refs or s.get('CutOffB') not in refs:
                 raise FormatError('Dangling shape/cutoff handle')
+        viewport_handles={
+            v.get('Handle')
+            for v in self.xml('Viewports/content.xml').findall('.//VPort')
+            if v.get('Handle') is not None
+        }
+        if viewport_handles & shape_handles:
+            raise FormatError('Viewport handle collides with Shape handle')
+        if viewport_handles & seg_handles:
+            raise FormatError('Viewport handle collides with TubeSegment handle')
+        if len(viewport_handles)!=len([
+            v for v in self.xml('Viewports/content.xml').findall('.//VPort')
+            if v.get('Handle') is not None
+        ]):
+            raise FormatError('Duplicate viewport handles')
+
         for d in self.xml('Portions/content.xml').findall('DocPortion'):
             self._ref(records,'Portions',d,'DataAddr')
             pack=d.find('PackSegments')
