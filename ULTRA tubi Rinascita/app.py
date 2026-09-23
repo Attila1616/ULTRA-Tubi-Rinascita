@@ -49,6 +49,8 @@ class Api:
         self.config = logic.load_config() or {}
         self.config.setdefault("nesting_gap_mm", 2.0)
         self.config.setdefault("nesting_debug_enabled", True)
+        self.config.setdefault("nested_text_marking_enabled", False)
+        self.config.setdefault("nested_text_marking_height_mm", 5.0)
         return {"status": "success", "config": self.config}
 
     def save_config_settings(self, payload):
@@ -79,6 +81,28 @@ class Api:
             updated["nesting_gap_mm"] = 2.0
 
         updated["inventory_request_enabled"] = bool(payload.get("inventory_request_enabled"))
+        updated["nested_text_marking_enabled"] = bool(
+            payload.get(
+                "nested_text_marking_enabled",
+                updated.get("nested_text_marking_enabled", False),
+            )
+        )
+        try:
+            updated["nested_text_marking_height_mm"] = min(
+                10.0,
+                max(
+                    1.0,
+                    float(
+                        payload.get(
+                            "nested_text_marking_height_mm",
+                            updated.get("nested_text_marking_height_mm", 5.0),
+                        )
+                    ),
+                ),
+            )
+        except (TypeError, ValueError):
+            updated["nested_text_marking_height_mm"] = 5.0
+
         updated["nesting_debug_enabled"] = bool(
             payload.get("nesting_debug_enabled", updated.get("nesting_debug_enabled", True))
         )
