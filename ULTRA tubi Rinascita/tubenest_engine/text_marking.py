@@ -188,31 +188,36 @@ def validate_romans_font(font_path):
     return digest
 
 
-_LABEL_RE = re.compile(
-    r"^\s*(.+?)\s*\|\s*(T[DA]\d{4}[A-Z]\d{5})\s*\|\s*(L\S+)\s*$",
-    re.IGNORECASE,
-)
+_TD_CODE_RE = re.compile(r"^T[DA]\d{4}[A-Z]\d{5}$", re.IGNORECASE)
 
 
 def marking_layout_candidates(text):
-    """Return progressively more compact layouts for a PROD/TD/length label.
+    """Return progressively more compact PROD/[TD]/length layouts.
 
-    Candidate 1 keeps the normal one-line label.
-    Candidate 2 stacks PROD, the full TD/TA code and length on three lines.
-    Candidate 3 splits PROD and the TD/TA code into five compact lines.
+    TD/TA is optional. When present it is kept in the first two layouts and
+    split after T(D/A)+4 digits for the most compact layout.
     """
     value = str(text or "").strip()
     if not value:
         return []
 
-    match = _LABEL_RE.match(value)
-    if match is None:
+    parts = [part.strip() for part in value.split("|") if part.strip()]
+    prod = None
+    td_code = None
+    length = None
+
+    if len(parts) == 3 and _TD_CODE_RE.match(parts[1]):
+        prod, td_code, length = parts
+        td_code = td_code.upper()
+    elif len(parts) == 2:
+        prod, length = parts
+    else:
         return [[value]]
 
-    prod = match.group(1).strip()
-    td_code = match.group(2).upper()
-    length = match.group(3).upper()
+    if not prod or not length or not length.upper().startswith("L"):
+        return [[value]]
 
+    length = length.upper()
     prod_parts = prod.split(None, 1)
     if (
         len(prod_parts) == 2
@@ -223,16 +228,15 @@ def marking_layout_candidates(text):
     else:
         compact_prod = [prod]
 
-    # T(D/A) + 4 digits is six characters; the remaining letter + 5 digits
-    # becomes the following compact line.
-    compact_td = [td_code[:6], td_code[6:]]
+    stacked = [prod]
+    compact = list(compact_prod)
+    if td_code:
+        stacked.append(td_code)
+        compact.extend([td_code[:6], td_code[6:]])
+    stacked.append(length)
+    compact.append(length)
 
-    candidates = [
-        [value],
-        [prod, td_code, length],
-        [*compact_prod, *compact_td, length],
-    ]
-
+    candidates = [[value], stacked, compact]
     unique = []
     seen = set()
     for lines in candidates:
@@ -241,7 +245,6 @@ def marking_layout_candidates(text):
             unique.append(list(cleaned))
             seen.add(cleaned)
     return unique
-
 
 def layout_text_strokes(
     font_path,
@@ -449,53 +452,113 @@ def build_marking_records(
     font_path,
     height_mm,
     start_z,
-    face_width,
-    face_y,
     corner_radius,
     max_z,
     first_handle,
     text=None,
     lines=None,
+    face="+Y",
+    outside_width=None,
+    outside_height=None,
+    face_width=None,
+    face_y=None,
+    prepared_layout=None,
 ):
-    """Build planar channel-4 text for a square/rectangular +Y face."""
+    """Build planar channel-4 text on one true flat tube face.
+
+    The four supported faces are +Y, +X, -Y and -X. The usable transverse
+    extent always excludes the rounded corner radius on both sides.
+    """
     height_mm = float(height_mm)
     start_z = float(start_z)
-    face_width = float(face_width)
-    face_y = float(face_y)
     corner_radius = max(0.0, float(corner_radius or 0.0))
     max_z = float(max_z)
+    face = str(face or "+Y").upper()
+
+    if outside_width is None:
+        outside_width = face_width
+    if outside_height is None and face_y is not None:
+        outside_height = abs(float(face_y)) * 2.0
+    outside_width = float(outside_width or 0.0)
+    outside_height = float(outside_height or 0.0)
+    if outside_width <= 0.0 or outside_height <= 0.0:
+        raise ValueError("Flat tube outside dimensions must be positive")
 
     layout_lines = lines if lines is not None else [text]
-    strokes, report = layout_text_strokes(
-        font_path,
-        layout_lines,
-        height_mm,
-    )
-
-    # layout_text_strokes is already left-aligned in X and centered in Y.
-    def lift(point):
-        return (
-            float(point[1]),
-            face_y,
-            start_z + float(point[0]),
+    if prepared_layout is None:
+        strokes, base_report = layout_text_strokes(
+            font_path,
+            layout_lines,
+            height_mm,
         )
+    else:
+        strokes, base_report = prepared_layout
+    report = dict(base_report)
+
+    if face == "+Y":
+        transverse_limit = outside_width / 2.0 - corner_radius
+        normal = (0.0, 1.0, 0.0)
+
+        def lift(point):
+            return (
+                float(point[1]),
+                outside_height / 2.0,
+                start_z + float(point[0]),
+            )
+
+    elif face == "+X":
+        transverse_limit = outside_height / 2.0 - corner_radius
+        normal = (1.0, 0.0, 0.0)
+
+        def lift(point):
+            return (
+                outside_width / 2.0,
+                -float(point[1]),
+                start_z + float(point[0]),
+            )
+
+    elif face == "-Y":
+        transverse_limit = outside_width / 2.0 - corner_radius
+        normal = (0.0, -1.0, 0.0)
+
+        def lift(point):
+            return (
+                -float(point[1]),
+                -outside_height / 2.0,
+                start_z + float(point[0]),
+            )
+
+    elif face == "-X":
+        transverse_limit = outside_height / 2.0 - corner_radius
+        normal = (-1.0, 0.0, 0.0)
+
+        def lift(point):
+            return (
+                -outside_width / 2.0,
+                float(point[1]),
+                start_z + float(point[0]),
+            )
+
+    else:
+        raise ValueError(f"Unsupported flat marking face {face!r}")
 
     paths = [[lift(point) for point in stroke] for stroke in strokes]
-    flat_limit = face_width / 2.0 - corner_radius
-    if flat_limit <= 0:
+    if transverse_limit <= 0:
         raise MarkingFitError("Tube profile has no usable flat marking face")
+
+    for stroke_2d in strokes:
+        for _u, transverse in stroke_2d:
+            if abs(float(transverse)) >= transverse_limit - 1e-9:
+                raise MarkingFitError(
+                    f"Text layout reaches the rounded edge of face {face} "
+                    f"(transverse={float(transverse):.3f}, "
+                    f"planar limit={transverse_limit:.3f})."
+                )
 
     for path in paths:
         for x, y, z in path:
             if not all(math.isfinite(value) for value in (x, y, z)):
                 raise ValueError("Nonfinite marking point")
-            # The tangent to the corner radius is treated as the face boundary;
-            # text must remain strictly inside the true planar region.
-            if abs(x) >= flat_limit - 1e-9:
-                raise MarkingFitError(
-                    "Text layout reaches the rounded edge of the flat tube face "
-                    f"(X={x:.3f}, planar limit={flat_limit:.3f})."
-                )
             if not (start_z - 1e-6 <= z < max_z - 1e-6):
                 raise MarkingFitError(
                     "Text layout does not fit between this piece's end cuts "
@@ -507,7 +570,7 @@ def build_marking_records(
         paths=paths,
         first_handle=first_handle,
         curve_flags=PLANAR_ONLY_CURVE_FLAGS,
-        planar_normal=(0.0, 1.0, 0.0),
+        planar_normal=normal,
     )
 
     all_points = [point for path in paths for point in path]
@@ -515,7 +578,7 @@ def build_marking_records(
         {
             "text": "\n".join(report["layout_lines"]),
             "height_mm": height_mm,
-            "face": "+Y",
+            "face": face,
             "profile_kind": "flat",
             "marking_shapes": len(result["shape_records"]),
             "new_shape_handles": [
@@ -525,11 +588,14 @@ def build_marking_records(
             "new_shape_channels": [MARKING_CHANNEL],
             "start_z": start_z,
             "max_z": max_z,
-            "face_y": face_y,
+            "outside_width_mm": outside_width,
+            "outside_height_mm": outside_height,
             "corner_radius_mm": corner_radius,
-            "flat_x_limit": flat_limit,
+            "flat_transverse_limit": transverse_limit,
+            # Backward-compatible diagnostic key used by older tests/tools.
+            "flat_x_limit": transverse_limit,
             "curve_flags": PLANAR_ONLY_CURVE_FLAGS,
-            "planar_normal": [0.0, 1.0, 0.0],
+            "planar_normal": list(normal),
             "geometry_3d_bounds": [
                 list(map(min, zip(*all_points))),
                 list(map(max, zip(*all_points))),
@@ -538,7 +604,6 @@ def build_marking_records(
     )
     result["report"] = report
     return result
-
 
 def wrap_strokes_to_cylinder(
     strokes,
@@ -661,6 +726,7 @@ def build_round_marking_records(
     lines=None,
     circumferential_center_deg=0.0,
     curve_tolerance_mm=ROUND_CURVE_TOLERANCE_MM,
+    prepared_layout=None,
 ):
     """Build channel-4 marking geometry conformed to a round tube surface."""
     height_mm = float(height_mm)
@@ -669,11 +735,15 @@ def build_round_marking_records(
     radius = float(radius)
 
     layout_lines = lines if lines is not None else [text]
-    strokes, report = layout_text_strokes(
-        font_path,
-        layout_lines,
-        height_mm,
-    )
+    if prepared_layout is None:
+        strokes, base_report = layout_text_strokes(
+            font_path,
+            layout_lines,
+            height_mm,
+        )
+    else:
+        strokes, base_report = prepared_layout
+    report = dict(base_report)
     paths, geometry_report = wrap_strokes_to_cylinder(
         strokes,
         radius,
@@ -702,6 +772,7 @@ def build_round_marking_records(
             "height_mm": height_mm,
             "face": "round outside cylinder centered at local +Y",
             "profile_kind": "Circle",
+            "circumferential_center_deg": float(circumferential_center_deg),
             "marking_shapes": len(result["shape_records"]),
             "new_shape_handles": [
                 int(element.get("Handle"))

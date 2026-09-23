@@ -2295,15 +2295,10 @@ async function exportLockedRodZzx(tubeType, rodId) {
             return;
         }
 
-        const warnings = Array.isArray(response.warnings) && response.warnings.length
-            ? `\n\nAvvisi:\n- ${response.warnings.join('\n- ')}`
-            : '';
-        alert(
-            `ZZX annidato esportato:\n${response.path}\n\n` +
-            `Segmenti: ${response.segmentCount}\n` +
-            `${response.safetyNote || 'Controllare il file in Friendess/TubesT prima dell’uso macchina.'}` +
-            warnings
-        );
+        if (Array.isArray(response.warnings) && response.warnings.length) {
+            console.warn('ZZX export warnings:', response.warnings);
+        }
+        console.log('ZZX annidato esportato:', response.path);
     } catch (error) {
         console.error('Locked rod ZZX export failed:', error);
         alert('Errore durante l’esportazione ZZX della verga.');

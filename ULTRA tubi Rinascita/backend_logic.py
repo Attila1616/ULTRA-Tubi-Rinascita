@@ -1321,8 +1321,6 @@ def _build_nested_marking_text(segment, config):
     missing = []
     if not prod:
         missing.append("PROD")
-    if not td_code:
-        missing.append("TD/TA")
     if not length:
         missing.append("lunghezza")
     if missing:
@@ -1331,7 +1329,9 @@ def _build_nested_marking_text(segment, config):
             f"manca {', '.join(missing)}."
         )
 
-    return f"{prod}  |  {td_code}  | L{length}"
+    if td_code:
+        return f"{prod}  |  {td_code}  | L{length}"
+    return f"{prod}  | L{length}"
 
 
 def export_locked_rod_zzx(payload):

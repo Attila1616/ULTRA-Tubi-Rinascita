@@ -26,6 +26,7 @@ from .text_marking import (
     MarkingFitError,
     build_marking_records,
     build_round_marking_records,
+    layout_text_strokes,
     marking_layout_candidates,
     validate_romans_font,
 )
@@ -607,6 +608,161 @@ def _shape_z_bounds(shape_xml, lite_by_addr):
     return min(z_values), max(z_values)
 
 
+
+MARKING_COLLISION_CLEARANCE_MM = 1.0
+ROUND_MARKING_ANGLE_STEP_DEG = 15
+
+
+def _shape_xyz_bounds(shape_xml, lite_by_addr):
+    points = []
+    for child in shape_xml:
+        if child.get("GeoAddr") is None:
+            continue
+        record = lite_by_addr.get(int(child.get("GeoAddr")))
+        if record is None:
+            continue
+        for curve in primitives(record):
+            points.extend(curve.sample(64))
+
+    if shape_xml.tag == "Line":
+        start = shape_xml.find("LineStart")
+        direction = shape_xml.find("LineVector")
+        if start is not None:
+            point = tuple(float(start.get(axis, "0")) for axis in "XYZ")
+            points.append(point)
+            if direction is not None:
+                delta = tuple(
+                    float(direction.get(axis, "0"))
+                    for axis in "XYZ"
+                )
+                points.append(tuple(a + b for a, b in zip(point, delta)))
+
+    finite = [
+        tuple(map(float, point[:3]))
+        for point in points
+        if len(point) >= 3
+        and all(math.isfinite(float(value)) for value in point[:3])
+    ]
+    if not finite:
+        return None
+
+    return [
+        list(map(min, zip(*finite))),
+        list(map(max, zip(*finite))),
+    ]
+
+
+def _collect_marking_obstacles(
+    references,
+    *,
+    excluded_handles,
+    shapes_by_handle,
+    shape_record_by_addr,
+    lite_by_addr,
+):
+    excluded = {str(value) for value in excluded_handles}
+    obstacles = []
+    for ref in references:
+        handle = str(ref.get("Handle"))
+        if handle in excluded:
+            continue
+        shape_xml = shapes_by_handle.get(handle)
+        if shape_xml is None or shape_xml.get("DataAddr") is None:
+            continue
+        shape_record = shape_record_by_addr.get(
+            int(shape_xml.get("DataAddr"))
+        )
+        if shape_record is None:
+            continue
+        if _shape_channel(shape_record) <= 0 or _shape_do_not_cut(shape_record):
+            continue
+        bounds = _shape_xyz_bounds(shape_xml, lite_by_addr)
+        if bounds is None:
+            continue
+        obstacles.append(
+            {
+                "handle": handle,
+                "channel": _shape_channel(shape_record),
+                "bounds": bounds,
+            }
+        )
+    return obstacles
+
+
+def _bounds_overlap(first, second, clearance=0.0):
+    clearance = max(0.0, float(clearance))
+    for axis in range(3):
+        if first[1][axis] < second[0][axis] - clearance:
+            return False
+        if first[0][axis] > second[1][axis] + clearance:
+            return False
+    return True
+
+
+def _colliding_obstacle_handles(
+    marking_bounds,
+    obstacles,
+    clearance=MARKING_COLLISION_CLEARANCE_MM,
+):
+    return [
+        obstacle["handle"]
+        for obstacle in obstacles
+        if _bounds_overlap(
+            marking_bounds,
+            obstacle["bounds"],
+            clearance=clearance,
+        )
+    ]
+
+
+def _candidate_marking_start_positions(
+    preferred_start,
+    max_z,
+    axial_width,
+    obstacles,
+    *,
+    clearance=MARKING_COLLISION_CLEARANCE_MM,
+):
+    preferred_start = float(preferred_start)
+    max_z = float(max_z)
+    axial_width = max(0.0, float(axial_width))
+    clearance = max(0.0, float(clearance))
+    latest_start = max_z - axial_width - 1e-6
+    if latest_start < preferred_start - 1e-9:
+        return []
+
+    candidates = {preferred_start, latest_start}
+    for obstacle in obstacles:
+        lo_z = float(obstacle["bounds"][0][2])
+        hi_z = float(obstacle["bounds"][1][2])
+        candidates.add(hi_z + clearance)
+        candidates.add(lo_z - axial_width - clearance)
+
+    valid = sorted(
+        {
+            round(value, 6)
+            for value in candidates
+            if preferred_start - 1e-6 <= value <= latest_start + 1e-6
+        }
+    )
+    return valid
+
+
+def _flat_marking_faces():
+    return ("+Y", "+X", "-Y", "-X")
+
+
+def _round_marking_angles():
+    # Try the four principal orientations first, then fill the full circle
+    # at 15-degree increments.
+    preferred = [0, 90, 180, 270]
+    return preferred + [
+        angle
+        for angle in range(0, 360, ROUND_MARKING_ANGLE_STEP_DEG)
+        if angle not in preferred
+    ]
+
+
 def _next_export_handle(archive):
     values = []
     for name, data in archive.entries.items():
@@ -691,10 +847,10 @@ def _flat_transform(
         stock_profile = resolved[0].part.profile
         marking_profile_kind = str(stock_profile.kind or "")
         if marking_profile_kind in {"Square", "Rect"}:
-            marking_face_width = float(stock_profile.outside_width or 0.0)
-            marking_face_y = float(stock_profile.outside_height or 0.0) / 2.0
+            marking_outside_width = float(stock_profile.outside_width or 0.0)
+            marking_outside_height = float(stock_profile.outside_height or 0.0)
             marking_corner_radius = float(stock_profile.corner_radius or 0.0)
-            if marking_face_width <= 0.0 or marking_face_y <= 0.0:
+            if marking_outside_width <= 0.0 or marking_outside_height <= 0.0:
                 raise ValueError("Invalid flat tube dimensions for TEXT marking")
         elif marking_profile_kind == "Circle":
             marking_diameter = float(stock_profile.outside_diameter or 0.0)
@@ -808,81 +964,9 @@ def _flat_transform(
 
         if text_marking_enabled:
             if not item.marking_text:
-                raise ValueError(
-                    f"{item.file_name}: marking metadata is missing"
-                )
-
-            near_xml = shapes_by_handle.get(str(near_handle))
-            far_xml = shapes_by_handle.get(str(far_handle))
-            if near_xml is None or far_xml is None:
-                raise FormatError(
-                    f"{item.file_name}: cannot resolve end cuts for text marking"
-                )
-
-            near_min_z, near_max_z = _shape_z_bounds(
-                near_xml,
-                lite_by_addr,
-            )
-            far_min_z, far_max_z = _shape_z_bounds(
-                far_xml,
-                lite_by_addr,
-            )
-            marking_start_z = near_max_z + float(text_marking_offset_mm)
-            marking_max_z = far_min_z
-
-            source_marking_record = shape_record_by_addr.get(
-                int(near_xml.get("DataAddr"))
-            )
-            if source_marking_record is None:
-                raise FormatError(
-                    f"{item.file_name}: incoming cut record is missing"
-                )
-
-            layouts = marking_layout_candidates(item.marking_text)
-            addition = None
-            fit_errors = []
-            selected_layout_index = None
-
-            for layout_index, layout_lines in enumerate(layouts):
-                try:
-                    if marking_profile_kind in {"Square", "Rect"}:
-                        addition = build_marking_records(
-                            source_shape_record=source_marking_record,
-                            font_path=text_marking_font_path,
-                            lines=layout_lines,
-                            height_mm=text_marking_height_mm,
-                            start_z=marking_start_z,
-                            face_width=marking_face_width,
-                            face_y=marking_face_y,
-                            corner_radius=marking_corner_radius,
-                            max_z=marking_max_z,
-                            first_handle=next_marking_handle,
-                        )
-                    else:
-                        addition = build_round_marking_records(
-                            source_shape_record=source_marking_record,
-                            font_path=text_marking_font_path,
-                            lines=layout_lines,
-                            height_mm=text_marking_height_mm,
-                            start_z=marking_start_z,
-                            radius=marking_radius,
-                            max_z=marking_max_z,
-                            first_handle=next_marking_handle,
-                        )
-                    selected_layout_index = layout_index
-                    break
-                except MarkingFitError as exc:
-                    fit_errors.append(str(exc))
-
-            if addition is None:
-                reason = (
-                    fit_errors[-1]
-                    if fit_errors
-                    else "no safe marking layout was available"
-                )
                 warnings.append(
-                    f"{item.file_name}: TEXT marking omitted; none of the "
-                    f"{len(layouts)} label layouts fits safely. {reason}"
+                    f"{item.file_name}: TEXT marking omitted because label "
+                    "metadata is incomplete."
                 )
                 marking_reports.append(
                     {
@@ -890,63 +974,240 @@ def _flat_transform(
                         "instanceKey": item.instance_key,
                         "fileName": item.file_name,
                         "profileKind": marking_profile_kind,
-                        "originalText": item.marking_text,
-                        "attemptedLayouts": layouts,
-                        "fitErrors": fit_errors,
-                        "nearCutZBounds": [near_min_z, near_max_z],
-                        "farCutZBounds": [far_min_z, far_max_z],
+                        "reason": "missing marking metadata",
                     }
                 )
             else:
-                next_marking_handle = addition["next_handle"]
-
-                segment_shapes = segment.find("Shapes")
-                if segment_shapes is None:
+                near_xml = shapes_by_handle.get(str(near_handle))
+                far_xml = shapes_by_handle.get(str(far_handle))
+                if near_xml is None or far_xml is None:
                     raise FormatError(
-                        f"{item.file_name}: TubeSegment has no Shapes list"
+                        f"{item.file_name}: cannot resolve end cuts for text marking"
                     )
 
-                for (
-                    shape_record,
-                    geometry_record,
-                    (shape_element, geometry_element),
-                    segment_ref,
-                ) in zip(
-                    addition["shape_records"],
-                    addition["geometry_records"],
-                    addition["shape_elements"],
-                    addition["segment_refs"],
-                ):
-                    shapes_stream.records.append(shape_record)
-                    lite_stream.records.append(geometry_record)
-                    shapes_root.append(shape_element)
-                    segment_shapes.append(segment_ref)
-                    shapes_by_handle[shape_element.get("Handle")] = shape_element
-                    marking_pending.append(
-                        (
-                            shape_element,
-                            geometry_element,
-                            shape_record,
-                            geometry_record,
+                near_min_z, near_max_z = _shape_z_bounds(
+                    near_xml,
+                    lite_by_addr,
+                )
+                far_min_z, far_max_z = _shape_z_bounds(
+                    far_xml,
+                    lite_by_addr,
+                )
+                preferred_start_z = (
+                    near_max_z + float(text_marking_offset_mm)
+                )
+                marking_max_z = far_min_z
+
+                source_marking_record = shape_record_by_addr.get(
+                    int(near_xml.get("DataAddr"))
+                )
+                if source_marking_record is None:
+                    raise FormatError(
+                        f"{item.file_name}: incoming cut record is missing"
+                    )
+
+                obstacles = _collect_marking_obstacles(
+                    references,
+                    excluded_handles=(near_handle, far_handle),
+                    shapes_by_handle=shapes_by_handle,
+                    shape_record_by_addr=shape_record_by_addr,
+                    lite_by_addr=lite_by_addr,
+                )
+
+                layouts = marking_layout_candidates(item.marking_text)
+                addition = None
+                fit_errors = []
+                collision_attempts = []
+                selected_layout_index = None
+                selected_spatial_position = None
+                selected_start_z = None
+
+                for layout_index, layout_lines in enumerate(layouts):
+                    prepared_layout = layout_text_strokes(
+                        text_marking_font_path,
+                        layout_lines,
+                        text_marking_height_mm,
+                    )
+                    axial_width = float(
+                        prepared_layout[1].get(
+                            "visible_axial_width_mm",
+                            0.0,
                         )
                     )
+                    start_positions = _candidate_marking_start_positions(
+                        preferred_start_z,
+                        marking_max_z,
+                        axial_width,
+                        obstacles,
+                    )
+                    if not start_positions:
+                        fit_errors.append(
+                            f"layout {layout_index + 1}: axial width "
+                            f"{axial_width:.3f} mm does not fit"
+                        )
+                        continue
 
-                report = dict(addition["report"])
-                report.update(
-                    {
-                        "status": "generated",
-                        "instanceKey": item.instance_key,
-                        "fileName": item.file_name,
-                        "profileKind": marking_profile_kind,
-                        "originalText": item.marking_text,
-                        "layoutAttempt": selected_layout_index + 1,
-                        "fallbackUsed": bool(selected_layout_index),
-                        "fitErrorsBeforeSuccess": fit_errors,
-                        "nearCutZBounds": [near_min_z, near_max_z],
-                        "farCutZBounds": [far_min_z, far_max_z],
-                    }
-                )
-                marking_reports.append(report)
+                    spatial_positions = (
+                        _flat_marking_faces()
+                        if marking_profile_kind in {"Square", "Rect"}
+                        else _round_marking_angles()
+                    )
+
+                    for candidate_start_z in start_positions:
+                        for spatial_position in spatial_positions:
+                            try:
+                                if marking_profile_kind in {"Square", "Rect"}:
+                                    candidate = build_marking_records(
+                                        source_shape_record=source_marking_record,
+                                        font_path=text_marking_font_path,
+                                        lines=layout_lines,
+                                        height_mm=text_marking_height_mm,
+                                        start_z=candidate_start_z,
+                                        outside_width=marking_outside_width,
+                                        outside_height=marking_outside_height,
+                                        corner_radius=marking_corner_radius,
+                                        max_z=marking_max_z,
+                                        first_handle=next_marking_handle,
+                                        face=spatial_position,
+                                        prepared_layout=prepared_layout,
+                                    )
+                                else:
+                                    candidate = build_round_marking_records(
+                                        source_shape_record=source_marking_record,
+                                        font_path=text_marking_font_path,
+                                        lines=layout_lines,
+                                        height_mm=text_marking_height_mm,
+                                        start_z=candidate_start_z,
+                                        radius=marking_radius,
+                                        max_z=marking_max_z,
+                                        first_handle=next_marking_handle,
+                                        circumferential_center_deg=spatial_position,
+                                        prepared_layout=prepared_layout,
+                                    )
+                            except MarkingFitError as exc:
+                                message = (
+                                    f"layout {layout_index + 1}, "
+                                    f"position {spatial_position}, "
+                                    f"Z {candidate_start_z:.3f}: {exc}"
+                                )
+                                if message not in fit_errors:
+                                    fit_errors.append(message)
+                                continue
+
+                            colliding = _colliding_obstacle_handles(
+                                candidate["report"]["geometry_3d_bounds"],
+                                obstacles,
+                            )
+                            if colliding:
+                                collision_attempts.append(
+                                    {
+                                        "layout": layout_index + 1,
+                                        "position": spatial_position,
+                                        "startZ": candidate_start_z,
+                                        "shapeHandles": colliding,
+                                    }
+                                )
+                                continue
+
+                            addition = candidate
+                            selected_layout_index = layout_index
+                            selected_spatial_position = spatial_position
+                            selected_start_z = candidate_start_z
+                            break
+
+                        if addition is not None:
+                            break
+                    if addition is not None:
+                        break
+
+                if addition is None:
+                    reason = (
+                        fit_errors[-1]
+                        if fit_errors
+                        else (
+                            "all otherwise-valid placements collide with "
+                            "existing machining geometry"
+                            if collision_attempts
+                            else "no safe marking layout was available"
+                        )
+                    )
+                    warnings.append(
+                        f"{item.file_name}: TEXT marking omitted after scanning "
+                        f"the available tube surfaces and axial positions. {reason}"
+                    )
+                    marking_reports.append(
+                        {
+                            "status": "skipped",
+                            "instanceKey": item.instance_key,
+                            "fileName": item.file_name,
+                            "profileKind": marking_profile_kind,
+                            "originalText": item.marking_text,
+                            "attemptedLayouts": layouts,
+                            "fitErrors": fit_errors,
+                            "collisionAttempts": collision_attempts,
+                            "obstacleCount": len(obstacles),
+                            "nearCutZBounds": [near_min_z, near_max_z],
+                            "farCutZBounds": [far_min_z, far_max_z],
+                        }
+                    )
+                else:
+                    next_marking_handle = addition["next_handle"]
+
+                    segment_shapes = segment.find("Shapes")
+                    if segment_shapes is None:
+                        raise FormatError(
+                            f"{item.file_name}: TubeSegment has no Shapes list"
+                        )
+
+                    for (
+                        shape_record,
+                        geometry_record,
+                        (shape_element, geometry_element),
+                        segment_ref,
+                    ) in zip(
+                        addition["shape_records"],
+                        addition["geometry_records"],
+                        addition["shape_elements"],
+                        addition["segment_refs"],
+                    ):
+                        shapes_stream.records.append(shape_record)
+                        lite_stream.records.append(geometry_record)
+                        shapes_root.append(shape_element)
+                        segment_shapes.append(segment_ref)
+                        shapes_by_handle[shape_element.get("Handle")] = shape_element
+                        marking_pending.append(
+                            (
+                                shape_element,
+                                geometry_element,
+                                shape_record,
+                                geometry_record,
+                            )
+                        )
+
+                    report = dict(addition["report"])
+                    report.update(
+                        {
+                            "status": "generated",
+                            "instanceKey": item.instance_key,
+                            "fileName": item.file_name,
+                            "profileKind": marking_profile_kind,
+                            "originalText": item.marking_text,
+                            "layoutAttempt": selected_layout_index + 1,
+                            "fallbackUsed": bool(selected_layout_index),
+                            "selectedSurfacePosition": selected_spatial_position,
+                            "selectedStartZ": selected_start_z,
+                            "preferredStartZ": preferred_start_z,
+                            "shiftedAxially": (
+                                abs(selected_start_z - preferred_start_z) > 1e-6
+                            ),
+                            "obstacleCount": len(obstacles),
+                            "collisionAttemptsBeforeSuccess": collision_attempts,
+                            "fitErrorsBeforeSuccess": fit_errors,
+                            "nearCutZBounds": [near_min_z, near_max_z],
+                            "farCutZBounds": [far_min_z, far_max_z],
+                        }
+                    )
+                    marking_reports.append(report)
 
         placement_audit.append(
             {

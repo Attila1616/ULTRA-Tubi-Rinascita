@@ -9,7 +9,13 @@ import backend_logic
 from tubenest_engine.archive import Archive
 from tubenest_engine.bcmp import read_vector
 from tubenest_engine.domain import read_tube_parts
-from tubenest_engine.flat_exporter import export_flat_nested_rod
+from tubenest_engine.flat_exporter import (
+    _bounds_overlap,
+    _candidate_marking_start_positions,
+    _flat_marking_faces,
+    _round_marking_angles,
+    export_flat_nested_rod,
+)
 from tubenest_engine.geometry import primitives
 from tubenest_engine.text_marking import marking_layout_candidates
 
@@ -49,15 +55,25 @@ class NestedTextMarkingTests(unittest.TestCase):
             "PROD 310  |  TA1234B56789  | L1250.5",
         )
 
-    def test_missing_td_is_rejected(self):
+    def test_missing_td_is_allowed_and_omitted(self):
         segment = {
             "filePath": "C:/DA FARE/05 PROD 219/TT/part L500 1pz.zzx",
             "fileName": "part L500 1pz.zzx",
             "mainFolder": "05 PROD 219",
             "length": 500,
         }
-        with self.assertRaisesRegex(ValueError, "TD/TA"):
-            backend_logic._build_nested_marking_text(segment, {})
+        self.assertEqual(
+            backend_logic._build_nested_marking_text(segment, {}),
+            "PROD 219  | L500",
+        )
+        self.assertEqual(
+            marking_layout_candidates("PROD 219  | L500"),
+            [
+                ["PROD 219  | L500"],
+                ["PROD 219", "L500"],
+                ["PROD", "219", "L500"],
+            ],
+        )
 
     def test_channel4_text_is_ordered_before_far_cut(self):
         source = APP_ROOT / "Tube with sample text.zzx"
@@ -419,6 +435,39 @@ class NestedTextMarkingTests(unittest.TestCase):
                             radius,
                             places=8,
                         )
+
+
+    def test_surface_scan_covers_all_flat_faces_and_round_circumference(self):
+        self.assertEqual(
+            set(_flat_marking_faces()),
+            {"+Y", "+X", "-Y", "-X"},
+        )
+        angles = _round_marking_angles()
+        self.assertEqual(angles[:4], [0, 90, 180, 270])
+        self.assertEqual(set(angles), set(range(0, 360, 15)))
+
+    def test_collision_bounds_and_axial_shift_candidates(self):
+        obstacle = {
+            "handle": "123",
+            "bounds": [[10.0, 10.0, 40.0], [20.0, 20.0, 60.0]],
+        }
+        self.assertTrue(
+            _bounds_overlap(
+                [[12.0, 12.0, 45.0], [18.0, 18.0, 55.0]],
+                obstacle["bounds"],
+                clearance=1.0,
+            )
+        )
+        starts = _candidate_marking_start_positions(
+            5.0,
+            100.0,
+            20.0,
+            [obstacle],
+            clearance=1.0,
+        )
+        self.assertIn(61.0, starts)
+        self.assertIn(19.0, starts)
+        self.assertIn(5.0, starts)
 
 
 if __name__ == "__main__":
