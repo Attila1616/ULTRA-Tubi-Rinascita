@@ -366,6 +366,15 @@
                 <input id="settings-nesting-debug-enabled" type="checkbox" checked>
                 <span>Mostra pulsanti debug nesting</span>
             </label>
+            <label class="settings-checkbox-row">
+                <input id="settings-nested-text-marking-enabled" type="checkbox">
+                <span>Aggiungi marcatura TEXT nei ZZX annidati</span>
+            </label>
+            <div class="settings-threshold-grid">
+                <label for="settings-nested-text-marking-height-mm">Altezza testo</label>
+                <input id="settings-nested-text-marking-height-mm" type="number" min="1" max="10" step="0.5" value="5" class="search-input search-input-small">
+                <span>mm, da 1 a 10</span>
+            </div>
 
             <h3 class="settings-section-title">Soglie priorit&agrave; ordini</h3>
             <div class="settings-threshold-grid">
