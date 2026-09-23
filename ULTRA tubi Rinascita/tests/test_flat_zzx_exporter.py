@@ -5,10 +5,7 @@ from pathlib import Path
 
 from tubenest_engine.archive import Archive
 from tubenest_engine.domain import read_tube_parts
-from tubenest_engine.flat_exporter import (
-    _falling_start_parameter,
-    export_flat_nested_rod,
-)
+from tubenest_engine.flat_exporter import export_flat_nested_rod
 from tubenest_engine.geometry import Line
 from tubenest_engine.reader import read_zzx_cached
 
@@ -150,18 +147,11 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
                 places=4,
             )
 
-    def test_common_line_marks_only_next_incoming_cut_do_not_cut(self):
-        source = APP_ROOT / "Round tube Ø30 L1215, first cut 0° layer 1, second cut 45° layer 4.zzx"
-        source_archive = Archive.read(source)
-        source_segment = source_archive.xml("Segments/content.xml").find("TubeSegment")
-        source_refs = list(source_segment.find("Shapes"))
-        source_cut_a = source_segment.get("CutOffA")
-        cut_a_index = next(
-            index
-            for index, ref in enumerate(source_refs)
-            if ref.get("Handle") == source_cut_a
+    def test_noncoincident_common_line_is_not_silently_merged(self):
+        source = APP_ROOT / (
+            "Round tube Ø30 L1215, first cut 0° layer 1, "
+            "second cut 45° layer 4.zzx"
         )
-
         part = read_tube_parts(source)[0]
         length = float(part.overall_length)
         placements = [
@@ -192,41 +182,17 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
                 },
             },
         ]
+
         with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "flat_common_line.zzx"
-            result = export_flat_nested_rod(placements, output)
-            self.assertTrue(
-                any("do not cut" in warning for warning in result["warnings"])
-            )
-
-            archive = Archive.read(output)
-            segment = archive.xml("Segments/content.xml").find("TubeSegment")
-            refs = list(segment.find("Shapes"))
-            shape_xml = {
-                element.get("Handle"): element
-                for element in archive.xml("Shapes/content.xml")
-                if element.tag != "MD5"
-            }
-            shape_records = {
-                record.address: record
-                for record in archive.stream("Shapes").records
-            }
-
-            machining_flags = []
-            for ref in refs:
-                record = shape_records[int(shape_xml[ref.get("Handle")].get("DataAddr"))]
-                shape_block = next(
-                    block for block in record.blocks if block.name == "Shape"
+            output = Path(temp_dir) / "must_not_merge_gap.zzx"
+            with self.assertRaisesRegex(
+                ValueError,
+                "real gap|outer contours differ",
+            ):
+                export_flat_nested_rod(
+                    placements,
+                    output,
                 )
-                channel = struct.unpack_from("<I", shape_block.payload, 0)[0]
-                if channel <= 0:
-                    continue
-                machining_flags.append(
-                    struct.unpack_from("<I", shape_block.payload, 8)[0]
-                )
-
-            self.assertEqual(machining_flags.count(2), 1)
-            self.assertGreaterEqual(machining_flags.count(0), 1)
 
 
     def test_machining_shapes_are_ordered_left_to_right_after_reversal(self):
@@ -281,19 +247,6 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
                 machining_centers,
                 sorted(machining_centers),
             )
-
-    def test_falling_start_centres_minimum_z_square_face(self):
-        curves = [
-            Line((50.0, -44.0, 10.0), (0.0, 88.0, 0.0)),
-            Line((50.0, 44.0, 10.0), (-100.0, 0.0, 100.0)),
-            Line((-50.0, 44.0, 110.0), (0.0, -88.0, 0.0)),
-            Line((-50.0, -44.0, 110.0), (100.0, 0.0, -100.0)),
-        ]
-        self.assertAlmostEqual(
-            _falling_start_parameter(curves),
-            0.5,
-            places=6,
-        )
 
     def test_angled_end_cut_start_is_minimum_z_after_pose(self):
         source = APP_ROOT / "Round tube Ø30 L1215, first cut 0° layer 1, second cut 45° layer 4.zzx"

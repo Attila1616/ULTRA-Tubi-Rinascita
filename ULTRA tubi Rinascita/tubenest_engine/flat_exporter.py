@@ -22,6 +22,7 @@ from .bcmp import FormatError, read_vector, vector
 from .domain import read_tube_parts
 from .geometry import Line, Polyline, Spline, primitives
 from .zzx_merge import nest_singletons
+from .cut_release import repair_single_segment_cut_release
 from .text_marking import (
     MarkingFitError,
     build_marking_records,
@@ -333,137 +334,7 @@ def _shape_do_not_cut(shape_record):
     )
     if block is None:
         return False
-    return int(struct.unpack_from("<I", block.payload, 8)[0]) == 2
-
-
-def _set_curve_start_parameter(shape_record, parameter):
-    block = next(
-        (
-            block for block in shape_record.blocks
-            if block.name == "Curve" and len(block.payload) >= 12
-        ),
-        None,
-    )
-    if block is None:
-        raise FormatError("Cut Shape record has no writable Curve start parameter")
-    payload = bytearray(block.payload)
-    struct.pack_into("<d", payload, 4, float(parameter))
-    block.payload = bytes(payload)
-
-
-def _outer_shape_curves(shape_xml, lite_by_addr):
-    geometry = next(
-        (
-            child for child in shape_xml
-            if child.tag == "Geometry" and child.get("GeoAddr") is not None
-        ),
-        None,
-    )
-    if geometry is None:
-        geometry = next(
-            (
-                child for child in shape_xml
-                if child.get("GeoAddr") is not None
-            ),
-            None,
-        )
-    if geometry is None:
-        return []
-    record = lite_by_addr.get(int(geometry.get("GeoAddr")))
-    if record is None:
-        raise FormatError(
-            f"LiteGeos address {geometry.get('GeoAddr')} is missing"
-        )
-    return list(primitives(record))
-
-
-def _falling_start_parameter(
-    curves,
-    samples_per_curve=256,
-    axial_tolerance_mm=1e-5,
-):
-    """Pick the falling-friendly start of an angled end contour.
-
-    Primary rule:
-      choose the contour locus with minimum machine Z, i.e. the side closest
-      to the already-cut/falling stock on the left.
-
-    Square/rectangular profiles can have an entire straight face at that same
-    minimum Z. In that case choose the point on the face closest to the
-    cross-section centre (X=0,Y=0). This puts the start in the middle of the
-    straight face instead of at the tangent between the face and corner radius.
-
-    Round profiles normally have a unique minimum-Z point, so the same rule
-    naturally selects the point closest toward the rod origin.
-    """
-    curves = list(curves or [])
-    if not curves:
-        return None
-
-    candidates = []
-    for index, curve in enumerate(curves):
-        candidate_ts = {0.0, 0.5, 1.0}
-
-        # For a straight 3D face, include the exact point on the segment that
-        # is closest to the cross-section centre. This avoids relying on a
-        # sampling grid for square/rectangular face centres.
-        if isinstance(curve, Line) and len(curve.start) >= 3:
-            x0, y0 = float(curve.start[0]), float(curve.start[1])
-            dx, dy = float(curve.direction[0]), float(curve.direction[1])
-            denom = dx * dx + dy * dy
-            if denom > 1e-18:
-                centred_t = -(x0 * dx + y0 * dy) / denom
-                if 0.0 <= centred_t <= 1.0:
-                    candidate_ts.add(float(centred_t))
-
-        for step in range(1, int(samples_per_curve)):
-            candidate_ts.add(step / float(samples_per_curve))
-
-        for local_t in sorted(candidate_ts):
-            point = tuple(curve.at(local_t))
-            if len(point) < 3:
-                continue
-            x, y, z = map(float, point[:3])
-            if not all(math.isfinite(value) for value in (x, y, z)):
-                continue
-            candidates.append(
-                (
-                    float(index) + float(local_t),
-                    x,
-                    y,
-                    z,
-                )
-            )
-
-    if not candidates:
-        return None
-
-    minimum_z = min(row[3] for row in candidates)
-    axial_tolerance_mm = max(0.0, float(axial_tolerance_mm))
-    pointy_candidates = [
-        row
-        for row in candidates
-        if row[3] <= minimum_z + axial_tolerance_mm
-    ]
-
-    # On a flat minimum-Z face, radial distance to (0,0) is smallest at the
-    # face centre. For a round tube the minimum-Z point is normally unique.
-    parameter, _x, _y, _z = min(
-        pointy_candidates,
-        key=lambda row: (
-            row[1] * row[1] + row[2] * row[2],
-            row[0],
-        ),
-    )
-    return parameter
-
-def _set_falling_friendly_start(shape_record, shape_xml, lite_by_addr):
-    curves = _outer_shape_curves(shape_xml, lite_by_addr)
-    parameter = _falling_start_parameter(curves)
-    if parameter is None:
-        return None
-    _set_curve_start_parameter(shape_record, parameter)
-    return parameter
+    return bool(int(struct.unpack_from("<I", block.payload, 8)[0]) & 0x2)
 
 
 def _shape_axial_center(shape_xml, lite_by_addr):
@@ -522,30 +393,6 @@ def _order_shape_references_left_to_right(
 
     decorated.sort(key=lambda row: row[0])
     return [ref for _key, ref in decorated]
-
-
-def _set_do_not_cut_flag(shape_record):
-    """Apply the exact no-cut marker observed in the supplied TubesT sample.
-
-    Sample:
-      ordinary cut Shape block: <III> = (1, 0, 0)
-      "do not cut" Shape block: <III> = (1, 0, 2)
-
-    Keep the machining channel untouched and change only the observed third
-    uint32 field. Do not generalize this marker to unrelated shapes.
-    """
-    block = next(
-        (
-            block for block in shape_record.blocks
-            if block.name == "Shape" and len(block.payload) >= 12
-        ),
-        None,
-    )
-    if block is None:
-        raise FormatError("Cut Shape record has no writable Shape block")
-    payload = bytearray(block.payload)
-    struct.pack_into("<I", payload, 8, 2)
-    block.payload = bytes(payload)
 
 
 def _transform_shape_record(record, item, base_rotation):
@@ -835,6 +682,10 @@ def _flat_transform(
     marking_reports = []
     marking_pending = []
     next_marking_handle = _next_export_handle(archive)
+    shared_cut_pairs = []
+    release_handles = []
+    previous_far_handle = None
+    stock_profile = resolved[0].part.profile
 
     if text_marking_enabled:
         if text_marking_font_path is None:
@@ -844,7 +695,6 @@ def _flat_transform(
         if not (1.0 <= text_marking_height_mm <= 10.0):
             raise ValueError("Text marking height must be between 1 and 10 mm")
 
-        stock_profile = resolved[0].part.profile
         marking_profile_kind = str(stock_profile.kind or "")
         if marking_profile_kind in {"Square", "Rect"}:
             marking_outside_width = float(stock_profile.outside_width or 0.0)
@@ -903,35 +753,10 @@ def _flat_transform(
                 rod_shift,
             )
 
-        # Toolpath start is intentionally applied after the nesting pose is
-        # frozen. Never rotate a nested piece merely to change where a cut
-        # starts. Every angled end cut starts at its minimum-Z point toward the
-        # already-cut/falling piece; minimum-Z edges use their lower endpoint.
-        for end_index, cutoff_attr in enumerate(("CutOffA", "CutOffB")):
-            angle = float(
-                item.part.ends[end_index].angle_from_perpendicular_degrees
-                or 0.0
-            )
-            if abs(angle) <= 0.1:
-                continue
-            handle = segment.get(cutoff_attr)
-            shape_xml = shapes_by_handle.get(str(handle))
-            if shape_xml is None:
-                raise FormatError(
-                    f"Angled end-cut Shape {handle} is missing"
-                )
-            shape_record = shape_record_by_addr.get(
-                int(shape_xml.get("DataAddr"))
-            )
-            if shape_record is None:
-                raise FormatError(
-                    f"Angled end-cut record {handle} is missing"
-                )
-            _set_falling_friendly_start(
-                shape_record,
-                shape_xml,
-                lite_by_addr,
-            )
+        # Release PathStartParam is repaired only after every part has been
+        # transformed into final positioned-stock coordinates and shared
+        # boundaries have been identified. This avoids applying the rule in a
+        # source/local frame or encoding child_index + normalized_fraction.
 
         reversed_end = bool(item.placement.get("reversed_end_for_end"))
         near_handle = (
@@ -944,23 +769,18 @@ def _flat_transform(
             first_near_handle = near_handle
         last_far_handle = far_handle
 
+        release_handles.extend(
+            [str(near_handle), str(far_handle)]
+        )
         if item.placement.get("common_line_before"):
-            near_xml = shapes_by_handle.get(str(near_handle))
-            if near_xml is None:
+            if previous_far_handle is None:
                 raise FormatError(
-                    f"Incoming common-line cut Shape {near_handle} is missing"
+                    "First nested piece cannot have common_line_before"
                 )
-            near_record = shape_record_by_addr.get(int(near_xml.get("DataAddr")))
-            if near_record is None:
-                raise FormatError(
-                    f"Incoming common-line cut record {near_handle} is missing"
-                )
-            _set_do_not_cut_flag(near_record)
-            warnings.append(
-                f"{item.file_name}: incoming co-edge cut {near_handle} marked "
-                "'do not cut' using the observed TubesT Shape flag; the previous "
-                "piece's boundary cut remains active."
+            shared_cut_pairs.append(
+                (str(previous_far_handle), str(near_handle))
             )
+        previous_far_handle = str(far_handle)
 
         if text_marking_enabled:
             if not item.marking_text:
@@ -1323,9 +1143,33 @@ def _flat_transform(
     portion_block.payload = bytes(raw)
     archive.entries["Portions/data.bin"] = portion_stream.encode()
 
+    cut_release_report = repair_single_segment_cut_release(
+        archive,
+        profile_kind=str(stock_profile.kind or ""),
+        outside_width=stock_profile.outside_width,
+        outside_height=stock_profile.outside_height,
+        outside_diameter=stock_profile.outside_diameter,
+        shared_pairs=shared_cut_pairs,
+        release_handles=release_handles,
+    )
+
+    if cut_release_report["disabled_duplicate_groups"]:
+        warnings.append(
+            "Shared cutoff group left disabled because no enabled channel-1 "
+            "copy was present: "
+            + repr(cut_release_report["disabled_duplicate_groups"])
+        )
+
     archive.refresh_checksums()
     checks = archive.validate()
-    return archive, placement_audit, warnings, used_end, marking_reports
+    return (
+        archive,
+        placement_audit,
+        warnings,
+        used_end,
+        marking_reports,
+        cut_release_report,
+    )
 
 
 def export_flat_nested_rod(
@@ -1357,7 +1201,14 @@ def export_flat_nested_rod(
         template_archive=template,
     )
 
-    archive, audit, warnings, used_end, marking_reports = _flat_transform(
+    (
+        archive,
+        audit,
+        warnings,
+        used_end,
+        marking_reports,
+        cut_release_report,
+    ) = _flat_transform(
         intermediate,
         resolved,
         rod_length,
@@ -1380,6 +1231,7 @@ def export_flat_nested_rod(
         "placements": audit,
         "textMarkings": marking_reports,
         "textMarkingEnabled": bool(text_marking_enabled),
+        "cutReleaseRepair": cut_release_report,
         "fileVersion": WRITABLE_FILE_VERSION,
         "exportMode": "single_segment_positioned_contours",
     }
