@@ -61,6 +61,27 @@ def _xml_by_handle(archive, section):
     }
 
 
+def _shape_geometry_source(shape_xml_by_handle, element):
+    """Follow source CopyHandle links until real geometry XML is found."""
+    current = element
+    seen = set()
+    while True:
+        handle = int(current.get("Handle"))
+        if handle in seen:
+            raise FormatError("Cyclic Shape CopyHandle chain")
+        seen.add(handle)
+
+        if any(child.get("GeoAddr") is not None for child in list(current)):
+            return current
+
+        copy_handle = current.get("CopyHandle")
+        if copy_handle is None:
+            return current
+        current = shape_xml_by_handle.get(int(copy_handle))
+        if current is None:
+            raise FormatError(f"Dangling source Shape CopyHandle {copy_handle}")
+
+
 def _set_object_handle(record, handle):
     block = next(
         (block for block in record.blocks if block.name == "Object" and len(block.payload) >= 4),
@@ -486,22 +507,54 @@ def export_nested_rod(
     used_handles = set()
     segment_outputs = []
     warnings = []
+    master_shape_handles = {}
 
-    def allocate_handle():
+    def reserve_source_handle_block(source_segment, source_shape_refs):
+        """Preserve the source's visible handle offsets within each segment.
+
+        Real TubesT files reserve handles immediately after TubeSegment
+        (commonly +1/+2) even though those objects are not exposed in XML.
+        Collapsing those gaps caused cutoff handles such as 1004/1005 to
+        become 1002/1003.
+        """
         nonlocal next_handle
-        while next_handle in used_handles or next_handle in (2, 3, 4, 7, 8):
-            next_handle += 1
-        value = next_handle
-        used_handles.add(value)
-        next_handle += 1
-        return value
+        old_segment_handle = int(source_segment.get("Handle"))
+        old_shape_handles = [int(ref.get("Handle")) for ref in source_shape_refs]
+        deltas = [handle - old_segment_handle for handle in old_shape_handles]
+        if any(delta <= 0 for delta in deltas):
+            raise FormatError("Unsupported source handle layout inside TubeSegment")
+
+        base = max(1001, next_handle)
+        while True:
+            proposed = [base] + [base + delta for delta in deltas]
+            if (
+                not any(value in used_handles or value in (2, 3, 4, 7, 8) for value in proposed)
+                and len(proposed) == len(set(proposed))
+            ):
+                break
+            base += 1
+
+        used_handles.update(proposed)
+        next_handle = max(proposed) + 1
+        return base, {
+            old_handle: base + (old_handle - old_segment_handle)
+            for old_handle in old_shape_handles
+        }
 
     for ordinal, item in enumerate(resolved, 1):
         archive = item.source_archive
         source_segment = item.source_segment_xml
         source_part = item.source_part
 
-        segment_handle = allocate_handle()
+        source_shape_refs = source_segment.find("Shapes")
+        if source_shape_refs is None:
+            raise FormatError(f"{item.source_file_name}: TubeSegment has no Shapes list")
+        source_shape_ref_list = list(source_shape_refs)
+        segment_handle, shape_handle_map = reserve_source_handle_block(
+            source_segment,
+            source_shape_ref_list,
+        )
+
         segment_record = copy.deepcopy(item.source_segment_record)
         _set_object_handle(segment_record, segment_handle)
         _set_segment_transform(segment_record, source_part, item.placement)
@@ -513,7 +566,7 @@ def export_nested_rod(
         if not source_name:
             source_name = Path(item.source_file_name).stem
         safe_segment_name = re.sub(r"[\\/|<>]", "_", source_name).strip()
-        segment_xml.set("Name", f"{safe_segment_name[:48]}_{ordinal:02d}")
+        segment_xml.set("Name", safe_segment_name[:64])
         segment_xml.attrib.pop("DataAddr", None)
 
         source_curve_records = _record_by_address(archive, "Curves")
@@ -537,19 +590,17 @@ def export_nested_rod(
         lite_stream.records.append(cross_geo_record)
         cross_geo.attrib.pop("GeoAddr", None)
 
-        source_shape_refs = source_segment.find("Shapes")
         output_shape_refs = segment_xml.find("Shapes")
-        if source_shape_refs is None or output_shape_refs is None:
+        if output_shape_refs is None:
             raise FormatError(f"{item.source_file_name}: TubeSegment has no Shapes list")
         for child in list(output_shape_refs):
             output_shape_refs.remove(child)
 
-        shape_handle_map = {}
         shape_record_map = {}
         shape_xml_map = {}
         geo_clones = {}
 
-        for source_ref in list(source_shape_refs):
+        for source_ref in source_shape_ref_list:
             old_handle = int(source_ref.get("Handle"))
             source_element = source_shape_xml.get(old_handle)
             if source_element is None:
@@ -563,8 +614,7 @@ def export_nested_rod(
                     f"{item.source_file_name}: shape {old_handle} binary record is missing"
                 )
 
-            new_handle = allocate_handle()
-            shape_handle_map[old_handle] = new_handle
+            new_handle = shape_handle_map[old_handle]
 
             cloned_record = copy.deepcopy(source_record)
             _set_object_handle(cloned_record, new_handle)
@@ -574,23 +624,52 @@ def export_nested_rod(
             cloned_xml = copy.deepcopy(source_element)
             cloned_xml.set("Handle", str(new_handle))
             cloned_xml.attrib.pop("DataAddr", None)
+            cloned_xml.attrib.pop("CopyHandle", None)
 
-            for child in list(cloned_xml):
-                if child.get("GeoAddr") is None:
-                    continue
-                old_geo_addr = int(child.get("GeoAddr"))
-                cloned_geo = geo_clones.get(old_geo_addr)
-                if cloned_geo is None:
-                    source_geo = source_lite_records.get(old_geo_addr)
-                    if source_geo is None:
-                        raise FormatError(
-                            f"{item.source_file_name}: LiteGeos {old_geo_addr} is missing"
-                        )
-                    cloned_geo = copy.deepcopy(source_geo)
-                    geo_clones[old_geo_addr] = cloned_geo
-                    lite_stream.records.append(cloned_geo)
-                child.attrib.pop("GeoAddr", None)
-                child.set("_SourceGeoAddr", str(old_geo_addr))
+            geometry_source = _shape_geometry_source(source_shape_xml, source_element)
+            geometry_children = [
+                child for child in list(geometry_source)
+                if child.get("GeoAddr") is not None
+            ]
+            master_key = (
+                str(source_part.part_fingerprint),
+                int(old_handle),
+            )
+            master_handle = master_shape_handles.get(master_key)
+
+            if geometry_children and master_handle is not None:
+                # Native TubesT duplication semantics: copied machining
+                # curves carry their own Shape/Curve metadata record but the
+                # XML points to the original shape through CopyHandle and
+                # contains no duplicate Geometry tree.
+                for child in list(cloned_xml):
+                    cloned_xml.remove(child)
+                cloned_xml.set("CopyHandle", str(master_handle))
+            else:
+                # First occurrence (or non-copyable XML shape): materialize
+                # the real geometry, following any CopyHandle present in the
+                # source document.
+                for child in list(cloned_xml):
+                    cloned_xml.remove(child)
+                for source_child in list(geometry_source):
+                    child = copy.deepcopy(source_child)
+                    if child.get("GeoAddr") is not None:
+                        old_geo_addr = int(child.get("GeoAddr"))
+                        cloned_geo = geo_clones.get(old_geo_addr)
+                        if cloned_geo is None:
+                            source_geo = source_lite_records.get(old_geo_addr)
+                            if source_geo is None:
+                                raise FormatError(
+                                    f"{item.source_file_name}: LiteGeos {old_geo_addr} is missing"
+                                )
+                            cloned_geo = copy.deepcopy(source_geo)
+                            geo_clones[old_geo_addr] = cloned_geo
+                            lite_stream.records.append(cloned_geo)
+                        child.attrib.pop("GeoAddr", None)
+                        child.set("_SourceGeoAddr", str(old_geo_addr))
+                    cloned_xml.append(child)
+                if geometry_children:
+                    master_shape_handles[master_key] = new_handle
 
             shapes_root.append(cloned_xml)
             shape_xml_map[old_handle] = cloned_xml
