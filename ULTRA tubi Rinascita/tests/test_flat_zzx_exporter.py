@@ -5,7 +5,11 @@ from pathlib import Path
 
 from tubenest_engine.archive import Archive
 from tubenest_engine.domain import read_tube_parts
-from tubenest_engine.flat_exporter import export_flat_nested_rod
+from tubenest_engine.flat_exporter import (
+    _falling_start_parameter,
+    export_flat_nested_rod,
+)
+from tubenest_engine.geometry import Line
 from tubenest_engine.reader import read_zzx_cached
 
 
@@ -278,7 +282,20 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
                 sorted(machining_centers),
             )
 
-    def test_angled_end_cut_start_is_machine_top_after_pose(self):
+    def test_falling_start_prefers_lower_end_of_minimum_z_edge(self):
+        curves = [
+            Line((50.0, -44.0, 10.0), (0.0, 88.0, 0.0)),
+            Line((50.0, 44.0, 10.0), (-100.0, 0.0, 100.0)),
+            Line((-50.0, 44.0, 110.0), (0.0, -88.0, 0.0)),
+            Line((-50.0, -44.0, 110.0), (100.0, 0.0, -100.0)),
+        ]
+        self.assertAlmostEqual(
+            _falling_start_parameter(curves),
+            0.0,
+            places=6,
+        )
+
+    def test_angled_end_cut_start_is_minimum_z_after_pose(self):
         source = APP_ROOT / "Round tube Ø30 L1215, first cut 0° layer 1, second cut 45° layer 4.zzx"
         part = read_tube_parts(source)[0]
         length = float(part.overall_length)
@@ -298,7 +315,7 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
             },
         ]
         with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "top_start.zzx"
+            output = Path(temp_dir) / "falling_start.zzx"
             export_flat_nested_rod(placements, output)
             document = read_zzx_cached(output)
             angled = next(
@@ -309,8 +326,8 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
             self.assertIsNotNone(angled.start_point)
             self.assertIsNotNone(angled.sampled_bounds)
             self.assertAlmostEqual(
-                float(angled.start_point[1]),
-                float(angled.sampled_bounds[1][1]),
+                float(angled.start_point[2]),
+                float(angled.sampled_bounds[0][2]),
                 delta=0.25,
             )
 
