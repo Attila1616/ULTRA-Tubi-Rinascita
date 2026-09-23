@@ -27,6 +27,7 @@ from .fit import (
 )
 from .toolpath import curve_start_parameter, point_at_composite_parameter
 from .exporter import export_nested_rod, export_nested_rod_to_directory
+from .flat_exporter import export_flat_nested_rod, export_flat_nested_rod_to_directory
 from .reader import (
     clear_cache,
     describe_zzx,
@@ -61,6 +62,8 @@ __all__ = [
     "point_at_composite_parameter",
     "export_nested_rod",
     "export_nested_rod_to_directory",
+    "export_flat_nested_rod",
+    "export_flat_nested_rod_to_directory",
     "clear_cache",
     "describe_zzx",
     "read_zzx",
