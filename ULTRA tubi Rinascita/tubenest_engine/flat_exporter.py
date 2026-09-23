@@ -20,7 +20,7 @@ import xml.etree.ElementTree as ET
 from .archive import Archive, xml_bytes
 from .bcmp import FormatError, read_vector, vector
 from .domain import read_tube_parts
-from .geometry import Spline
+from .geometry import Line, Polyline, Spline, primitives
 from .zzx_merge import nest_singletons
 
 
@@ -297,6 +297,186 @@ def _transform_geometry_record(record, item, base_rotation, rod_shift):
             )
 
 
+def _shape_channel(shape_record):
+    block = next(
+        (
+            block for block in shape_record.blocks
+            if block.name == "Shape" and len(block.payload) >= 4
+        ),
+        None,
+    )
+    if block is None:
+        return 0
+    return int(struct.unpack_from("<I", block.payload, 0)[0])
+
+
+def _shape_do_not_cut(shape_record):
+    block = next(
+        (
+            block for block in shape_record.blocks
+            if block.name == "Shape" and len(block.payload) >= 12
+        ),
+        None,
+    )
+    if block is None:
+        return False
+    return int(struct.unpack_from("<I", block.payload, 8)[0]) == 2
+
+
+def _set_curve_start_parameter(shape_record, parameter):
+    block = next(
+        (
+            block for block in shape_record.blocks
+            if block.name == "Curve" and len(block.payload) >= 12
+        ),
+        None,
+    )
+    if block is None:
+        raise FormatError("Cut Shape record has no writable Curve start parameter")
+    payload = bytearray(block.payload)
+    struct.pack_into("<d", payload, 4, float(parameter))
+    block.payload = bytes(payload)
+
+
+def _outer_shape_curves(shape_xml, lite_by_addr):
+    geometry = next(
+        (
+            child for child in shape_xml
+            if child.tag == "Geometry" and child.get("GeoAddr") is not None
+        ),
+        None,
+    )
+    if geometry is None:
+        geometry = next(
+            (
+                child for child in shape_xml
+                if child.get("GeoAddr") is not None
+            ),
+            None,
+        )
+    if geometry is None:
+        return []
+    record = lite_by_addr.get(int(geometry.get("GeoAddr")))
+    if record is None:
+        raise FormatError(
+            f"LiteGeos address {geometry.get('GeoAddr')} is missing"
+        )
+    return list(primitives(record))
+
+
+def _top_start_parameter(curves, samples_per_curve=96):
+    """Return the contour parameter for the machine-top, falling-friendly start.
+
+    The user's validated square-tube sample B starts at the upper midpoint.
+    After nesting we choose maximum machine Y; ties prefer the point extending
+    toward the already-cut left side (minimum Z), then the section center.
+    """
+    curves = list(curves or [])
+    if not curves:
+        return None
+
+    best = None
+    for index, curve in enumerate(curves):
+        candidate_ts = {0.0, 1.0}
+        # Dense sampling works for arbitrary imported rational splines and
+        # polylines. Add the analytically centered point of a flat Line when
+        # possible so a top straight edge selects its midpoint exactly.
+        if isinstance(curve, Line):
+            dx = float(curve.direction[0]) if len(curve.direction) > 0 else 0.0
+            if abs(dx) > 1e-12:
+                centered = -float(curve.start[0]) / dx
+                if 0.0 <= centered <= 1.0:
+                    candidate_ts.add(centered)
+        for step in range(1, int(samples_per_curve)):
+            candidate_ts.add(step / float(samples_per_curve))
+
+        for local_t in sorted(candidate_ts):
+            point = tuple(curve.at(local_t))
+            if len(point) < 3:
+                continue
+            x, y, z = map(float, point[:3])
+            # Max Y = top. At equal top height, use the pointiest side toward
+            # the left/falling piece (min Z), then prefer section center.
+            score = (
+                round(y, 9),
+                -round(z, 9),
+                -round(abs(x), 9),
+                -round(min(local_t, 1.0 - local_t), 9),
+                -index,
+            )
+            if best is None or score > best[0]:
+                best = (score, float(index) + float(local_t))
+
+    return None if best is None else best[1]
+
+
+def _set_falling_friendly_start(shape_record, shape_xml, lite_by_addr):
+    curves = _outer_shape_curves(shape_xml, lite_by_addr)
+    parameter = _top_start_parameter(curves)
+    if parameter is None:
+        return None
+    _set_curve_start_parameter(shape_record, parameter)
+    return parameter
+
+
+def _shape_axial_center(shape_xml, lite_by_addr):
+    points = []
+    for child in shape_xml:
+        if child.get("GeoAddr") is None:
+            continue
+        record = lite_by_addr.get(int(child.get("GeoAddr")))
+        if record is None:
+            continue
+        for curve in primitives(record):
+            points.extend(curve.sample(32))
+
+    if shape_xml.tag == "Line":
+        start = shape_xml.find("LineStart")
+        direction = shape_xml.find("LineVector")
+        if start is not None:
+            p = tuple(float(start.get(axis, "0")) for axis in "XYZ")
+            points.append(p)
+            if direction is not None:
+                d = tuple(float(direction.get(axis, "0")) for axis in "XYZ")
+                points.append(tuple(a + b for a, b in zip(p, d)))
+
+    z_values = [float(point[2]) for point in points if len(point) >= 3]
+    if not z_values:
+        return float("inf")
+    return (min(z_values) + max(z_values)) / 2.0
+
+
+def _order_shape_references_left_to_right(
+    shape_refs,
+    shapes_by_handle,
+    shape_record_by_addr,
+    lite_by_addr,
+):
+    decorated = []
+    for original_index, ref in enumerate(list(shape_refs)):
+        shape_xml = shapes_by_handle.get(ref.get("Handle"))
+        if shape_xml is None:
+            continue
+        record = shape_record_by_addr.get(int(shape_xml.get("DataAddr")))
+        if record is None:
+            continue
+        channel = _shape_channel(record)
+        if channel > 0:
+            key = (
+                0,
+                round(_shape_axial_center(shape_xml, lite_by_addr), 6),
+                1 if _shape_do_not_cut(record) else 0,
+                original_index,
+            )
+        else:
+            # Display/silhouette geometry is not a machining operation.
+            key = (1, float("inf"), 0, original_index)
+        decorated.append((key, ref))
+
+    decorated.sort(key=lambda row: row[0])
+    return [ref for _key, ref in decorated]
+
+
 def _set_do_not_cut_flag(shape_record):
     """Apply the exact no-cut marker observed in the supplied TubesT sample.
 
@@ -433,6 +613,36 @@ def _flat_transform(archive, resolved, rod_length):
                 rod_shift,
             )
 
+        # Toolpath start is intentionally applied after the nesting pose is
+        # frozen. Never rotate a nested piece merely to change where a cut
+        # starts. Every angled end cut starts at machine-top, matching the
+        # user's validated "B" start-position behavior.
+        for end_index, cutoff_attr in enumerate(("CutOffA", "CutOffB")):
+            angle = float(
+                item.part.ends[end_index].angle_from_perpendicular_degrees
+                or 0.0
+            )
+            if abs(angle) <= 0.1:
+                continue
+            handle = segment.get(cutoff_attr)
+            shape_xml = shapes_by_handle.get(str(handle))
+            if shape_xml is None:
+                raise FormatError(
+                    f"Angled end-cut Shape {handle} is missing"
+                )
+            shape_record = shape_record_by_addr.get(
+                int(shape_xml.get("DataAddr"))
+            )
+            if shape_record is None:
+                raise FormatError(
+                    f"Angled end-cut record {handle} is missing"
+                )
+            _set_falling_friendly_start(
+                shape_record,
+                shape_xml,
+                lite_by_addr,
+            )
+
         reversed_end = bool(item.placement.get("reversed_end_for_end"))
         near_handle = (
             segment.get("CutOffB") if reversed_end else segment.get("CutOffA")
@@ -495,6 +705,14 @@ def _flat_transform(archive, resolved, rod_length):
         if other_shapes is not None:
             first_shapes.extend(list(other_shapes))
         segments_root.remove(segment)
+
+    ordered_refs = _order_shape_references_left_to_right(
+        list(first_shapes),
+        shapes_by_handle,
+        shape_record_by_addr,
+        lite_by_addr,
+    )
+    first_shapes[:] = ordered_refs
 
     # The verified TubePro workaround is exactly one segment record after the
     # pack record. All machining geometry remains in Shapes/LiteGeos.
