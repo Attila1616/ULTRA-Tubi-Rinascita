@@ -1259,12 +1259,18 @@ def export_locked_rod_zzx(payload):
         if not segments:
             return {"status": "error", "message": "La verga bloccata non contiene pezzi."}
 
+        try:
+            gap_mm = max(0.0, float(config.get("nesting_gap_mm", 2.0)))
+        except (TypeError, ValueError):
+            gap_mm = 2.0
+
         result = tubenest_engine.export_nested_rod_to_directory(
             segments,
             output_dir,
             tube_type=str((payload or {}).get("tubeType") or "Tube"),
             rod_id=str((payload or {}).get("rodId") or "rod"),
             rod_length=float((payload or {}).get("rodLength") or 6000.0),
+            gap_mm=gap_mm,
         )
         return {
             "status": "success",
