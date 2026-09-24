@@ -13,9 +13,17 @@ def native_interval(curve):
     if isinstance(curve, Line):
         return 0.0, 1.0
     if isinstance(curve, Spline):
+        # Observed ZZX files use flag=1 on otherwise ordinary clamped
+        # rational splines (notably circular tube end contours).  The flag
+        # does not change the spline's active native parameter domain.
+        # Keep unknown flag values conservative, but accept the confirmed
+        # 0/1 variants.
+        if curve.flag not in (0, 1):
+            raise ValueError(
+                f"Unsupported spline parameter flag: {curve.flag}"
+            )
         if (
-            curve.flag
-            or any(
+            any(
                 knot != curve.knots[0]
                 for knot in curve.knots[: curve.degree + 1]
             )
@@ -25,9 +33,9 @@ def native_interval(curve):
             )
         ):
             raise ValueError(
-                "Unsupported nonclamped/flagged spline parameter interval"
+                "Unsupported nonclamped spline parameter interval"
             )
-        return curve.knots[0], curve.knots[-1]
+        return curve.knots[curve.degree], curve.knots[len(curve.points)]
     raise ValueError("Unsupported native curve parameterization")
 
 
