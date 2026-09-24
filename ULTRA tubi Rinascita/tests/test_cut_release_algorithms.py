@@ -65,6 +65,57 @@ class CutReleaseAlgorithmTests(unittest.TestCase):
             1,
         )
 
+
+    def test_flagged_clamped_spline_uses_native_knot_interval(self):
+        curve = Spline(
+            3,
+            [
+                math.pi / 2,
+                math.pi / 2,
+                math.pi / 2,
+                math.pi / 2,
+                3 * math.pi / 2,
+                3 * math.pi / 2,
+                3 * math.pi / 2,
+                5 * math.pi / 2,
+                5 * math.pi / 2,
+                5 * math.pi / 2,
+                5 * math.pi / 2,
+            ],
+            [
+                (0.0, 1.0, 0.0),
+                (-1.0, 1.0, 0.0),
+                (-1.0, -1.0, 0.0),
+                (0.0, -1.0, 0.0),
+                (1.0, -1.0, 0.0),
+                (1.0, 1.0, 0.0),
+                (0.0, 1.0, 0.0),
+            ],
+            [1.0] * 7,
+            flag=1,
+        )
+
+        self.assertAlmostEqual(
+            composite_parameter([curve], 0, 0.0),
+            0.0,
+            places=12,
+        )
+        self.assertAlmostEqual(
+            composite_parameter([curve], 0, 1.0),
+            2 * math.pi,
+            places=12,
+        )
+        index, normalized = locate_parameter(
+            [curve],
+            math.pi,
+        )
+        self.assertEqual(index, 0)
+        self.assertAlmostEqual(
+            normalized,
+            0.5,
+            places=12,
+        )
+
     def test_line_and_negative_native_spline_domain(self):
         curves = [
             Line(
