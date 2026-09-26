@@ -1606,16 +1606,6 @@ def export_nested_rod(
     viewport_handles = _remap_viewport_handles(entries, used_handles)
     used_handles.update(viewport_handles)
 
-    root_content = ET.fromstring(entries["content.xml"])
-    header = root_content.find("Header")
-    if header is not None:
-        # TubesT FileVer 65542 stores the highest handle that actually exists
-        # in the finished document. Reserved-but-unused allocator slots must
-        # not influence this value.
-        maximum_handle = _max_explicit_xml_handle(entries)
-        header.set("HandleSeed", str(maximum_handle))
-    entries["content.xml"] = xml_bytes(root_content)
-
     entries["Segments/data.bin"] = segments_data
     entries["Segments/content.xml"] = xml_bytes(segments_root)
     entries["Curves/data.bin"] = curves_data
@@ -1626,6 +1616,18 @@ def export_nested_rod(
     entries["Shapes/content.xml"] = xml_bytes(shapes_root)
     entries["Portions/data.bin"] = portions_data
     entries["Portions/content.xml"] = xml_bytes(portions_root)
+
+    # Calculate HandleSeed only after every generated XML section has replaced
+    # the source snapshot. TubesT stores the highest handle that actually
+    # exists in the finished document.
+    root_content = ET.fromstring(entries["content.xml"])
+    header = root_content.find("Header")
+    if header is not None:
+        header.set(
+            "HandleSeed",
+            str(_max_explicit_xml_handle(entries)),
+        )
+    entries["content.xml"] = xml_bytes(root_content)
 
     archive = Archive(entries)
     archive.refresh_checksums()
