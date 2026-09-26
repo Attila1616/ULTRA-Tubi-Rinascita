@@ -12,6 +12,7 @@ from unittest.mock import patch
 from tubenest_engine.archive import Archive
 from tubenest_engine.domain import read_tube_parts
 from tubenest_engine.exporter import (
+    _prepare_canonical_stock_profile,
     _repair_locked_common_lines,
     _saved_stock_profile_signature,
     export_nested_rod,
@@ -95,6 +96,36 @@ class NativeArrayExporterTests(unittest.TestCase):
             _saved_stock_profile_signature(a),
             _saved_stock_profile_signature(b),
         )
+
+    def test_corner_radii_are_averaged_and_applied_to_all_segments(self):
+        def item(name, radius):
+            profile = SimpleNamespace(
+                kind="Square",
+                thickness=2.0,
+                outside_width=30.0,
+                outside_height=30.0,
+                outside_diameter=None,
+                corner_radius=radius,
+            )
+            return SimpleNamespace(
+                source_file_name=name,
+                source_part=SimpleNamespace(profile=profile),
+            )
+
+        items = [
+            item("a.zzx", 3.2),
+            item("b.zzx", 2.0),
+            item("c.zzx", 2.6),
+        ]
+        info = _prepare_canonical_stock_profile(items)
+
+        self.assertAlmostEqual(info["averageCornerRadiusMm"], 2.6)
+        self.assertEqual(info["cornerRadiiMm"], [3.2, 2.0, 2.6])
+        for resolved in items:
+            self.assertAlmostEqual(
+                resolved.source_part.profile.corner_radius,
+                2.6,
+            )
 
     def test_incompatible_locked_common_line_falls_back_to_gap_and_shifts_tail(self):
         part = SimpleNamespace(to_dict=lambda: {"profile": {"kind": "Circle"}})

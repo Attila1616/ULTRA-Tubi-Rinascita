@@ -805,24 +805,17 @@ def _profile_number(value):
 
 
 def _saved_stock_profile_signature(item):
-    """Physical stock identity required by TubePro mixed-segment arrays.
-
-    Do not compare the complete Curves BCMP record: unrelated serialized
-    metadata may differ between otherwise identical stock definitions.
-    """
     profile = item.source_part.profile
     kind = str(profile.kind or "")
     if kind == "Circle":
         dimensions = (
             _profile_number(profile.outside_diameter),
             None,
-            None,
         )
     else:
         dimensions = (
             _profile_number(profile.outside_width),
             _profile_number(profile.outside_height),
-            _profile_number(profile.corner_radius),
         )
     return (
         kind,
@@ -831,19 +824,159 @@ def _saved_stock_profile_signature(item):
     )
 
 
-def _validate_saved_stock_profiles(resolved):
+def _prepare_canonical_stock_profile(resolved):
+    """Average square/rect corner radii and apply one rod-level stock profile."""
     first = resolved[0]
     reference = _saved_stock_profile_signature(first)
     for item in resolved[1:]:
         candidate = _saved_stock_profile_signature(item)
         if candidate != reference:
             raise ValueError(
-                "Mixed-segment TubePro export requires the same physical stock "
-                "profile for every piece (kind, thickness, dimensions and corner "
-                "radius/diameter). "
+                "Mixed-segment TubePro export requires the same nominal stock "
+                "profile for every piece (kind, thickness and outside dimensions). "
                 f"{item.source_file_name} has {candidate}, while "
                 f"{first.source_file_name} has {reference}."
             )
+
+    kind = str(first.source_part.profile.kind or "")
+    info = {
+        "kind": kind,
+        "cornerRadiiMm": [],
+        "averageCornerRadiusMm": None,
+        "canonicalSourceFile": first.source_file_name,
+        "radiusWrittenToNativeRecord": False,
+    }
+    if kind not in ("Square", "Rect"):
+        return info
+
+    radii = []
+    for item in resolved:
+        value = item.source_part.profile.corner_radius
+        radius = 0.0 if value is None else float(value)
+        if not math.isfinite(radius) or radius < 0.0:
+            raise ValueError(
+                f"{item.source_file_name}: invalid corner radius {value!r}"
+            )
+        width = float(item.source_part.profile.outside_width or 0.0)
+        height = float(item.source_part.profile.outside_height or 0.0)
+        if radius > min(width, height) / 2.0 + 1e-9:
+            raise ValueError(
+                f"{item.source_file_name}: corner radius {radius:g} mm exceeds "
+                "half of the stock size"
+            )
+        radii.append(radius)
+
+    average = sum(radii) / len(radii)
+    average = round(float(average), 6)
+    canonical_index = min(
+        range(len(resolved)),
+        key=lambda index: abs(radii[index] - average),
+    )
+    canonical_item = resolved[canonical_index]
+
+    for item in resolved:
+        item.source_part.profile.corner_radius = average
+
+    info.update(
+        {
+            "cornerRadiiMm": [float(value) for value in radii],
+            "averageCornerRadiusMm": average,
+            "canonicalSourceFile": canonical_item.source_file_name,
+            "_canonicalItem": canonical_item,
+        }
+    )
+    return info
+
+
+def _validate_saved_stock_profiles(resolved):
+    reference = _saved_stock_profile_signature(resolved[0])
+    reference_radius = _profile_number(
+        resolved[0].source_part.profile.corner_radius
+    )
+    for item in resolved[1:]:
+        candidate = _saved_stock_profile_signature(item)
+        candidate_radius = _profile_number(
+            item.source_part.profile.corner_radius
+        )
+        if candidate != reference or candidate_radius != reference_radius:
+            raise ValueError(
+                "Internal canonical-stock normalization failed: generated "
+                "segments do not share one physical stock profile."
+            )
+
+
+def _canonical_cross_section_template(item, averaged_corner_radius):
+    archive = item.source_archive
+    source_segment = item.source_segment_xml
+    cross = source_segment.find("CrossSection")
+    if cross is None or cross.get("DataAddr") is None:
+        raise FormatError(
+            f"{item.source_file_name}: TubeSegment has no saved CrossSection"
+        )
+
+    curve_records = _record_by_address(archive, "Curves")
+    curve_record = copy.deepcopy(
+        curve_records[int(cross.get("DataAddr"))]
+    )
+
+    radius_written = False
+    if averaged_corner_radius is not None and curve_record.blocks:
+        payload = bytearray(curve_record.blocks[-1].payload)
+        if curve_record.name == "TRvSquareSection" and len(payload) >= 16:
+            _old_radius, side = struct.unpack_from("<dd", payload, 0)
+            struct.pack_into(
+                "<dd",
+                payload,
+                0,
+                float(averaged_corner_radius),
+                float(side),
+            )
+            curve_record.blocks[-1].payload = bytes(payload)
+            radius_written = True
+        elif curve_record.name == "TRvRectSection" and len(payload) >= 24:
+            width, height, _old_radius = struct.unpack_from(
+                "<ddd",
+                payload,
+                0,
+            )
+            struct.pack_into(
+                "<ddd",
+                payload,
+                0,
+                float(width),
+                float(height),
+                float(averaged_corner_radius),
+            )
+            curve_record.blocks[-1].payload = bytes(payload)
+            radius_written = True
+
+    cross_xml = copy.deepcopy(cross)
+    geometry = cross.find("Geometry")
+    if geometry is None or geometry.get("GeoAddr") is None:
+        raise FormatError(
+            f"{item.source_file_name}: CrossSection has no geometry"
+        )
+    lite_records = _record_by_address(archive, "LiteGeos")
+    geometry_record = copy.deepcopy(
+        lite_records[int(geometry.get("GeoAddr"))]
+    )
+    return cross_xml, curve_record, geometry_record, radius_written
+
+
+def _apply_canonical_cross_section_xml(target_cross, canonical_cross):
+    target_cross.attrib.clear()
+    target_cross.attrib.update(dict(canonical_cross.attrib))
+    target_cross.attrib.pop("DataAddr", None)
+    for child in list(target_cross):
+        target_cross.remove(child)
+    for source_child in list(canonical_cross):
+        child = copy.deepcopy(source_child)
+        child.attrib.pop("GeoAddr", None)
+        target_cross.append(child)
+    geometry = target_cross.find("Geometry")
+    if geometry is None:
+        raise FormatError("Canonical CrossSection has no Geometry child")
+    return geometry
 
 
 def _choose_template(resolved, all_layers):
@@ -1113,9 +1246,28 @@ def export_nested_rod(
         raise ValueError("rod_length must be positive")
 
     resolved, all_layers = _resolve_placements(placements)
+    stock_profile_normalization = _prepare_canonical_stock_profile(resolved)
     _validate_saved_stock_profiles(resolved)
     template_item = _choose_template(resolved, all_layers)
     template = template_item.source_archive
+
+    canonical_profile_item = stock_profile_normalization.get(
+        "_canonicalItem",
+        resolved[0],
+    )
+    (
+        canonical_cross_xml,
+        canonical_curve_template,
+        canonical_cross_geo_template,
+        radius_written_to_native_record,
+    ) = _canonical_cross_section_template(
+        canonical_profile_item,
+        stock_profile_normalization.get("averageCornerRadiusMm"),
+    )
+    stock_profile_normalization["radiusWrittenToNativeRecord"] = bool(
+        radius_written_to_native_record
+    )
+    stock_profile_normalization.pop("_canonicalItem", None)
     gap_mm = float(gap_mm)
     if not math.isfinite(gap_mm) or gap_mm < 0:
         raise ValueError("gap_mm must be finite and non-negative")
@@ -1190,6 +1342,14 @@ def export_nested_rod(
     used_handles = set()
     segment_outputs = []
     warnings = list(common_line_warnings)
+    radii = stock_profile_normalization.get("cornerRadiiMm") or []
+    average_radius = stock_profile_normalization.get("averageCornerRadiusMm")
+    if radii and max(radii) - min(radii) > 1e-6:
+        warnings.append(
+            "Corner-radius definitions differed across source parts; "
+            f"ULTRA normalized all generated segments to the arithmetic mean "
+            f"R={average_radius:g} mm from {radii}."
+        )
     marking_reports = []
     release_start_reports = []
     master_shape_handles = {}
@@ -1255,26 +1415,26 @@ def export_nested_rod(
         segment_xml.set("Name", safe_segment_name[:64])
         segment_xml.attrib.pop("DataAddr", None)
 
-        source_curve_records = _record_by_address(archive, "Curves")
         source_lite_records = _record_by_address(archive, "LiteGeos")
         source_shape_records = _record_by_address(archive, "Shapes")
         source_shape_xml = _xml_by_handle(archive, "Shapes")
 
         cross = segment_xml.find("CrossSection")
         if cross is None:
-            raise FormatError(f"{item.source_file_name}: TubeSegment has no CrossSection")
-        source_curve_addr = int(cross.get("DataAddr"))
-        curve_record = copy.deepcopy(source_curve_records[source_curve_addr])
-        curves_stream.records.append(curve_record)
-        cross.attrib.pop("DataAddr", None)
+            raise FormatError(
+                f"{item.source_file_name}: TubeSegment has no CrossSection"
+            )
+        cross_geo = _apply_canonical_cross_section_xml(
+            cross,
+            canonical_cross_xml,
+        )
 
-        cross_geo = cross.find("Geometry")
-        if cross_geo is None or cross_geo.get("GeoAddr") is None:
-            raise FormatError(f"{item.source_file_name}: CrossSection has no geometry")
-        source_cross_geo_addr = int(cross_geo.get("GeoAddr"))
-        cross_geo_record = copy.deepcopy(source_lite_records[source_cross_geo_addr])
+        curve_record = copy.deepcopy(canonical_curve_template)
+        curves_stream.records.append(curve_record)
+
+        cross_geo_record = copy.deepcopy(canonical_cross_geo_template)
         lite_stream.records.append(cross_geo_record)
-        cross_geo.attrib.pop("GeoAddr", None)
+
 
         output_shape_refs = segment_xml.find("Shapes")
         if output_shape_refs is None:
@@ -2067,6 +2227,7 @@ def export_nested_rod(
         "textMarkingEnabled": text_marking_enabled,
         "releaseStarts": release_start_reports,
         "commonLinePackMode": bool(common_line_pack_mode),
+        "stockProfileNormalization": stock_profile_normalization,
         "geometryCatalog": {
             "createdInertMasterHandles": catalog_created,
             "reusedFirstSegmentHandles": catalog_reused,
