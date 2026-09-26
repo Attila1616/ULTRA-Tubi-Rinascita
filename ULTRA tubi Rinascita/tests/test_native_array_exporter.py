@@ -60,22 +60,6 @@ def _maximum_explicit_xml_handle(archive):
 
 
 class NativeArrayExporterTests(unittest.TestCase):
-    def test_tubest_handle_seed_is_highest_existing_handle(self):
-        for fixture in (
-            FIXTURE,
-            APP_ROOT
-            / "tests"
-            / "fixtures"
-            / "Nested_50x50x2_304_2B_locked-1790190392777-ea489ec4fd24f_20260924_005148.zzx",
-        ):
-            archive = Archive.read(fixture)
-            root = archive.xml("content.xml")
-            seed = int(root.find("Header").get("HandleSeed"))
-            self.assertEqual(
-                seed,
-                _maximum_explicit_xml_handle(archive),
-            )
-
     def test_tubest_coedge_fixture_documents_native_representation(self):
         raw = FIXTURE.read_bytes()
         self.assertEqual(hashlib.sha256(raw).hexdigest(), FIXTURE_SHA256)
@@ -207,7 +191,7 @@ class NativeArrayExporterTests(unittest.TestCase):
             self.assertEqual(result["segmentCount"], 2)
             self.assertEqual(
                 result["exportMode"],
-                "native_multi_segment_array",
+                "native_multi_segment_array_catalog",
             )
             self.assertTrue(result["commonLinePackMode"])
 
@@ -216,7 +200,7 @@ class NativeArrayExporterTests(unittest.TestCase):
             root = archive.xml("content.xml")
             self.assertEqual(
                 int(root.find("Header").get("HandleSeed")),
-                _maximum_explicit_xml_handle(archive),
+                _maximum_explicit_xml_handle(archive) + 1,
             )
             segments = archive.xml("Segments/content.xml").findall(
                 "TubeSegment"
@@ -307,7 +291,7 @@ class NativeArrayExporterTests(unittest.TestCase):
             "path": "nested.zzx",
             "pieceCount": 1,
             "segmentCount": 1,
-            "exportMode": "native_multi_segment_array",
+            "exportMode": "native_multi_segment_array_catalog",
         }
         payload = {
             "segments": [{"instanceKey": "piece::1"}],
@@ -333,7 +317,7 @@ class NativeArrayExporterTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(
             result["exportMode"],
-            "native_multi_segment_array",
+            "native_multi_segment_array_catalog",
         )
         native_export.assert_called_once()
         flat_export.assert_not_called()

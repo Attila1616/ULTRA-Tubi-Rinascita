@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import math
 from pathlib import Path
 import re
@@ -131,6 +132,96 @@ def _shape_do_not_cut(record):
     if block is None:
         return False
     return bool(struct.unpack_from("<I", block.payload, 8)[0] & EXCLUSION_WORK_BIT)
+
+
+def _object_handle(record):
+    block = next(
+        (
+            block
+            for block in record.blocks
+            if block.name == "Object" and len(block.payload) >= 4
+        ),
+        None,
+    )
+    if block is None:
+        raise FormatError(f"{record.name} record has no Object handle")
+    return int(struct.unpack_from("<I", block.payload, 0)[0])
+
+
+def _curve_flags(record):
+    block = next(
+        (
+            block
+            for block in record.blocks
+            if block.name == "Curve" and len(block.payload) >= 16
+        ),
+        None,
+    )
+    return 0 if block is None else int(struct.unpack_from("<I", block.payload, 12)[0])
+
+
+def _make_inert_geometry_master(record, handle):
+    """Clone an active Shape as a first-segment geometry-only catalog master."""
+    master = copy.deepcopy(record)
+    _set_object_handle(master, handle)
+
+    shape_block = next(
+        (
+            block
+            for block in master.blocks
+            if block.name == "Shape" and len(block.payload) >= 12
+        ),
+        None,
+    )
+    if shape_block is None:
+        raise FormatError("Geometry master Shape has no writable Shape block")
+    payload = bytearray(shape_block.payload)
+    struct.pack_into("<I", payload, 0, 0)
+    work = struct.unpack_from("<I", payload, 8)[0]
+    struct.pack_into("<I", payload, 8, work & ~EXCLUSION_WORK_BIT)
+    shape_block.payload = bytes(payload)
+
+    curve_block = next(
+        (
+            block
+            for block in master.blocks
+            if block.name == "Curve" and len(block.payload) >= 16
+        ),
+        None,
+    )
+    if curve_block is None:
+        raise FormatError("Geometry master Shape has no writable Curve block")
+    payload = bytearray(curve_block.payload)
+    struct.pack_into("<I", payload, 12, 0)
+    curve_block.payload = bytes(payload)
+    return master
+
+
+def _geometry_catalog_signature(shape_element, geometry_pairs):
+    digest = hashlib.sha256()
+    digest.update(str(shape_element.tag).encode("utf-8"))
+    for child, record in geometry_pairs:
+        digest.update(str(child.tag).encode("utf-8"))
+        digest.update(str(child.get("Class") or "").encode("utf-8"))
+        digest.update(str(record.name).encode("ascii", "strict"))
+        digest.update(struct.pack("<I", int(record.version)))
+        for block in record.blocks:
+            digest.update(str(block.name).encode("ascii", "strict"))
+            digest.update(struct.pack("<I", int(block.version)))
+            digest.update(struct.pack("<I", len(block.payload)))
+            digest.update(block.payload)
+        digest.update(record.tail)
+    return digest.hexdigest()
+
+
+def _geometry_z_bounds(geometry_pairs):
+    values = []
+    for _child, record in geometry_pairs:
+        for curve in primitives(record):
+            values.extend(float(point[2]) for point in curve.sample(64))
+    if not values:
+        raise FormatError("Geometry catalog entry has no sampled 3D points")
+    return min(values), max(values)
 
 
 def _order_segment_refs_release_safe(
@@ -691,6 +782,44 @@ def _resolve_placements(placements):
     return resolved, all_layers
 
 
+def _saved_stock_profile_signature(item):
+    segment = item.source_segment_xml
+    cross = segment.find("CrossSection")
+    if cross is None or cross.get("DataAddr") is None:
+        raise FormatError(
+            f"{item.source_file_name}: TubeSegment has no saved CrossSection record"
+        )
+    records = _record_by_address(item.source_archive, "Curves")
+    record = records.get(int(cross.get("DataAddr")))
+    if record is None:
+        raise FormatError(
+            f"{item.source_file_name}: saved CrossSection record is missing"
+        )
+    return (
+        str(cross.get("SectionClass") or ""),
+        str(cross.get("ThickNess") or ""),
+        str(record.name),
+        tuple(
+            (str(block.name), int(block.version), bytes(block.payload))
+            for block in record.blocks
+        ),
+        bytes(record.tail),
+    )
+
+
+def _validate_saved_stock_profiles(resolved):
+    first = resolved[0]
+    reference = _saved_stock_profile_signature(first)
+    for item in resolved[1:]:
+        if _saved_stock_profile_signature(item) != reference:
+            raise ValueError(
+                "Mixed-segment TubePro export requires identical saved stock "
+                "profiles for every piece, including section class, thickness, "
+                "dimensions and corner radius. "
+                f"{item.source_file_name} does not match {first.source_file_name}."
+            )
+
+
 def _choose_template(resolved, all_layers):
     required = set(all_layers)
     candidates = [
@@ -904,6 +1033,7 @@ def export_nested_rod(
         raise ValueError("rod_length must be positive")
 
     resolved, all_layers = _resolve_placements(placements)
+    _validate_saved_stock_profiles(resolved)
     template_item = _choose_template(resolved, all_layers)
     template = template_item.source_archive
     gap_mm = float(gap_mm)
@@ -1561,9 +1691,211 @@ def export_nested_rod(
             "cross_geo_record": cross_geo_record,
             "shape_record_map": shape_record_map,
             "shape_xml_map": shape_xml_map,
+            "output_record_by_handle": output_record_by_handle,
             "geo_clones": geo_clones,
             "marking_pending": marking_pending,
         })
+
+    # TubePro mixed-segment import requires every later machining Shape
+    # to resolve geometry through a Shape owned by the first TubeSegment.
+    # Repeated geometry may point at an existing first-segment active Shape;
+    # new geometry gets a channel-0 / Curve-flags-0 inert catalog master.
+    first_output = segment_outputs[0]
+    first_segment_xml = first_output["segment_xml"]
+    first_shapes_parent = first_segment_xml.find("Shapes")
+    if first_shapes_parent is None:
+        raise FormatError("First TubeSegment has no Shapes list")
+
+    first_min_z = float(resolved[0].source_part.axial_min)
+    first_max_z = float(resolved[0].source_part.axial_max)
+    if first_min_z > first_max_z:
+        first_min_z, first_max_z = first_max_z, first_min_z
+
+    global_shape_xml = {
+        str(element.get("Handle")): element
+        for element in shapes_root
+        if element.tag != "MD5" and element.get("Handle") is not None
+    }
+    global_shape_records = {}
+    geometry_pairs_by_handle = {}
+
+    for output in segment_outputs:
+        global_shape_records.update(output["output_record_by_handle"])
+        for _old_handle, element in output["shape_xml_map"].items():
+            handle = str(element.get("Handle"))
+            pairs = []
+            for child in list(element):
+                source_addr = child.get("_SourceGeoAddr")
+                if source_addr is None:
+                    continue
+                geometry_record = output["geo_clones"].get(int(source_addr))
+                if geometry_record is None:
+                    raise FormatError(
+                        f"Missing cloned geometry {source_addr} for Shape {handle}"
+                    )
+                pairs.append((child, geometry_record))
+            if pairs:
+                geometry_pairs_by_handle[handle] = pairs
+
+        for (
+            shape_element,
+            geometry_element,
+            shape_record,
+            geometry_record,
+        ) in output["marking_pending"]:
+            handle = str(shape_element.get("Handle"))
+            global_shape_xml[handle] = shape_element
+            global_shape_records[handle] = shape_record
+            geometry_pairs_by_handle[handle] = [
+                (geometry_element, geometry_record)
+            ]
+
+    def resolve_geometry_pairs(handle):
+        handle = str(handle)
+        seen = set()
+        while True:
+            if handle in seen:
+                raise FormatError("Cyclic output Shape CopyHandle chain")
+            seen.add(handle)
+            pairs = geometry_pairs_by_handle.get(handle)
+            if pairs:
+                return pairs
+            element = global_shape_xml.get(handle)
+            if element is None:
+                raise FormatError(f"Missing output Shape {handle}")
+            copied = element.get("CopyHandle")
+            if copied is None:
+                raise FormatError(
+                    f"Machining Shape {handle} has neither geometry nor CopyHandle"
+                )
+            handle = str(copied)
+
+    def reserve_catalog_handle():
+        nonlocal next_handle
+        while next_handle in used_handles or next_handle in (2, 3, 4, 7, 8):
+            next_handle += 1
+        handle = int(next_handle)
+        used_handles.add(handle)
+        next_handle += 1
+        return handle
+
+    first_handles = {
+        str(ref.get("Handle"))
+        for ref in first_shapes_parent
+        if ref.get("Handle") is not None
+    }
+    catalog_by_signature = {}
+    for handle in list(first_handles):
+        element = global_shape_xml.get(handle)
+        if element is None:
+            continue
+        try:
+            pairs = resolve_geometry_pairs(handle)
+        except FormatError:
+            continue
+        catalog_by_signature.setdefault(
+            _geometry_catalog_signature(element, pairs),
+            handle,
+        )
+
+    catalog_pending = []
+    catalog_created = []
+    catalog_reused = []
+
+    for output in segment_outputs[1:]:
+        segment_xml = output["segment_xml"]
+        refs_parent = segment_xml.find("Shapes")
+        if refs_parent is None:
+            raise FormatError("Later TubeSegment has no Shapes list")
+
+        for ref in list(refs_parent):
+            handle = str(ref.get("Handle"))
+            record = global_shape_records.get(handle)
+            element = global_shape_xml.get(handle)
+            if record is None or element is None:
+                raise FormatError(f"Missing output Shape {handle}")
+            if _shape_channel(record) <= 0:
+                continue
+
+            pairs = resolve_geometry_pairs(handle)
+            signature = _geometry_catalog_signature(element, pairs)
+            master_handle = catalog_by_signature.get(signature)
+
+            if master_handle is None:
+                geometry_min_z, geometry_max_z = _geometry_z_bounds(pairs)
+                tolerance = 0.01
+                if (
+                    geometry_min_z < first_min_z - tolerance
+                    or geometry_max_z > first_max_z + tolerance
+                ):
+                    raise ValueError(
+                        "TubePro mixed-segment geometry catalog cannot safely "
+                        f"host Shape {handle} from segment {segment_xml.get('Handle')}: "
+                        f"its local Z range {geometry_min_z:.3f}..{geometry_max_z:.3f} mm "
+                        f"does not fit inside the first piece {first_min_z:.3f}.."
+                        f"{first_max_z:.3f} mm. Reorder the rod so the first piece "
+                        "can contain every later geometry master."
+                    )
+
+                master_handle_int = reserve_catalog_handle()
+                master_handle = str(master_handle_int)
+                master_record = _make_inert_geometry_master(
+                    record,
+                    master_handle_int,
+                )
+                shapes_stream.records.append(master_record)
+
+                master_element = copy.deepcopy(element)
+                master_element.set("Handle", master_handle)
+                master_element.attrib.pop("DataAddr", None)
+                master_element.attrib.pop("CopyHandle", None)
+                for child in list(master_element):
+                    if child.tag in ("Geometry", "InnerGeometry"):
+                        master_element.remove(child)
+
+                master_pairs = []
+                for source_child, geometry_record in pairs:
+                    child = copy.deepcopy(source_child)
+                    master_element.append(child)
+                    master_pairs.append((child, geometry_record))
+
+                shapes_root.append(master_element)
+                ET.SubElement(
+                    first_shapes_parent,
+                    ref.tag,
+                    Handle=master_handle,
+                )
+
+                global_shape_xml[master_handle] = master_element
+                global_shape_records[master_handle] = master_record
+                geometry_pairs_by_handle[master_handle] = master_pairs
+                first_handles.add(master_handle)
+                catalog_by_signature[signature] = master_handle
+                catalog_pending.append(
+                    (
+                        master_element,
+                        master_record,
+                        master_pairs,
+                    )
+                )
+                catalog_created.append(master_handle)
+            else:
+                catalog_reused.append(master_handle)
+
+            element.set("CopyHandle", str(master_handle))
+            for child in list(element):
+                if child.tag in ("Geometry", "InnerGeometry"):
+                    element.remove(child)
+
+    # Every CopyHandle in the generated document must resolve to the first
+    # physical segment, matching the TubePro-confirmed mixed-segment probe.
+    for handle, element in global_shape_xml.items():
+        copied = element.get("CopyHandle")
+        if copied is not None and str(copied) not in first_handles:
+            raise FormatError(
+                f"Shape {handle} CopyHandle {copied} does not resolve to "
+                "the first TubeSegment"
+            )
 
     curves_data = curves_stream.encode()
     lite_data = lite_stream.encode()
@@ -1597,14 +1929,14 @@ def export_nested_rod(
             shape_element.set("DataAddr", str(shape_record.address))
             geometry_element.set("GeoAddr", str(geometry_record.address))
 
+    for master_element, master_record, master_pairs in catalog_pending:
+        master_element.set("DataAddr", str(master_record.address))
+        for child, geometry_record in master_pairs:
+            child.attrib.pop("_SourceGeoAddr", None)
+            child.set("GeoAddr", str(geometry_record.address))
+
     doc_xml.set("DataAddr", str(portion_record.address))
     pack_xml.set("DataAddr", str(pack_record.address))
-
-    # Viewport objects also live in the document-wide handle space. The
-    # original single-part viewport handle can fall inside the generated
-    # segment/shape range, so move it out before calculating HandleSeed.
-    viewport_handles = _remap_viewport_handles(entries, used_handles)
-    used_handles.update(viewport_handles)
 
     entries["Segments/data.bin"] = segments_data
     entries["Segments/content.xml"] = xml_bytes(segments_root)
@@ -1617,15 +1949,13 @@ def export_nested_rod(
     entries["Portions/data.bin"] = portions_data
     entries["Portions/content.xml"] = xml_bytes(portions_root)
 
-    # Calculate HandleSeed only after every generated XML section has replaced
-    # the source snapshot. TubesT stores the highest handle that actually
-    # exists in the finished document.
+    # The TubePro-confirmed mixed-segment probe stores the next free handle.
     root_content = ET.fromstring(entries["content.xml"])
     header = root_content.find("Header")
     if header is not None:
         header.set(
             "HandleSeed",
-            str(_max_explicit_xml_handle(entries)),
+            str(_max_explicit_xml_handle(entries) + 1),
         )
     entries["content.xml"] = xml_bytes(root_content)
 
@@ -1644,8 +1974,15 @@ def export_nested_rod(
         "textMarkingEnabled": text_marking_enabled,
         "releaseStarts": release_start_reports,
         "commonLinePackMode": bool(common_line_pack_mode),
+        "geometryCatalog": {
+            "createdMasterHandles": catalog_created,
+            "reusedMasterHandles": catalog_reused,
+            "firstSegmentHandle": first_segment_xml.get("Handle"),
+            "copyHandlesRestrictedToFirstSegment": True,
+        },
+        "experimentalHolderBehavior": True,
         "fileVersion": WRITABLE_FILE_VERSION,
-        "exportMode": "native_multi_segment_array",
+        "exportMode": "native_multi_segment_array_catalog",
     }
 
 

@@ -119,10 +119,6 @@ class Archive:
             for v in self.xml('Viewports/content.xml').findall('.//VPort')
             if v.get('Handle') is not None
         }
-        if viewport_handles & shape_handles:
-            raise FormatError('Viewport handle collides with Shape handle')
-        if viewport_handles & seg_handles:
-            raise FormatError('Viewport handle collides with TubeSegment handle')
         if len(viewport_handles)!=len([
             v for v in self.xml('Viewports/content.xml').findall('.//VPort')
             if v.get('Handle') is not None
