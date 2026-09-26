@@ -217,6 +217,56 @@ class NativeArrayExporterTests(unittest.TestCase):
             self.assertTrue(_shape_meta(shapes[first_far])["curve_flags"] & 0x04)
             self.assertTrue(_shape_meta(shapes[second_near])["curve_flags"] & 0x04)
 
+    def test_round_native_array_release_start_normalizes_local_negative_z(self):
+        source = APP_ROOT / (
+            "Round tube Ø30 L1215, first cut 0° layer 1, "
+            "second cut 45° layer 4.zzx"
+        )
+        part = read_tube_parts(source)[0]
+        length = float(part.overall_length)
+        placements = [
+            {
+                "instanceKey": "round::negative-local-z",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "nestPlacement": {
+                    "z_start": 0.0,
+                    "z_end": length,
+                    "axial_rotation_degrees": 0.0,
+                    "reversed_end_for_end": False,
+                    "common_line_before": False,
+                    "common_line_after": False,
+                },
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "round_native_array.zzx"
+            result = export_nested_rod(
+                placements,
+                output,
+                gap_mm=2.0,
+            )
+
+            self.assertEqual(result["segmentCount"], 1)
+            self.assertEqual(len(result["releaseStarts"]), 2)
+            self.assertTrue(output.is_file())
+
+            archive = Archive.read(output)
+            archive.validate()
+
+            for release in result["releaseStarts"]:
+                self.assertGreaterEqual(
+                    float(release["minimumZ"]),
+                    -1e-7,
+                )
+                self.assertIn(
+                    "positionedStockMinZBeforeNormalization",
+                    release,
+                )
+
+
     def test_backend_uses_native_array_exporter_not_flattened_exporter(self):
         fake_result = {
             "path": "nested.zzx",

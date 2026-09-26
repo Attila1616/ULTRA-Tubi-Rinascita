@@ -387,6 +387,32 @@ def _inverse_transform_marking_shape(record, frame):
     block.payload = bytes(payload)
 
 
+def _normalize_release_selection_z(curves, stock_min_z):
+    """Shift only the release-selection view so positioned stock starts at Z=0.
+
+    Native multi-segment ZZX keeps machining geometry in each TubeSegment's
+    local coordinate system. Angled end cuts can therefore extend below local
+    Z=0 even though the physical positioned stock is valid. The release-start
+    rules are defined in nonnegative positioned-stock coordinates, so apply a
+    temporary axial translation for selection only. Native curve domains and
+    the serialized geometry remain unchanged.
+    """
+    stock_min_z = float(stock_min_z)
+    if not math.isfinite(stock_min_z):
+        raise ValueError("Nonfinite positioned-stock minimum Z")
+
+    if abs(stock_min_z) <= 1e-12:
+        return list(curves)
+
+    frame = (
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
+        (0.0, 0.0, -stock_min_z),
+    )
+    return [_posed_curve(curve, frame) for curve in curves]
+
+
 def _select_release_start(curves, profile):
     if profile.kind == "Circle":
         diameter = float(profile.outside_diameter or 0.0)
@@ -1141,6 +1167,23 @@ def export_nested_rod(
         physical_near_new = shape_handle_map[physical_near_old]
         physical_far_new = shape_handle_map[physical_far_old]
 
+        # Native segment geometry may use an arbitrary local axial origin.
+        # Convert the posed stock interval to the nonnegative convention used
+        # by the release-start selector without modifying serialized geometry.
+        posed_stock_endpoints = (
+            _frame_point(
+                output_frame,
+                (0.0, 0.0, float(source_part.axial_min)),
+            ),
+            _frame_point(
+                output_frame,
+                (0.0, 0.0, float(source_part.axial_max)),
+            ),
+        )
+        positioned_stock_min_z = min(
+            point[2] for point in posed_stock_endpoints
+        )
+
         # Recompute PathStartParam in the segment's final posed frame while
         # preserving the original local geometry and native child domains.
         for old_handle in (physical_near_old, physical_far_old):
@@ -1154,8 +1197,12 @@ def export_nested_rod(
                 _posed_curve(curve, output_frame)
                 for curve in raw_curves
             ]
-            selected = _select_release_start(
+            selection_curves = _normalize_release_selection_z(
                 posed_curves,
+                positioned_stock_min_z,
+            )
+            selected = _select_release_start(
+                selection_curves,
                 source_part.profile,
             )
             before = _write_release_start(
@@ -1172,6 +1219,9 @@ def export_nested_rod(
                     "parameter": float(selected["parameter"]),
                     "point": [float(v) for v in selected["point"]],
                     "minimumZ": float(selected["minimum_z"]),
+                    "positionedStockMinZBeforeNormalization": float(
+                        positioned_stock_min_z
+                    ),
                     "profile": selected["profile"],
                     "rule": selected["rule"],
                 }
