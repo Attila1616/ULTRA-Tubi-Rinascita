@@ -1609,12 +1609,10 @@ def export_nested_rod(
     root_content = ET.fromstring(entries["content.xml"])
     header = root_content.find("Header")
     if header is not None:
-        maximum_handle = max(
-            max(used_handles, default=1000),
-            _max_explicit_xml_handle(entries),
-        )
-        # TubesT FileVer 65542 stores the highest handle already present
-        # in the document, not the next free handle.
+        # TubesT FileVer 65542 stores the highest handle that actually exists
+        # in the finished document. Reserved-but-unused allocator slots must
+        # not influence this value.
+        maximum_handle = _max_explicit_xml_handle(entries)
         header.set("HandleSeed", str(maximum_handle))
     entries["content.xml"] = xml_bytes(root_content)
 

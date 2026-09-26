@@ -159,7 +159,7 @@ class NestedZzxExporterTests(unittest.TestCase):
             self.assertTrue(viewport_handles)
             self.assertFalse(set(viewport_handles) & segment_handles)
             self.assertFalse(set(viewport_handles) & shape_handles)
-            self.assertGreater(handle_seed, max(viewport_handles))
+            self.assertEqual(handle_seed, max(viewport_handles))
 
             shape_xml = {
                 int(element.get("Handle")): element
