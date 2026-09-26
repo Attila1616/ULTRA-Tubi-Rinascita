@@ -2,6 +2,7 @@ import hashlib
 import struct
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import backend_logic
@@ -45,7 +46,36 @@ def _shape_meta(record):
     }
 
 
+def _maximum_explicit_xml_handle(archive):
+    maximum = 0
+    for name, data in archive.entries.items():
+        if not name.endswith("content.xml"):
+            continue
+        root = ET.fromstring(data)
+        for element in root.iter():
+            value = element.get("Handle")
+            if value is not None:
+                maximum = max(maximum, int(value))
+    return maximum
+
+
 class NativeArrayExporterTests(unittest.TestCase):
+    def test_tubest_handle_seed_is_highest_existing_handle(self):
+        for fixture in (
+            FIXTURE,
+            APP_ROOT
+            / "tests"
+            / "fixtures"
+            / "Nested_50x50x2_304_2B_locked-1790190392777-ea489ec4fd24f_20260924_005148.zzx",
+        ):
+            archive = Archive.read(fixture)
+            root = archive.xml("content.xml")
+            seed = int(root.find("Header").get("HandleSeed"))
+            self.assertEqual(
+                seed,
+                _maximum_explicit_xml_handle(archive),
+            )
+
     def test_tubest_coedge_fixture_documents_native_representation(self):
         raw = FIXTURE.read_bytes()
         self.assertEqual(hashlib.sha256(raw).hexdigest(), FIXTURE_SHA256)
@@ -183,6 +213,11 @@ class NativeArrayExporterTests(unittest.TestCase):
 
             archive = Archive.read(output)
             archive.validate()
+            root = archive.xml("content.xml")
+            self.assertEqual(
+                int(root.find("Header").get("HandleSeed")),
+                _maximum_explicit_xml_handle(archive),
+            )
             segments = archive.xml("Segments/content.xml").findall(
                 "TubeSegment"
             )

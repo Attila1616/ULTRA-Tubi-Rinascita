@@ -1613,7 +1613,9 @@ def export_nested_rod(
             max(used_handles, default=1000),
             _max_explicit_xml_handle(entries),
         )
-        header.set("HandleSeed", str(maximum_handle + 1))
+        # TubesT FileVer 65542 stores the highest handle already present
+        # in the document, not the next free handle.
+        header.set("HandleSeed", str(maximum_handle))
     entries["content.xml"] = xml_bytes(root_content)
 
     entries["Segments/data.bin"] = segments_data
