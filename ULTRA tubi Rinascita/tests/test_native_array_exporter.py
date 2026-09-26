@@ -3,6 +3,8 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+
+import backend_logic
 from unittest.mock import patch
 
 from tubenest_engine.archive import Archive
@@ -214,6 +216,43 @@ class NativeArrayExporterTests(unittest.TestCase):
             second_near = int(segments[1].get("CutOffA"))
             self.assertTrue(_shape_meta(shapes[first_far])["curve_flags"] & 0x04)
             self.assertTrue(_shape_meta(shapes[second_near])["curve_flags"] & 0x04)
+
+    def test_backend_uses_native_array_exporter_not_flattened_exporter(self):
+        fake_result = {
+            "path": "nested.zzx",
+            "pieceCount": 1,
+            "segmentCount": 1,
+            "exportMode": "native_multi_segment_array",
+        }
+        payload = {
+            "segments": [{"instanceKey": "piece::1"}],
+            "tubeType": "50x50x2",
+            "rodId": "rod-1",
+            "rodLength": 6000.0,
+        }
+        with patch(
+            "backend_logic.load_config",
+            return_value={
+                "nested_zzx_output_dir": "C:/output",
+                "nested_text_marking_enabled": False,
+                "nesting_gap_mm": 2.0,
+            },
+        ), patch(
+            "backend_logic.tubenest_engine.export_nested_rod_to_directory",
+            return_value=fake_result,
+        ) as native_export, patch(
+            "backend_logic.tubenest_engine.export_flat_nested_rod_to_directory",
+        ) as flat_export:
+            result = backend_logic.export_locked_rod_zzx(payload)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(
+            result["exportMode"],
+            "native_multi_segment_array",
+        )
+        native_export.assert_called_once()
+        flat_export.assert_not_called()
+
 
     def test_native_array_text_marking_is_before_release_cut(self):
         source = APP_ROOT / "Tube with sample text.zzx"
