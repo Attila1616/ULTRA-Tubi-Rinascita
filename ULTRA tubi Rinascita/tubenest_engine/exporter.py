@@ -23,12 +23,26 @@ import struct
 import xml.etree.ElementTree as ET
 
 from .archive import Archive, xml_bytes
-from .bcmp import FormatError, Stream, vector
+from .bcmp import FormatError, Stream, read_vector, vector
 from .domain import read_tube_parts
+from .fit import PartPose, fit_adjacent_parts
+from .geometry import Line, Spline, primitives
+from .release_starts import select_face_start, select_round_start
+from .text_marking import (
+    MarkingFitError,
+    build_marking_records,
+    build_round_marking_records,
+    layout_text_strokes,
+    marking_layout_candidates,
+    validate_romans_font,
+)
 
 
 WRITABLE_FILE_VERSION = "65542"
 COMMON_LINE_FLAG = 0x04
+EXCLUSION_WORK_BIT = 0x2
+MARKING_COLLISION_CLEARANCE_MM = 1.0
+ROUND_MARKING_ANGLE_STEP_DEG = 15
 
 
 @dataclass
@@ -42,6 +56,7 @@ class _ResolvedPlacement:
     instance_key: str
     source_file_name: str
     default_channel: int
+    marking_text: str | None = None
 
 
 def _empty_root_like(root):
@@ -104,33 +119,37 @@ def _shape_channel(record):
     return int(struct.unpack_from("<I", block.payload, 0)[0])
 
 
-def _order_segment_refs_release_safe(segment_xml, shape_record_map, shape_handle_map, source_part, placement):
+def _shape_do_not_cut(record):
+    block = next(
+        (
+            block
+            for block in record.blocks
+            if block.name == "Shape" and len(block.payload) >= 12
+        ),
+        None,
+    )
+    if block is None:
+        return False
+    return bool(struct.unpack_from("<I", block.payload, 8)[0] & EXCLUSION_WORK_BIT)
+
+
+def _order_segment_refs_release_safe(
+    segment_xml,
+    output_record_by_handle,
+    *,
+    near_handle,
+    far_handle,
+):
     refs_parent = segment_xml.find("Shapes")
     if refs_parent is None:
         raise FormatError("TubeSegment has no Shapes list")
 
-    reversed_end = bool(placement.get("reversed_end_for_end"))
-    source_near = (
-        int(source_part.ends[1].shape_handle)
-        if reversed_end
-        else int(source_part.ends[0].shape_handle)
-    )
-    source_far = (
-        int(source_part.ends[0].shape_handle)
-        if reversed_end
-        else int(source_part.ends[1].shape_handle)
-    )
-    near_handle = str(shape_handle_map[source_near])
-    far_handle = str(shape_handle_map[source_far])
-
+    near_handle = str(near_handle)
+    far_handle = str(far_handle)
     near_ref = None
     far_ref = None
     internal = []
     display = []
-    reverse_records = {
-        str(shape_handle_map[old]): record
-        for old, record in shape_record_map.items()
-    }
 
     for index, ref in enumerate(list(refs_parent)):
         handle = str(ref.get("Handle"))
@@ -140,7 +159,8 @@ def _order_segment_refs_release_safe(segment_xml, shape_record_map, shape_handle
         if handle == far_handle:
             far_ref = ref
             continue
-        record = reverse_records.get(handle)
+
+        record = output_record_by_handle.get(handle)
         if record is None or _shape_channel(record) <= 0:
             display.append((index, ref))
         else:
@@ -151,8 +171,6 @@ def _order_segment_refs_release_safe(segment_xml, shape_record_map, shape_handle
             f"Cannot resolve physical near/far cutoffs {near_handle}/{far_handle}"
         )
 
-    # Preserve source-relative order for internal operations, but guarantee
-    # that the physical release cut is the final machining operation.
     refs_parent[:] = (
         [near_ref]
         + [ref for _index, ref in internal]
@@ -160,6 +178,248 @@ def _order_segment_refs_release_safe(segment_xml, shape_record_map, shape_handle
         + [ref for _index, ref in display]
     )
 
+
+def _frame_point(frame, point):
+    basis_x, basis_y, basis_z, origin = frame
+    x, y, z = map(float, point)
+    return tuple(
+        float(origin[row])
+        + float(basis_x[row]) * x
+        + float(basis_y[row]) * y
+        + float(basis_z[row]) * z
+        for row in range(3)
+    )
+
+
+def _frame_vector(frame, direction):
+    basis_x, basis_y, basis_z, _origin = frame
+    x, y, z = map(float, direction)
+    return tuple(
+        float(basis_x[row]) * x
+        + float(basis_y[row]) * y
+        + float(basis_z[row]) * z
+        for row in range(3)
+    )
+
+
+def _inverse_frame_point(frame, point):
+    basis_x, basis_y, basis_z, origin = frame
+    delta = tuple(float(point[i]) - float(origin[i]) for i in range(3))
+    return (
+        sum(delta[i] * float(basis_x[i]) for i in range(3)),
+        sum(delta[i] * float(basis_y[i]) for i in range(3)),
+        sum(delta[i] * float(basis_z[i]) for i in range(3)),
+    )
+
+
+def _inverse_frame_vector(frame, direction):
+    basis_x, basis_y, basis_z, _origin = frame
+    values = tuple(map(float, direction))
+    return (
+        sum(values[i] * float(basis_x[i]) for i in range(3)),
+        sum(values[i] * float(basis_y[i]) for i in range(3)),
+        sum(values[i] * float(basis_z[i]) for i in range(3)),
+    )
+
+
+def _posed_curve(curve, frame):
+    if isinstance(curve, Line):
+        start = _frame_point(frame, curve.at(0.0))
+        end = _frame_point(frame, curve.at(1.0))
+        return Line(start, tuple(b - a for a, b in zip(start, end)))
+    if isinstance(curve, Spline):
+        return Spline(
+            curve.degree,
+            list(curve.knots),
+            [_frame_point(frame, point) for point in curve.points],
+            list(curve.weights),
+            curve.flag,
+        )
+    raise ValueError(
+        f"Unsupported cutoff primitive {type(curve).__name__} for release start"
+    )
+
+
+def _source_shape_curves(source_shape_xml, source_shape_xml_map, source_lite_records):
+    geometry_source = _shape_geometry_source(
+        source_shape_xml_map,
+        source_shape_xml,
+    )
+    geometry = geometry_source.find("Geometry")
+    if geometry is None or geometry.get("GeoAddr") is None:
+        return []
+    record = source_lite_records.get(int(geometry.get("GeoAddr")))
+    if record is None:
+        raise FormatError(
+            f"Missing LiteGeos {geometry.get('GeoAddr')} for cutoff geometry"
+        )
+    return list(primitives(record))
+
+
+def _posed_shape_points(
+    source_shape_xml,
+    source_shape_xml_map,
+    source_lite_records,
+    frame,
+):
+    geometry_source = _shape_geometry_source(
+        source_shape_xml_map,
+        source_shape_xml,
+    )
+    points = []
+    for child in geometry_source:
+        geo_addr = child.get("GeoAddr")
+        if geo_addr is None:
+            continue
+        record = source_lite_records.get(int(geo_addr))
+        if record is None:
+            continue
+        for curve in primitives(record):
+            points.extend(
+                _frame_point(frame, point)
+                for point in curve.sample(64)
+            )
+    return points
+
+
+def _xyz_bounds(points):
+    finite = [
+        tuple(map(float, point[:3]))
+        for point in points
+        if len(point) >= 3
+        and all(math.isfinite(float(value)) for value in point[:3])
+    ]
+    if not finite:
+        return None
+    return [
+        list(map(min, zip(*finite))),
+        list(map(max, zip(*finite))),
+    ]
+
+
+def _bounds_overlap(first, second, clearance=0.0):
+    clearance = max(0.0, float(clearance))
+    for axis in range(3):
+        if first[1][axis] < second[0][axis] - clearance:
+            return False
+        if first[0][axis] > second[1][axis] + clearance:
+            return False
+    return True
+
+
+def _candidate_marking_start_positions(
+    preferred_start,
+    max_z,
+    axial_width,
+    obstacles,
+    *,
+    clearance=MARKING_COLLISION_CLEARANCE_MM,
+):
+    preferred_start = float(preferred_start)
+    max_z = float(max_z)
+    axial_width = max(0.0, float(axial_width))
+    clearance = max(0.0, float(clearance))
+    latest_start = max_z - axial_width - 1e-6
+    if latest_start < preferred_start - 1e-9:
+        return []
+
+    candidates = {preferred_start, latest_start}
+    for obstacle in obstacles:
+        lo_z = float(obstacle["bounds"][0][2])
+        hi_z = float(obstacle["bounds"][1][2])
+        candidates.add(hi_z + clearance)
+        candidates.add(lo_z - axial_width - clearance)
+
+    return sorted(
+        {
+            round(value, 6)
+            for value in candidates
+            if preferred_start - 1e-6 <= value <= latest_start + 1e-6
+        }
+    )
+
+
+def _flat_marking_faces():
+    return ("+Y", "+X", "-Y", "-X")
+
+
+def _round_marking_angles():
+    preferred = [0, 90, 180, 270]
+    return preferred + [
+        angle
+        for angle in range(0, 360, ROUND_MARKING_ANGLE_STEP_DEG)
+        if angle not in preferred
+    ]
+
+
+def _inverse_transform_marking_geometry(record, frame):
+    for block in record.blocks:
+        if block.name != "Line3D" or not block.payload:
+            continue
+        if len(block.payload) != 56:
+            raise FormatError("Unexpected generated Line3D payload")
+        start = read_vector(block.payload, 0)
+        direction = read_vector(block.payload, 28)
+        end = tuple(a + b for a, b in zip(start, direction))
+        local_start = _inverse_frame_point(frame, start)
+        local_end = _inverse_frame_point(frame, end)
+        block.payload = vector(local_start) + vector(
+            tuple(b - a for a, b in zip(local_start, local_end))
+        )
+
+
+def _inverse_transform_marking_shape(record, frame):
+    block = next(
+        (
+            block
+            for block in record.blocks
+            if block.name == "Curve" and len(block.payload) >= 44
+        ),
+        None,
+    )
+    if block is None:
+        return
+    normal = read_vector(block.payload, 16)
+    if math.sqrt(sum(float(value) ** 2 for value in normal)) <= 1e-12:
+        return
+    payload = bytearray(block.payload)
+    payload[16:44] = vector(_inverse_frame_vector(frame, normal))
+    block.payload = bytes(payload)
+
+
+def _select_release_start(curves, profile):
+    if profile.kind == "Circle":
+        diameter = float(profile.outside_diameter or 0.0)
+        if not math.isfinite(diameter) or diameter <= 0.0:
+            raise ValueError("Invalid circle diameter for release start")
+        return select_round_start(curves, diameter / 2.0)
+    if profile.kind in ("Square", "Rect"):
+        width = float(profile.outside_width or 0.0)
+        height = float(profile.outside_height or 0.0)
+        if not all(math.isfinite(v) and v > 0 for v in (width, height)):
+            raise ValueError("Invalid flat profile dimensions for release start")
+        return select_face_start(curves, width, height)
+    raise ValueError(
+        f"Unsupported profile {profile.kind!r} for release start correction"
+    )
+
+
+def _write_release_start(shape_record, parameter):
+    block = next(
+        (
+            block
+            for block in shape_record.blocks
+            if block.name == "Curve" and len(block.payload) >= 44
+        ),
+        None,
+    )
+    if block is None:
+        raise FormatError("Cutoff Shape has no writable Curve block")
+    payload = bytearray(block.payload)
+    before = struct.unpack_from("<d", payload, 4)[0]
+    struct.pack_into("<d", payload, 4, float(parameter))
+    block.payload = bytes(payload)
+    return before
 
 
 def _read_segment_frame(record):
@@ -169,8 +429,6 @@ def _read_segment_frame(record):
     )
     if block is None or len(block.payload) < 120:
         raise FormatError("Unsupported TubeSegment transform payload")
-
-    from .bcmp import read_vector
 
     return (
         tuple(read_vector(block.payload, 8)),
@@ -243,9 +501,19 @@ def _set_segment_transform(record, part, placement):
     block.payload = bytes(payload)
 
 
-def _set_pack_gap(record, gap_mm):
+def _set_pack_options(record, gap_mm, common_line_enabled):
+    """Write the TubesT-observed pack fields without guessing the last word.
+
+    Reference arrays keep the configured gap in the float64 at offset 0.
+    Their uint32 at offset 8 is 0 for normal arrays and 1 when co-edge is
+    enabled. The uint32 at offset 12 is preserved verbatim.
+    """
     block = next(
-        (block for block in record.blocks if block.name == "TubeSegments"),
+        (
+            block
+            for block in record.blocks
+            if block.name == "TubeSegments"
+        ),
         None,
     )
     if block is None or len(block.payload) < 16:
@@ -255,7 +523,9 @@ def _set_pack_gap(record, gap_mm):
         raise ValueError("gap_mm must be finite and non-negative")
     payload = bytearray(block.payload)
     struct.pack_into("<d", payload, 0, gap_mm)
+    struct.pack_into("<I", payload, 8, 1 if common_line_enabled else 0)
     block.payload = bytes(payload)
+
 
 def _set_common_line_flag(shape_record):
     block = next(
@@ -385,6 +655,10 @@ def _resolve_placements(placements):
                 instance_key=str(raw.get("instanceKey") or f"piece-{index}"),
                 source_file_name=str(raw.get("fileName") or source_file.name),
                 default_channel=default_channel,
+                marking_text=(
+                    str(raw.get("markingText") or "").strip()
+                    or None
+                ),
             )
         )
 
@@ -538,6 +812,55 @@ def _update_metadata(entries, title):
         entries["info.xml"] = xml_bytes(root)
 
 
+def _validate_locked_common_lines(resolved, gap_mm, tolerance=1e-4):
+    for index in range(1, len(resolved)):
+        current = resolved[index]
+        if not bool(current.placement.get("common_line_before")):
+            continue
+        previous = resolved[index - 1]
+        previous_pose = PartPose(
+            axial_rotation_degrees=float(
+                previous.placement.get("axial_rotation_degrees") or 0.0
+            ),
+            reversed_end_for_end=bool(
+                previous.placement.get("reversed_end_for_end")
+            ),
+        )
+        current_pose = PartPose(
+            axial_rotation_degrees=float(
+                current.placement.get("axial_rotation_degrees") or 0.0
+            ),
+            reversed_end_for_end=bool(
+                current.placement.get("reversed_end_for_end")
+            ),
+        )
+        previous_origin = float(previous.placement.get("z_start") or 0.0)
+        expected = fit_adjacent_parts(
+            previous.source_part.to_dict(),
+            previous_pose,
+            previous_origin,
+            current.source_part.to_dict(),
+            current_pose,
+            gap_mm=float(gap_mm),
+            allow_common_line=True,
+        )
+        actual_origin = float(current.placement.get("z_start") or 0.0)
+        if not expected.common_line:
+            raise ValueError(
+                f"Locked shared boundary before {current.source_file_name} "
+                "is no longer profile/boundary/process compatible. "
+                "Recalculate and re-lock the rod before exporting."
+            )
+        if abs(float(expected.next_origin) - actual_origin) > tolerance:
+            raise ValueError(
+                f"Locked shared boundary before {current.source_file_name} "
+                f"expects Z={expected.next_origin:.6f} but the saved placement "
+                f"is Z={actual_origin:.6f}. Recalculate and re-lock the rod."
+            )
+
+
+
+
 def export_nested_rod(
     placements,
     output_path,
@@ -545,6 +868,9 @@ def export_nested_rod(
     rod_length=6000.0,
     gap_mm=2.0,
     title=None,
+    text_marking_enabled=False,
+    text_marking_height_mm=5.0,
+    text_marking_font_path=None,
 ):
     """Export a locked ULTRA rod as one multi-segment ZZX."""
     rod_length = float(rod_length)
@@ -557,6 +883,18 @@ def export_nested_rod(
     gap_mm = float(gap_mm)
     if not math.isfinite(gap_mm) or gap_mm < 0:
         raise ValueError("gap_mm must be finite and non-negative")
+
+    _validate_locked_common_lines(resolved, gap_mm)
+
+    text_marking_enabled = bool(text_marking_enabled)
+    text_marking_height_mm = float(text_marking_height_mm)
+    if text_marking_enabled:
+        if text_marking_font_path is None:
+            raise ValueError("Text marking font path is not configured")
+        validate_romans_font(text_marking_font_path)
+        if not (1.0 <= text_marking_height_mm <= 10.0):
+            raise ValueError("Text marking height must be between 1 and 10 mm")
+
     used_span = max(float(item.placement.get("z_end") or 0.0) for item in resolved)
     if not math.isfinite(used_span) or used_span <= 0:
         raise ValueError("Locked rod has no valid used span")
@@ -576,7 +914,16 @@ def export_nested_rod(
 
     _source_pack_xml, source_pack_record = _pack_template(template)
     pack_record = copy.deepcopy(source_pack_record)
-    _set_pack_gap(pack_record, gap_mm)
+    common_line_pack_mode = any(
+        bool(item.placement.get("common_line_before"))
+        or bool(item.placement.get("common_line_after"))
+        for item in resolved
+    )
+    _set_pack_options(
+        pack_record,
+        gap_mm,
+        common_line_pack_mode,
+    )
     segments_stream.records.append(pack_record)
 
     source_doc_xml, source_portion_record = _portion_template(template)
@@ -603,6 +950,8 @@ def export_nested_rod(
     used_handles = set()
     segment_outputs = []
     warnings = []
+    marking_reports = []
+    release_start_reports = []
     master_shape_handles = {}
 
     def reserve_source_handle_block(source_segment, source_shape_refs):
@@ -654,6 +1003,7 @@ def export_nested_rod(
         segment_record = copy.deepcopy(item.source_segment_record)
         _set_object_handle(segment_record, segment_handle)
         _set_segment_transform(segment_record, source_part, item.placement)
+        output_frame = _read_segment_frame(segment_record)
         segments_stream.records.append(segment_record)
 
         segment_xml = copy.deepcopy(source_segment)
@@ -694,7 +1044,9 @@ def export_nested_rod(
 
         shape_record_map = {}
         shape_xml_map = {}
+        output_record_by_handle = {}
         geo_clones = {}
+        marking_pending = []
 
         for source_ref in source_shape_ref_list:
             old_handle = int(source_ref.get("Handle"))
@@ -716,6 +1068,7 @@ def export_nested_rod(
             _set_object_handle(cloned_record, new_handle)
             shapes_stream.records.append(cloned_record)
             shape_record_map[old_handle] = cloned_record
+            output_record_by_handle[str(new_handle)] = cloned_record
 
             cloned_xml = copy.deepcopy(source_element)
             cloned_xml.set("Handle", str(new_handle))
@@ -782,13 +1135,345 @@ def export_nested_rod(
         segment_xml.set("CutOffA", str(shape_handle_map[old_cut_a]))
         segment_xml.set("CutOffB", str(shape_handle_map[old_cut_b]))
 
+        reversed_end = bool(item.placement.get("reversed_end_for_end"))
+        physical_near_old = old_cut_b if reversed_end else old_cut_a
+        physical_far_old = old_cut_a if reversed_end else old_cut_b
+        physical_near_new = shape_handle_map[physical_near_old]
+        physical_far_new = shape_handle_map[physical_far_old]
+
+        # Recompute PathStartParam in the segment's final posed frame while
+        # preserving the original local geometry and native child domains.
+        for old_handle in (physical_near_old, physical_far_old):
+            source_element = source_shape_xml[old_handle]
+            raw_curves = _source_shape_curves(
+                source_element,
+                source_shape_xml,
+                source_lite_records,
+            )
+            posed_curves = [
+                _posed_curve(curve, output_frame)
+                for curve in raw_curves
+            ]
+            selected = _select_release_start(
+                posed_curves,
+                source_part.profile,
+            )
+            before = _write_release_start(
+                shape_record_map[old_handle],
+                selected["parameter"],
+            )
+            release_start_reports.append(
+                {
+                    "instanceKey": item.instance_key,
+                    "fileName": item.source_file_name,
+                    "segmentHandle": segment_handle,
+                    "shapeHandle": shape_handle_map[old_handle],
+                    "oldParameter": before,
+                    "parameter": float(selected["parameter"]),
+                    "point": [float(v) for v in selected["point"]],
+                    "minimumZ": float(selected["minimum_z"]),
+                    "profile": selected["profile"],
+                    "rule": selected["rule"],
+                }
+            )
+
+        if text_marking_enabled:
+            if not item.marking_text:
+                warnings.append(
+                    f"{item.source_file_name}: TEXT marking omitted because "
+                    "label metadata is incomplete."
+                )
+                marking_reports.append(
+                    {
+                        "status": "skipped",
+                        "instanceKey": item.instance_key,
+                        "fileName": item.source_file_name,
+                        "reason": "missing marking metadata",
+                    }
+                )
+            else:
+                near_points = _posed_shape_points(
+                    source_shape_xml[physical_near_old],
+                    source_shape_xml,
+                    source_lite_records,
+                    output_frame,
+                )
+                far_points = _posed_shape_points(
+                    source_shape_xml[physical_far_old],
+                    source_shape_xml,
+                    source_lite_records,
+                    output_frame,
+                )
+                near_bounds = _xyz_bounds(near_points)
+                far_bounds = _xyz_bounds(far_points)
+                if near_bounds is None or far_bounds is None:
+                    raise FormatError(
+                        f"{item.source_file_name}: cannot determine end-cut "
+                        "bounds for text marking"
+                    )
+                preferred_start_z = (
+                    float(near_bounds[1][2]) + 5.0
+                )
+                marking_max_z = float(far_bounds[0][2])
+
+                obstacles = []
+                excluded_old = {physical_near_old, physical_far_old}
+                for source_ref in source_shape_ref_list:
+                    old_handle = int(source_ref.get("Handle"))
+                    if old_handle in excluded_old:
+                        continue
+                    record = source_shape_records.get(
+                        int(source_shape_xml[old_handle].get("DataAddr"))
+                    )
+                    if (
+                        record is None
+                        or _shape_channel(record) <= 0
+                        or _shape_do_not_cut(record)
+                    ):
+                        continue
+                    bounds = _xyz_bounds(
+                        _posed_shape_points(
+                            source_shape_xml[old_handle],
+                            source_shape_xml,
+                            source_lite_records,
+                            output_frame,
+                        )
+                    )
+                    if bounds is not None:
+                        obstacles.append(
+                            {
+                                "handle": str(shape_handle_map[old_handle]),
+                                "bounds": bounds,
+                            }
+                        )
+
+                addition = None
+                fit_errors = []
+                collision_attempts = []
+                layouts = marking_layout_candidates(item.marking_text)
+                selected_layout_index = None
+                selected_position = None
+                selected_start_z = None
+                profile = source_part.profile
+
+                for layout_index, layout_lines in enumerate(layouts):
+                    prepared_layout = layout_text_strokes(
+                        text_marking_font_path,
+                        layout_lines,
+                        text_marking_height_mm,
+                    )
+                    axial_width = float(
+                        prepared_layout[1].get(
+                            "visible_axial_width_mm",
+                            0.0,
+                        )
+                    )
+                    starts = _candidate_marking_start_positions(
+                        preferred_start_z,
+                        marking_max_z,
+                        axial_width,
+                        obstacles,
+                    )
+                    if not starts:
+                        fit_errors.append(
+                            f"layout {layout_index + 1}: axial width "
+                            f"{axial_width:.3f} mm does not fit"
+                        )
+                        continue
+
+                    positions = (
+                        _flat_marking_faces()
+                        if profile.kind in ("Square", "Rect")
+                        else _round_marking_angles()
+                        if profile.kind == "Circle"
+                        else ()
+                    )
+                    if not positions:
+                        raise ValueError(
+                            f"TEXT marking is not supported for "
+                            f"profile {profile.kind!r}"
+                        )
+
+                    for start_z in starts:
+                        for position in positions:
+                            try:
+                                if profile.kind in ("Square", "Rect"):
+                                    candidate = build_marking_records(
+                                        source_shape_record=shape_record_map[
+                                            physical_near_old
+                                        ],
+                                        font_path=text_marking_font_path,
+                                        lines=layout_lines,
+                                        height_mm=text_marking_height_mm,
+                                        start_z=start_z,
+                                        outside_width=float(
+                                            profile.outside_width or 0.0
+                                        ),
+                                        outside_height=float(
+                                            profile.outside_height or 0.0
+                                        ),
+                                        corner_radius=float(
+                                            profile.corner_radius or 0.0
+                                        ),
+                                        max_z=marking_max_z,
+                                        first_handle=next_handle,
+                                        face=position,
+                                        prepared_layout=prepared_layout,
+                                    )
+                                else:
+                                    candidate = build_round_marking_records(
+                                        source_shape_record=shape_record_map[
+                                            physical_near_old
+                                        ],
+                                        font_path=text_marking_font_path,
+                                        lines=layout_lines,
+                                        height_mm=text_marking_height_mm,
+                                        start_z=start_z,
+                                        radius=float(
+                                            profile.outside_diameter or 0.0
+                                        ) / 2.0,
+                                        max_z=marking_max_z,
+                                        first_handle=next_handle,
+                                        circumferential_center_deg=position,
+                                        prepared_layout=prepared_layout,
+                                    )
+                            except MarkingFitError as exc:
+                                fit_errors.append(
+                                    f"layout {layout_index + 1}, "
+                                    f"position {position}, Z {start_z:.3f}: {exc}"
+                                )
+                                continue
+
+                            collisions = [
+                                obstacle["handle"]
+                                for obstacle in obstacles
+                                if _bounds_overlap(
+                                    candidate["report"][
+                                        "geometry_3d_bounds"
+                                    ],
+                                    obstacle["bounds"],
+                                    clearance=MARKING_COLLISION_CLEARANCE_MM,
+                                )
+                            ]
+                            if collisions:
+                                collision_attempts.append(
+                                    {
+                                        "layout": layout_index + 1,
+                                        "position": position,
+                                        "startZ": start_z,
+                                        "shapeHandles": collisions,
+                                    }
+                                )
+                                continue
+
+                            addition = candidate
+                            selected_layout_index = layout_index
+                            selected_position = position
+                            selected_start_z = start_z
+                            break
+                        if addition is not None:
+                            break
+                    if addition is not None:
+                        break
+
+                if addition is None:
+                    reason = (
+                        fit_errors[-1]
+                        if fit_errors
+                        else (
+                            "all otherwise-valid placements collide with "
+                            "existing machining geometry"
+                            if collision_attempts
+                            else "no safe marking layout was available"
+                        )
+                    )
+                    warnings.append(
+                        f"{item.source_file_name}: TEXT marking omitted after "
+                        f"scanning available surfaces/positions. {reason}"
+                    )
+                    marking_reports.append(
+                        {
+                            "status": "skipped",
+                            "instanceKey": item.instance_key,
+                            "fileName": item.source_file_name,
+                            "originalText": item.marking_text,
+                            "attemptedLayouts": layouts,
+                            "fitErrors": fit_errors,
+                            "collisionAttempts": collision_attempts,
+                        }
+                    )
+                else:
+                    next_marking_handle = int(addition["next_handle"])
+                    for handle in range(next_handle, next_marking_handle):
+                        used_handles.add(handle)
+                    next_handle = max(next_handle, next_marking_handle)
+
+                    for (
+                        shape_record,
+                        geometry_record,
+                        (shape_element, geometry_element),
+                        segment_ref,
+                    ) in zip(
+                        addition["shape_records"],
+                        addition["geometry_records"],
+                        addition["shape_elements"],
+                        addition["segment_refs"],
+                    ):
+                        _inverse_transform_marking_shape(
+                            shape_record,
+                            output_frame,
+                        )
+                        _inverse_transform_marking_geometry(
+                            geometry_record,
+                            output_frame,
+                        )
+                        shapes_stream.records.append(shape_record)
+                        lite_stream.records.append(geometry_record)
+                        shapes_root.append(shape_element)
+                        output_shape_refs.append(segment_ref)
+                        output_record_by_handle[
+                            str(shape_element.get("Handle"))
+                        ] = shape_record
+                        marking_pending.append(
+                            (
+                                shape_element,
+                                geometry_element,
+                                shape_record,
+                                geometry_record,
+                            )
+                        )
+
+                    report = dict(addition["report"])
+                    report.update(
+                        {
+                            "status": "generated",
+                            "instanceKey": item.instance_key,
+                            "fileName": item.source_file_name,
+                            "originalText": item.marking_text,
+                            "layoutAttempt": selected_layout_index + 1,
+                            "fallbackUsed": bool(selected_layout_index),
+                            "selectedSurfacePosition": selected_position,
+                            "selectedStartZ": selected_start_z,
+                            "preferredStartZ": preferred_start_z,
+                            "shiftedAxially": (
+                                abs(selected_start_z - preferred_start_z)
+                                > 1e-6
+                            ),
+                            "collisionAttemptsBeforeSuccess": (
+                                collision_attempts
+                            ),
+                            "fitErrorsBeforeSuccess": fit_errors,
+                            "segmentHandle": segment_handle,
+                        }
+                    )
+                    marking_reports.append(report)
+
         for side, enabled in (
             ("before", bool(item.placement.get("common_line_before"))),
             ("after", bool(item.placement.get("common_line_after"))),
         ):
             if not enabled:
                 continue
-            reversed_end = bool(item.placement.get("reversed_end_for_end"))
             if side == "before":
                 end_index = 1 if reversed_end else 0
             else:
@@ -809,10 +1494,9 @@ def export_nested_rod(
 
         _order_segment_refs_release_safe(
             segment_xml,
-            shape_record_map,
-            shape_handle_map,
-            source_part,
-            item.placement,
+            output_record_by_handle,
+            near_handle=physical_near_new,
+            far_handle=physical_far_new,
         )
 
         segments_root.append(segment_xml)
@@ -828,6 +1512,7 @@ def export_nested_rod(
             "shape_record_map": shape_record_map,
             "shape_xml_map": shape_xml_map,
             "geo_clones": geo_clones,
+            "marking_pending": marking_pending,
         })
 
     curves_data = curves_stream.encode()
@@ -852,6 +1537,15 @@ def export_nested_rod(
                         "GeoAddr",
                         str(output["geo_clones"][int(source_addr)].address),
                     )
+
+        for (
+            shape_element,
+            geometry_element,
+            shape_record,
+            geometry_record,
+        ) in output["marking_pending"]:
+            shape_element.set("DataAddr", str(shape_record.address))
+            geometry_element.set("GeoAddr", str(geometry_record.address))
 
     doc_xml.set("DataAddr", str(portion_record.address))
     pack_xml.set("DataAddr", str(pack_record.address))
@@ -894,7 +1588,12 @@ def export_nested_rod(
         "segmentCount": len(resolved),
         "warnings": warnings,
         "validation": checks,
+        "textMarkings": marking_reports,
+        "textMarkingEnabled": text_marking_enabled,
+        "releaseStarts": release_start_reports,
+        "commonLinePackMode": bool(common_line_pack_mode),
         "fileVersion": WRITABLE_FILE_VERSION,
+        "exportMode": "native_multi_segment_array",
     }
 
 
@@ -906,6 +1605,9 @@ def export_nested_rod_to_directory(
     rod_id="rod",
     rod_length=6000.0,
     gap_mm=2.0,
+    text_marking_enabled=False,
+    text_marking_height_mm=5.0,
+    text_marking_font_path=None,
 ):
     if not str(output_dir or "").strip():
         raise ValueError("Nested ZZX output directory is not configured")
@@ -918,4 +1620,7 @@ def export_nested_rod_to_directory(
         rod_length=rod_length,
         gap_mm=gap_mm,
         title=output_path.stem,
+        text_marking_enabled=text_marking_enabled,
+        text_marking_height_mm=text_marking_height_mm,
+        text_marking_font_path=text_marking_font_path,
     )
