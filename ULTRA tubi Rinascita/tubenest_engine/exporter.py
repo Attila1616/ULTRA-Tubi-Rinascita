@@ -1692,6 +1692,7 @@ def export_nested_rod(
             "shape_record_map": shape_record_map,
             "shape_xml_map": shape_xml_map,
             "output_record_by_handle": output_record_by_handle,
+            "part_fingerprint": str(source_part.part_fingerprint),
             "geo_clones": geo_clones,
             "marking_pending": marking_pending,
         })
@@ -1784,19 +1785,23 @@ def export_nested_rod(
         for ref in first_shapes_parent
         if ref.get("Handle") is not None
     }
-    catalog_by_signature = {}
+    first_part_fingerprint = first_output["part_fingerprint"]
+    first_active_by_signature = {}
+    inert_master_by_signature = {}
     for handle in list(first_handles):
         element = global_shape_xml.get(handle)
-        if element is None:
+        record = global_shape_records.get(handle)
+        if element is None or record is None:
             continue
         try:
             pairs = resolve_geometry_pairs(handle)
         except FormatError:
             continue
-        catalog_by_signature.setdefault(
-            _geometry_catalog_signature(element, pairs),
-            handle,
-        )
+        signature = _geometry_catalog_signature(element, pairs)
+        if _shape_channel(record) > 0:
+            first_active_by_signature.setdefault(signature, handle)
+        elif _shape_channel(record) == 0 and _curve_flags(record) == 0:
+            inert_master_by_signature.setdefault(signature, handle)
 
     catalog_pending = []
     catalog_created = []
@@ -1819,7 +1824,16 @@ def export_nested_rod(
 
             pairs = resolve_geometry_pairs(handle)
             signature = _geometry_catalog_signature(element, pairs)
-            master_handle = catalog_by_signature.get(signature)
+            same_physical_part = (
+                output["part_fingerprint"] == first_part_fingerprint
+            )
+            master_handle = (
+                first_active_by_signature.get(signature)
+                if same_physical_part
+                else None
+            )
+            if master_handle is None:
+                master_handle = inert_master_by_signature.get(signature)
 
             if master_handle is None:
                 geometry_min_z, geometry_max_z = _geometry_z_bounds(pairs)
@@ -1870,7 +1884,7 @@ def export_nested_rod(
                 global_shape_records[master_handle] = master_record
                 geometry_pairs_by_handle[master_handle] = master_pairs
                 first_handles.add(master_handle)
-                catalog_by_signature[signature] = master_handle
+                inert_master_by_signature[signature] = master_handle
                 catalog_pending.append(
                     (
                         master_element,
@@ -1975,8 +1989,8 @@ def export_nested_rod(
         "releaseStarts": release_start_reports,
         "commonLinePackMode": bool(common_line_pack_mode),
         "geometryCatalog": {
-            "createdMasterHandles": catalog_created,
-            "reusedMasterHandles": catalog_reused,
+            "createdInertMasterHandles": catalog_created,
+            "reusedFirstSegmentHandles": catalog_reused,
             "firstSegmentHandle": first_segment_xml.get("Handle"),
             "copyHandlesRestrictedToFirstSegment": True,
         },

@@ -17,6 +17,13 @@ from tubenest_engine.fit import PartPose, fit_adjacent_parts
 APP_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = APP_ROOT / "tests" / "fixtures" / "array test, co-edged array.zzx"
 FIXTURE_SHA256 = "45be517cbb9438763650cd840021fa24112d94795c24f87b2ae6f697fa741ca6"
+MIXED_FIXTURE = (
+    APP_ROOT
+    / "tests"
+    / "fixtures"
+    / "IMPORT_ONLY_DO_NOT_CUT_L2000_plus_L1212_catalog_trial.zzx"
+)
+MIXED_FIXTURE_SHA256 = "4b1ffcb62c06a292e6df54b62b0f1f2eed5e52303d62e8f5e71021ef401a4062"
 
 
 def _shape_record_map(archive):
@@ -60,6 +67,88 @@ def _maximum_explicit_xml_handle(archive):
 
 
 class NativeArrayExporterTests(unittest.TestCase):
+    def test_tubepro_confirmed_mixed_segment_catalog_fixture(self):
+        raw = MIXED_FIXTURE.read_bytes()
+        self.assertEqual(
+            hashlib.sha256(raw).hexdigest(),
+            MIXED_FIXTURE_SHA256,
+        )
+
+        archive = Archive.read(MIXED_FIXTURE)
+        archive.validate()
+        segments = archive.xml("Segments/content.xml").findall(
+            "TubeSegment"
+        )
+        self.assertEqual(len(segments), 2)
+
+        shape_xml = {
+            element.get("Handle"): element
+            for element in archive.xml("Shapes/content.xml")
+            if element.tag != "MD5"
+        }
+        shape_records = _shape_record_map(archive)
+        first_handles = {
+            ref.get("Handle")
+            for ref in segments[0].find("Shapes")
+        }
+
+        copied_active = []
+        for ref in segments[1].find("Shapes"):
+            handle = ref.get("Handle")
+            record = shape_records[int(handle)]
+            if _shape_meta(record)["channel"] <= 0:
+                continue
+            copied = shape_xml[handle].get("CopyHandle")
+            self.assertIsNotNone(copied)
+            self.assertIn(copied, first_handles)
+            copied_active.append((handle, copied))
+
+            master_meta = _shape_meta(shape_records[int(copied)])
+            self.assertEqual(master_meta["channel"], 0)
+            self.assertEqual(master_meta["curve_flags"], 0)
+
+        self.assertEqual(
+            copied_active,
+            [("1015", "1025"), ("1016", "1026")],
+        )
+
+        pack_xml = archive.xml("Portions/content.xml").find(
+            "DocPortion/PackSegments"
+        )
+        records = {
+            record.address: record
+            for record in archive.stream("Segments").records
+        }
+        pack_record = records[int(pack_xml.get("DataAddr"))]
+        pack_block = next(
+            block
+            for block in pack_record.blocks
+            if block.name == "TubeSegments"
+        )
+        self.assertEqual(
+            struct.unpack_from("<dII", pack_block.payload, 0),
+            (5.0, 0, 0),
+        )
+
+        portion_record = archive.stream("Portions").records[0]
+        portion_block = next(
+            block
+            for block in portion_record.blocks
+            if block.name == "DocPortion"
+        )
+        from tubenest_engine.bcmp import read_vector
+        self.assertAlmostEqual(
+            read_vector(portion_block.payload, 32)[2],
+            3217.3760430703405,
+            places=6,
+        )
+
+        root = archive.xml("content.xml")
+        self.assertEqual(
+            int(root.find("Header").get("HandleSeed")),
+            _maximum_explicit_xml_handle(archive) + 1,
+        )
+
     def test_tubest_coedge_fixture_documents_native_representation(self):
         raw = FIXTURE.read_bytes()
         self.assertEqual(hashlib.sha256(raw).hexdigest(), FIXTURE_SHA256)
@@ -235,6 +324,23 @@ class NativeArrayExporterTests(unittest.TestCase):
             second_near = int(segments[1].get("CutOffA"))
             self.assertTrue(_shape_meta(shapes[first_far])["curve_flags"] & 0x04)
             self.assertTrue(_shape_meta(shapes[second_near])["curve_flags"] & 0x04)
+
+            shape_xml = {
+                element.get("Handle"): element
+                for element in archive.xml("Shapes/content.xml")
+                if element.tag != "MD5"
+            }
+            first_handles = {
+                ref.get("Handle")
+                for ref in segments[0].find("Shapes")
+            }
+            for ref in segments[1].find("Shapes"):
+                handle = ref.get("Handle")
+                if _shape_meta(shapes[int(handle)])["channel"] <= 0:
+                    continue
+                copied = shape_xml[handle].get("CopyHandle")
+                self.assertIsNotNone(copied)
+                self.assertIn(copied, first_handles)
 
     def test_round_native_array_release_start_normalizes_local_negative_z(self):
         source = APP_ROOT / (

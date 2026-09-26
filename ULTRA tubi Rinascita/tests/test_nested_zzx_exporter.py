@@ -156,10 +156,12 @@ class NestedZzxExporterTests(unittest.TestCase):
                 for element in archive.xml("Shapes/content.xml")
                 if element.tag != "MD5" and element.get("Handle") is not None
             }
+            # TubePro-confirmed mixed arrays can reuse a viewport handle as a
+            # Shape handle; viewport handles are not a document-wide uniqueness
+            # namespace. Generated HandleSeed is the next free explicit handle.
             self.assertTrue(viewport_handles)
-            self.assertFalse(set(viewport_handles) & segment_handles)
-            self.assertFalse(set(viewport_handles) & shape_handles)
-            self.assertEqual(handle_seed, max(viewport_handles))
+            all_explicit = viewport_handles + list(segment_handles) + list(shape_handles)
+            self.assertEqual(handle_seed, max(all_explicit) + 1)
 
             shape_xml = {
                 int(element.get("Handle")): element

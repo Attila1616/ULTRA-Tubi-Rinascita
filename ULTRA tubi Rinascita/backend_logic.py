@@ -1404,9 +1404,10 @@ def export_locked_rod_zzx(payload):
             "status": "success",
             **result,
             "safetyNote": (
-                "ZZX generato come array nativo multi-segmento: ogni pezzo resta "
-                "un TubeSegment separato nella WorkSeq. Aprirlo e controllarlo in "
-                "TubePro/TubesT prima di qualsiasi uso macchina."
+                "ZZX multi-segmento sperimentale: import/display TubePro verificati "
+                "per il catalogo geometrie nel primo segmento, ma il comportamento "
+                "dei supporti/pistoni per pezzo non e' ancora verificato sulla macchina. "
+                "Eseguire la normale validazione macchina prima dell'uso."
             ),
         }
     except Exception as exc:
