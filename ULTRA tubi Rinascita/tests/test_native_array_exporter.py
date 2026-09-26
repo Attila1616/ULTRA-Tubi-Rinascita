@@ -4,14 +4,19 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 
 import backend_logic
 from unittest.mock import patch
 
 from tubenest_engine.archive import Archive
 from tubenest_engine.domain import read_tube_parts
-from tubenest_engine.exporter import export_nested_rod
-from tubenest_engine.fit import PartPose, fit_adjacent_parts
+from tubenest_engine.exporter import (
+    _repair_locked_common_lines,
+    _saved_stock_profile_signature,
+    export_nested_rod,
+)
+from tubenest_engine.fit import AdjacencyFit, PartPose, fit_adjacent_parts
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +72,89 @@ def _maximum_explicit_xml_handle(archive):
 
 
 class NativeArrayExporterTests(unittest.TestCase):
+    def test_profile_signature_uses_physical_dimensions_not_binary_metadata(self):
+        profile_a = SimpleNamespace(
+            kind="Square",
+            thickness=2.0,
+            outside_width=80.0,
+            outside_height=80.0,
+            outside_diameter=None,
+            corner_radius=5.0,
+        )
+        profile_b = SimpleNamespace(
+            kind="Square",
+            thickness=2.0,
+            outside_width=80.0,
+            outside_height=80.0,
+            outside_diameter=None,
+            corner_radius=5.0,
+        )
+        a = SimpleNamespace(source_part=SimpleNamespace(profile=profile_a))
+        b = SimpleNamespace(source_part=SimpleNamespace(profile=profile_b))
+        self.assertEqual(
+            _saved_stock_profile_signature(a),
+            _saved_stock_profile_signature(b),
+        )
+
+    def test_incompatible_locked_common_line_falls_back_to_gap_and_shifts_tail(self):
+        part = SimpleNamespace(to_dict=lambda: {"profile": {"kind": "Circle"}})
+        previous = SimpleNamespace(
+            source_part=part,
+            source_file_name="previous.zzx",
+            placement={
+                "z_start": 0.0,
+                "z_end": 100.0,
+                "common_line_after": True,
+                "common_line_before": False,
+                "axial_rotation_degrees": 0.0,
+                "reversed_end_for_end": False,
+            },
+        )
+        current = SimpleNamespace(
+            source_part=part,
+            source_file_name="current.zzx",
+            placement={
+                "z_start": 100.0,
+                "z_end": 180.0,
+                "common_line_before": True,
+                "common_line_after": False,
+                "axial_rotation_degrees": 0.0,
+                "reversed_end_for_end": False,
+            },
+        )
+        tail = SimpleNamespace(
+            source_part=part,
+            source_file_name="tail.zzx",
+            placement={
+                "z_start": 182.0,
+                "z_end": 232.0,
+                "common_line_before": False,
+                "common_line_after": False,
+                "axial_rotation_degrees": 0.0,
+                "reversed_end_for_end": False,
+            },
+        )
+        with patch(
+            "tubenest_engine.exporter.fit_adjacent_parts",
+            side_effect=[
+                AdjacencyFit(100.0, 0.0, False, 0.0, 0.0),
+                AdjacencyFit(102.0, 2.0, False, 0.0, 0.0),
+            ],
+        ):
+            warnings = _repair_locked_common_lines(
+                [previous, current, tail],
+                2.0,
+                6000.0,
+            )
+
+        self.assertFalse(current.placement["common_line_before"])
+        self.assertFalse(previous.placement["common_line_after"])
+        self.assertAlmostEqual(current.placement["z_start"], 102.0)
+        self.assertAlmostEqual(current.placement["z_end"], 182.0)
+        self.assertAlmostEqual(tail.placement["z_start"], 184.0)
+        self.assertAlmostEqual(tail.placement["z_end"], 234.0)
+        self.assertEqual(len(warnings), 1)
+
     def test_tubepro_confirmed_mixed_segment_catalog_fixture(self):
         raw = MIXED_FIXTURE.read_bytes()
         self.assertEqual(

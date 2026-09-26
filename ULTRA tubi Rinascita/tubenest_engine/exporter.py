@@ -28,7 +28,7 @@ from .bcmp import FormatError, Stream, read_vector, vector
 from .domain import read_tube_parts
 from .fit import PartPose, fit_adjacent_parts
 from .geometry import Line, Spline, primitives
-from .release_starts import select_face_start, select_round_start
+from .release_starts import coordinate_candidates, select_face_start, select_round_start
 from .text_marking import (
     MarkingFitError,
     build_marking_records,
@@ -478,6 +478,19 @@ def _inverse_transform_marking_shape(record, frame):
     block.payload = bytes(payload)
 
 
+def _exact_curve_min_z(curves):
+    values = []
+    for curve in curves:
+        for normalized_t in coordinate_candidates(curve, 2):
+            point = curve.at(normalized_t)
+            if not all(math.isfinite(value) for value in point):
+                raise ValueError("Nonfinite cutoff while establishing stock origin")
+            values.append(float(point[2]))
+    if not values:
+        raise ValueError("Empty cutoff while establishing stock origin")
+    return min(values)
+
+
 def _normalize_release_selection_z(curves, stock_min_z):
     """Shift only the release-selection view so positioned stock starts at Z=0.
 
@@ -782,28 +795,39 @@ def _resolve_placements(placements):
     return resolved, all_layers
 
 
+def _profile_number(value):
+    if value is None:
+        return None
+    value = float(value)
+    if not math.isfinite(value):
+        raise ValueError("Stock profile contains a nonfinite dimension")
+    return round(value, 6)
+
+
 def _saved_stock_profile_signature(item):
-    segment = item.source_segment_xml
-    cross = segment.find("CrossSection")
-    if cross is None or cross.get("DataAddr") is None:
-        raise FormatError(
-            f"{item.source_file_name}: TubeSegment has no saved CrossSection record"
+    """Physical stock identity required by TubePro mixed-segment arrays.
+
+    Do not compare the complete Curves BCMP record: unrelated serialized
+    metadata may differ between otherwise identical stock definitions.
+    """
+    profile = item.source_part.profile
+    kind = str(profile.kind or "")
+    if kind == "Circle":
+        dimensions = (
+            _profile_number(profile.outside_diameter),
+            None,
+            None,
         )
-    records = _record_by_address(item.source_archive, "Curves")
-    record = records.get(int(cross.get("DataAddr")))
-    if record is None:
-        raise FormatError(
-            f"{item.source_file_name}: saved CrossSection record is missing"
+    else:
+        dimensions = (
+            _profile_number(profile.outside_width),
+            _profile_number(profile.outside_height),
+            _profile_number(profile.corner_radius),
         )
     return (
-        str(cross.get("SectionClass") or ""),
-        str(cross.get("ThickNess") or ""),
-        str(record.name),
-        tuple(
-            (str(block.name), int(block.version), bytes(block.payload))
-            for block in record.blocks
-        ),
-        bytes(record.tail),
+        kind,
+        _profile_number(profile.thickness),
+        dimensions,
     )
 
 
@@ -811,12 +835,14 @@ def _validate_saved_stock_profiles(resolved):
     first = resolved[0]
     reference = _saved_stock_profile_signature(first)
     for item in resolved[1:]:
-        if _saved_stock_profile_signature(item) != reference:
+        candidate = _saved_stock_profile_signature(item)
+        if candidate != reference:
             raise ValueError(
-                "Mixed-segment TubePro export requires identical saved stock "
-                "profiles for every piece, including section class, thickness, "
-                "dimensions and corner radius. "
-                f"{item.source_file_name} does not match {first.source_file_name}."
+                "Mixed-segment TubePro export requires the same physical stock "
+                "profile for every piece (kind, thickness, dimensions and corner "
+                "radius/diameter). "
+                f"{item.source_file_name} has {candidate}, while "
+                f"{first.source_file_name} has {reference}."
             )
 
 
@@ -967,11 +993,24 @@ def _update_metadata(entries, title):
         entries["info.xml"] = xml_bytes(root)
 
 
-def _validate_locked_common_lines(resolved, gap_mm, tolerance=1e-4):
+def _repair_locked_common_lines(
+    resolved,
+    gap_mm,
+    rod_length,
+    tolerance=1e-4,
+):
+    """Revalidate locked shared cuts and safely fall back to a real gap.
+
+    If an older/stale lock contains a shared boundary that no longer passes
+    the full current profile/boundary/process checks, convert it to an ordinary
+    fitted gap and shift this piece plus the remaining tail forward.
+    """
+    warnings = []
     for index in range(1, len(resolved)):
         current = resolved[index]
         if not bool(current.placement.get("common_line_before")):
             continue
+
         previous = resolved[index - 1]
         previous_pose = PartPose(
             axial_rotation_degrees=float(
@@ -990,7 +1029,8 @@ def _validate_locked_common_lines(resolved, gap_mm, tolerance=1e-4):
             ),
         )
         previous_origin = float(previous.placement.get("z_start") or 0.0)
-        expected = fit_adjacent_parts(
+
+        checked = fit_adjacent_parts(
             previous.source_part.to_dict(),
             previous_pose,
             previous_origin,
@@ -1000,20 +1040,60 @@ def _validate_locked_common_lines(resolved, gap_mm, tolerance=1e-4):
             allow_common_line=True,
         )
         actual_origin = float(current.placement.get("z_start") or 0.0)
-        if not expected.common_line:
-            raise ValueError(
-                f"Locked shared boundary before {current.source_file_name} "
-                "is no longer profile/boundary/process compatible. "
-                "Recalculate and re-lock the rod before exporting."
+
+        if checked.common_line:
+            safe_origin = float(checked.next_origin)
+            reason = None
+        else:
+            safe_fit = fit_adjacent_parts(
+                previous.source_part.to_dict(),
+                previous_pose,
+                previous_origin,
+                current.source_part.to_dict(),
+                current_pose,
+                gap_mm=float(gap_mm),
+                allow_common_line=False,
             )
-        if abs(float(expected.next_origin) - actual_origin) > tolerance:
-            raise ValueError(
-                f"Locked shared boundary before {current.source_file_name} "
-                f"expects Z={expected.next_origin:.6f} but the saved placement "
-                f"is Z={actual_origin:.6f}. Recalculate and re-lock the rod."
+            safe_origin = float(safe_fit.next_origin)
+            reason = (
+                "full profile/boundary/process compatibility no longer "
+                "permits a shared physical cut"
+            )
+            current.placement["common_line_before"] = False
+            previous.placement["common_line_after"] = False
+
+        delta = safe_origin - actual_origin
+        if abs(delta) > tolerance:
+            for shifted in resolved[index:]:
+                shifted.placement["z_start"] = (
+                    float(shifted.placement.get("z_start") or 0.0) + delta
+                )
+                shifted.placement["z_end"] = (
+                    float(shifted.placement.get("z_end") or 0.0) + delta
+                )
+
+        if reason is not None:
+            warnings.append(
+                f"{current.source_file_name}: stale shared boundary converted "
+                f"to an ordinary {float(gap_mm):g} mm fitted gap because {reason}."
+            )
+        elif abs(delta) > tolerance:
+            warnings.append(
+                f"{current.source_file_name}: shared-boundary placement was "
+                f"realigned by {delta:.6f} mm to the current geometry fit."
             )
 
-
+    used_span = max(
+        float(item.placement.get("z_end") or 0.0)
+        for item in resolved
+    )
+    if used_span > float(rod_length) + 1e-6:
+        raise ValueError(
+            "After replacing an incompatible shared boundary with a safe gap, "
+            f"the rod needs {used_span:.3f} mm but only {float(rod_length):.3f} "
+            "mm is available. Recalculate/re-lock this rod."
+        )
+    return warnings
 
 
 def export_nested_rod(
@@ -1040,7 +1120,11 @@ def export_nested_rod(
     if not math.isfinite(gap_mm) or gap_mm < 0:
         raise ValueError("gap_mm must be finite and non-negative")
 
-    _validate_locked_common_lines(resolved, gap_mm)
+    common_line_warnings = _repair_locked_common_lines(
+        resolved,
+        gap_mm,
+        rod_length,
+    )
 
     text_marking_enabled = bool(text_marking_enabled)
     text_marking_height_mm = float(text_marking_height_mm)
@@ -1105,7 +1189,7 @@ def export_nested_rod(
     next_handle = 1001
     used_handles = set()
     segment_outputs = []
-    warnings = []
+    warnings = list(common_line_warnings)
     marking_reports = []
     release_start_reports = []
     master_shape_handles = {}
@@ -1297,25 +1381,10 @@ def export_nested_rod(
         physical_near_new = shape_handle_map[physical_near_old]
         physical_far_new = shape_handle_map[physical_far_old]
 
-        # Native segment geometry may use an arbitrary local axial origin.
-        # Convert the posed stock interval to the nonnegative convention used
-        # by the release-start selector without modifying serialized geometry.
-        posed_stock_endpoints = (
-            _frame_point(
-                output_frame,
-                (0.0, 0.0, float(source_part.axial_min)),
-            ),
-            _frame_point(
-                output_frame,
-                (0.0, 0.0, float(source_part.axial_max)),
-            ),
-        )
-        positioned_stock_min_z = min(
-            point[2] for point in posed_stock_endpoints
-        )
-
-        # Recompute PathStartParam in the segment's final posed frame while
-        # preserving the original local geometry and native child domains.
+        # Establish the physical stock origin from the exact posed extrema of
+        # both end contours. Reader bounds are sampled and can miss a spline
+        # extremum by enough to trip the strict nonnegative-stock check.
+        posed_end_curves = {}
         for old_handle in (physical_near_old, physical_far_old):
             source_element = source_shape_xml[old_handle]
             raw_curves = _source_shape_curves(
@@ -1323,10 +1392,20 @@ def export_nested_rod(
                 source_shape_xml,
                 source_lite_records,
             )
-            posed_curves = [
+            posed_end_curves[old_handle] = [
                 _posed_curve(curve, output_frame)
                 for curve in raw_curves
             ]
+
+        positioned_stock_min_z = min(
+            _exact_curve_min_z(posed_end_curves[physical_near_old]),
+            _exact_curve_min_z(posed_end_curves[physical_far_old]),
+        )
+
+        # Recompute PathStartParam in the segment's final posed frame while
+        # preserving original geometry and native child parameter domains.
+        for old_handle in (physical_near_old, physical_far_old):
+            posed_curves = posed_end_curves[old_handle]
             selection_curves = _normalize_release_selection_z(
                 posed_curves,
                 positioned_stock_min_z,
