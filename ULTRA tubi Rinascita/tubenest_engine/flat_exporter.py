@@ -364,35 +364,72 @@ def _shape_axial_center(shape_xml, lite_by_addr):
     return (min(z_values) + max(z_values)) / 2.0
 
 
-def _order_shape_references_left_to_right(
+def _order_piece_shape_references_release_safe(
     shape_refs,
     shapes_by_handle,
     shape_record_by_addr,
     lite_by_addr,
+    *,
+    near_handle,
+    far_handle,
 ):
-    decorated = []
+    """Order one physical piece so its releasing cutoff is always last.
+
+    Internal machining may still be ordered axially for efficiency, but no
+    hole, slot or marking is allowed to follow the far/releasing end cut.
+    Display-only geometry is preserved after machining references.
+    """
+    near_handle = str(near_handle)
+    far_handle = str(far_handle)
+    near_ref = None
+    far_ref = None
+    internal = []
+    display = []
+
     for original_index, ref in enumerate(list(shape_refs)):
-        shape_xml = shapes_by_handle.get(ref.get("Handle"))
+        handle = str(ref.get("Handle"))
+        shape_xml = shapes_by_handle.get(handle)
         if shape_xml is None:
             continue
         record = shape_record_by_addr.get(int(shape_xml.get("DataAddr")))
         if record is None:
             continue
-        channel = _shape_channel(record)
-        if channel > 0:
-            key = (
-                0,
-                round(_shape_axial_center(shape_xml, lite_by_addr), 6),
-                1 if _shape_do_not_cut(record) else 0,
-                original_index,
-            )
-        else:
-            # Display/silhouette geometry is not a machining operation.
-            key = (1, float("inf"), 0, original_index)
-        decorated.append((key, ref))
 
-    decorated.sort(key=lambda row: row[0])
-    return [ref for _key, ref in decorated]
+        if handle == near_handle:
+            near_ref = ref
+            continue
+        if handle == far_handle:
+            far_ref = ref
+            continue
+
+        channel = _shape_channel(record)
+        if channel <= 0:
+            display.append((original_index, ref))
+            continue
+
+        internal.append(
+            (
+                (
+                    round(_shape_axial_center(shape_xml, lite_by_addr), 6),
+                    1 if _shape_do_not_cut(record) else 0,
+                    original_index,
+                ),
+                ref,
+            )
+        )
+
+    if near_ref is None or far_ref is None:
+        raise FormatError(
+            f"Piece cutoff ordering cannot resolve near={near_handle} "
+            f"far={far_handle}"
+        )
+
+    internal.sort(key=lambda row: row[0])
+    ordered = [near_ref]
+    ordered.extend(ref for _key, ref in internal)
+    ordered.append(far_ref)
+    ordered.extend(ref for _index, ref in display)
+    return ordered
 
 
 def _transform_shape_record(record, item, base_rotation):
@@ -1029,6 +1066,18 @@ def _flat_transform(
                     )
                     marking_reports.append(report)
 
+        segment_shapes_for_order = segment.find("Shapes")
+        if segment_shapes_for_order is None:
+            raise FormatError(f"{item.file_name}: TubeSegment has no Shapes list")
+        segment_shapes_for_order[:] = _order_piece_shape_references_release_safe(
+            list(segment_shapes_for_order),
+            shapes_by_handle,
+            shape_record_by_addr,
+            lite_by_addr,
+            near_handle=near_handle,
+            far_handle=far_handle,
+        )
+
         placement_audit.append(
             {
                 "instanceKey": item.instance_key,
@@ -1088,14 +1137,6 @@ def _flat_transform(
         if other_shapes is not None:
             first_shapes.extend(list(other_shapes))
         segments_root.remove(segment)
-
-    ordered_refs = _order_shape_references_left_to_right(
-        list(first_shapes),
-        shapes_by_handle,
-        shape_record_by_addr,
-        lite_by_addr,
-    )
-    first_shapes[:] = ordered_refs
 
     # The verified TubePro workaround is exactly one segment record after the
     # pack record. All machining geometry remains in Shapes/LiteGeos.

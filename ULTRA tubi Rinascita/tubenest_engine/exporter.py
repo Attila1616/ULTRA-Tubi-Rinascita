@@ -104,6 +104,64 @@ def _shape_channel(record):
     return int(struct.unpack_from("<I", block.payload, 0)[0])
 
 
+def _order_segment_refs_release_safe(segment_xml, shape_record_map, shape_handle_map, source_part, placement):
+    refs_parent = segment_xml.find("Shapes")
+    if refs_parent is None:
+        raise FormatError("TubeSegment has no Shapes list")
+
+    reversed_end = bool(placement.get("reversed_end_for_end"))
+    source_near = (
+        int(source_part.ends[1].shape_handle)
+        if reversed_end
+        else int(source_part.ends[0].shape_handle)
+    )
+    source_far = (
+        int(source_part.ends[0].shape_handle)
+        if reversed_end
+        else int(source_part.ends[1].shape_handle)
+    )
+    near_handle = str(shape_handle_map[source_near])
+    far_handle = str(shape_handle_map[source_far])
+
+    near_ref = None
+    far_ref = None
+    internal = []
+    display = []
+    reverse_records = {
+        str(shape_handle_map[old]): record
+        for old, record in shape_record_map.items()
+    }
+
+    for index, ref in enumerate(list(refs_parent)):
+        handle = str(ref.get("Handle"))
+        if handle == near_handle:
+            near_ref = ref
+            continue
+        if handle == far_handle:
+            far_ref = ref
+            continue
+        record = reverse_records.get(handle)
+        if record is None or _shape_channel(record) <= 0:
+            display.append((index, ref))
+        else:
+            internal.append((index, ref))
+
+    if near_ref is None or far_ref is None:
+        raise FormatError(
+            f"Cannot resolve physical near/far cutoffs {near_handle}/{far_handle}"
+        )
+
+    # Preserve source-relative order for internal operations, but guarantee
+    # that the physical release cut is the final machining operation.
+    refs_parent[:] = (
+        [near_ref]
+        + [ref for _index, ref in internal]
+        + [far_ref]
+        + [ref for _index, ref in display]
+    )
+
+
+
 def _read_segment_frame(record):
     block = next(
         (block for block in record.blocks if block.name == "TubeSegment"),
@@ -748,6 +806,14 @@ def export_nested_rod(
                     f"{item.source_file_name}: common-line {side} flag could not "
                     "be written; source cut record was preserved."
                 )
+
+        _order_segment_refs_release_safe(
+            segment_xml,
+            shape_record_map,
+            shape_handle_map,
+            source_part,
+            item.placement,
+        )
 
         segments_root.append(segment_xml)
         ET.SubElement(work_seq, "Seg", Handle=str(segment_handle))

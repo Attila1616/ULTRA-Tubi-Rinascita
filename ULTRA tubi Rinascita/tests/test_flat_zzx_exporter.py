@@ -196,58 +196,56 @@ class FlatNestedZzxExporterTests(unittest.TestCase):
             self.assertFalse(output.exists())
 
 
-    def test_machining_shapes_are_ordered_left_to_right_after_reversal(self):
-        source = APP_ROOT / "Round tube Ø30 L1215, first cut 0° layer 1, second cut 45° layer 4.zzx"
-        part = read_tube_parts(source)[0]
-        length = float(part.overall_length)
-        placements = [
-            {
-                "instanceKey": "round::1",
-                "filePath": str(source),
-                "fileName": source.name,
-                "segmentHandle": part.segment_handle,
-                "nestPlacement": {
-                    "z_start": 0.0,
-                    "z_end": length,
-                    "axial_rotation_degrees": 0.0,
-                    "reversed_end_for_end": True,
-                    "common_line_before": False,
-                },
-            },
-            {
-                "instanceKey": "round::2",
-                "filePath": str(source),
-                "fileName": source.name,
-                "segmentHandle": part.segment_handle,
-                "nestPlacement": {
-                    "z_start": length + 2.0,
-                    "z_end": 2.0 * length + 2.0,
-                    "axial_rotation_degrees": 180.0,
-                    "reversed_end_for_end": False,
-                    "common_line_before": False,
-                },
-            },
-        ]
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "ordered.zzx"
-            export_flat_nested_rod(placements, output)
-            document = read_zzx_cached(output)
-            machining_centers = []
-            for shape in document.segments[0].shapes:
-                if shape.operation_layer is None or not shape.sampled_bounds:
-                    continue
-                machining_centers.append(
-                    (
-                        float(shape.sampled_bounds[0][2])
-                        + float(shape.sampled_bounds[1][2])
-                    )
-                    / 2.0
-                )
+    def test_release_cut_is_last_even_when_axial_center_is_before_tip_feature(self):
+        from tubenest_engine.flat_exporter import (
+            _order_piece_shape_references_release_safe,
+        )
 
-            self.assertEqual(
-                machining_centers,
-                sorted(machining_centers),
+        class FakeRecord:
+            def __init__(self, channel=1, excluded=False):
+                flags = 0x2 if excluded else 0
+                self.blocks = [
+                    type("B", (), {
+                        "name": "Shape",
+                        "payload": struct.pack("<III", channel, 0, flags),
+                    })()
+                ]
+
+        near = type("E", (), {"get": lambda self, key: "near" if key == "Handle" else "1"})()
+        hole = type("E", (), {"get": lambda self, key: "hole" if key == "Handle" else "2"})()
+        far = type("E", (), {"get": lambda self, key: "far" if key == "Handle" else "3"})()
+
+        refs = [
+            type("R", (), {"get": lambda self, key: "near"})(),
+            type("R", (), {"get": lambda self, key: "far"})(),
+            type("R", (), {"get": lambda self, key: "hole"})(),
+        ]
+        shapes = {"near": near, "hole": hole, "far": far}
+        records = {1: FakeRecord(), 2: FakeRecord(), 3: FakeRecord()}
+
+        import tubenest_engine.flat_exporter as flat_exporter
+        original = flat_exporter._shape_axial_center
+        centers = {"near": 0.0, "far": 100.0, "hole": 120.0}
+        try:
+            flat_exporter._shape_axial_center = (
+                lambda shape, lite: centers[shape.get("Handle")]
             )
+            ordered = _order_piece_shape_references_release_safe(
+                refs,
+                shapes,
+                records,
+                {},
+                near_handle="near",
+                far_handle="far",
+            )
+        finally:
+            flat_exporter._shape_axial_center = original
+
+        self.assertEqual(
+            [ref.get("Handle") for ref in ordered[:3]],
+            ["near", "hole", "far"],
+        )
+
 
     def test_angled_end_cut_start_is_minimum_z_after_pose(self):
         source = APP_ROOT / "Round tube Ø30 L1215, first cut 0° layer 1, second cut 45° layer 4.zzx"
