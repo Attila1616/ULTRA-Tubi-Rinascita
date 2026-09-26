@@ -92,8 +92,12 @@ class NestedZzxExporterTests(unittest.TestCase):
             )
             self.assertGreaterEqual(source_first_shape_delta, 3)
 
-            first_output_shape_handle = int(segments[0].find("Shapes")[0].get("Handle"))
-            second_output_shape_handle = int(segments[1].find("Shapes")[0].get("Handle"))
+            first_output_shape_handle = (
+                int(segments[0].get("Handle")) + source_first_shape_delta
+            )
+            second_output_shape_handle = (
+                int(segments[1].get("Handle")) + source_first_shape_delta
+            )
             output_shapes_xml = {
                 int(element.get("Handle")): element
                 for element in archive.xml("Shapes/content.xml")

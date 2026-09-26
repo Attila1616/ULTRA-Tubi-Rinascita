@@ -722,6 +722,7 @@ def _flat_transform(
     shared_cut_pairs = []
     release_handles = []
     previous_far_handle = None
+    piece_order_specs = []
     stock_profile = resolved[0].part.profile
 
     if text_marking_enabled:
@@ -1066,16 +1067,8 @@ def _flat_transform(
                     )
                     marking_reports.append(report)
 
-        segment_shapes_for_order = segment.find("Shapes")
-        if segment_shapes_for_order is None:
-            raise FormatError(f"{item.file_name}: TubeSegment has no Shapes list")
-        segment_shapes_for_order[:] = _order_piece_shape_references_release_safe(
-            list(segment_shapes_for_order),
-            shapes_by_handle,
-            shape_record_by_addr,
-            lite_by_addr,
-            near_handle=near_handle,
-            far_handle=far_handle,
+        piece_order_specs.append(
+            (segment, str(near_handle), str(far_handle), item.file_name)
         )
 
         placement_audit.append(
@@ -1123,6 +1116,19 @@ def _flat_transform(
         record.address: record
         for record in shapes_stream.records
     }
+
+    for segment, near_handle, far_handle, file_name in piece_order_specs:
+        segment_shapes_for_order = segment.find("Shapes")
+        if segment_shapes_for_order is None:
+            raise FormatError(f"{file_name}: TubeSegment has no Shapes list")
+        segment_shapes_for_order[:] = _order_piece_shape_references_release_safe(
+            list(segment_shapes_for_order),
+            shapes_by_handle,
+            shape_record_by_addr,
+            lite_by_addr,
+            near_handle=near_handle,
+            far_handle=far_handle,
+        )
 
     first = segments[0]
     first.set("Name", "ULTRA positioned stock contours")
