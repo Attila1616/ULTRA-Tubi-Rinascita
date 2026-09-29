@@ -2054,10 +2054,10 @@ function getSegmentPreviewGeometry(segment) {
         polygon,
         leftAngle: Math.abs(signedAngleFor(a)),
         rightAngle: Math.abs(signedAngleFor(b)),
-        leftSignedAngle: signedAngleFor(a),
-        rightSignedAngle: signedAngleFor(b),
-        leftCenterPct: (aTopPct + aBottomPct) / 2,
-        rightCenterPct: (bTopPct + bBottomPct) / 2,
+        leftTopPct: aTopPct,
+        leftBottomPct: aBottomPct,
+        rightTopPct: bTopPct,
+        rightBottomPct: bBottomPct,
     };
 }
 
@@ -2158,12 +2158,16 @@ function renderRodSegmentHTML(segment, kind, rodId, tubeType, startMm, endMm) {
 
     if (preview) {
         html += `<div class="rod-segment-fill" style="background-color: ${pieceColor}; clip-path: polygon(${preview.polygon});"></div>`;
-        html += `<span class="rod-cut-edge rod-cut-edge-left" style="left: ${preview.leftCenterPct.toFixed(3)}%; transform: translateX(-50%) rotate(${preview.leftSignedAngle.toFixed(3)}deg);"></span>`;
-        html += `<span class="rod-cut-edge rod-cut-edge-right" style="left: ${preview.rightCenterPct.toFixed(3)}%; transform: translateX(-50%) rotate(${preview.rightSignedAngle.toFixed(3)}deg);"></span>`;
+        html += '<svg class="rod-cut-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">';
+        html += `<line class="rod-cut-edge" x1="${preview.leftTopPct.toFixed(4)}" y1="0" x2="${preview.leftBottomPct.toFixed(4)}" y2="100"></line>`;
+        html += `<line class="rod-cut-edge" x1="${preview.rightTopPct.toFixed(4)}" y1="0" x2="${preview.rightBottomPct.toFixed(4)}" y2="100"></line>`;
+        html += '</svg>';
     } else {
         html += `<div class="rod-segment-fill" style="background-color: ${pieceColor};"></div>`;
-        html += '<span class="rod-cut-edge rod-cut-edge-left" style="left: 0%;"></span>';
-        html += '<span class="rod-cut-edge rod-cut-edge-right" style="left: 100%;"></span>';
+        html += '<svg class="rod-cut-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">';
+        html += '<line class="rod-cut-edge" x1="0" y1="0" x2="0" y2="100"></line>';
+        html += '<line class="rod-cut-edge" x1="100" y1="0" x2="100" y2="100"></line>';
+        html += '</svg>';
     }
 
     html += `<span class="rod-segment-length">${escapeHtml(segment.length)}</span>`;
