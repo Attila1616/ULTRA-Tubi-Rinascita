@@ -2817,27 +2817,35 @@ function toggleAllUnlockedRods() {
 async function lockAllUnlockedRods() {
     let rodsAdded = 0;
     const nestRequests = [];
+    const nestedByTube = new Map();
 
     for (const group of (allTubeData || [])) {
-        const instances = buildPieceInstances(group.pieces || []);
-        const lockedForTube = reconcileLockedRodsForTube(group.tubeType, instances);
-        const lockedInstanceKeys = new Set();
+        const context = buildGroupNestingContext(group);
+        if (context.piecesToNest.length === 0) continue;
 
-        lockedForTube.forEach(rod => {
-            (rod.segments || []).forEach(segment => {
-                if (!segment.done && segment.instanceKey) lockedInstanceKeys.add(segment.instanceKey);
+        const cached = cachedNestingForGroup(group, context);
+        if (cached.rods !== null) {
+            nestedByTube.set(group.tubeType, {
+                tubeType: group.tubeType,
+                rods: cached.rods
             });
-        });
-
-        const freeSegments = instances.filter(segment => !lockedInstanceKeys.has(segment.instanceKey));
-        if (freeSegments.length > 0) {
-            nestRequests.push({ tubeType: group.tubeType, pieces: freeSegments });
+        } else {
+            nestRequests.push({
+                tubeType: group.tubeType,
+                pieces: context.piecesToNest
+            });
         }
     }
 
-    const nestedGroups = await nestGroupsBackend(nestRequests);
+    // Only groups that have never been calculated need backend work.
+    if (nestRequests.length > 0) {
+        const calculated = await nestGroupsBackend(nestRequests);
+        calculated.forEach(group => {
+            nestedByTube.set(group.tubeType, group);
+        });
+    }
 
-    nestedGroups.forEach(group => {
+    nestedByTube.forEach(group => {
         lockedRods[group.tubeType] = lockedRods[group.tubeType] || [];
         (group.rods || []).forEach(nestedRod => {
             if (!(nestedRod.segments || []).length) return;
@@ -2848,13 +2856,41 @@ async function lockAllUnlockedRods() {
                 historyLogged: false,
                 inventoryDecrementDone: false,
                 inventoryDecision: null,
-                segments: nestedRod.segments.map(segment => ({ ...segment, done: false }))
+                segments: nestedRod.segments.map(segment => ({
+                    ...segment,
+                    done: false
+                }))
             });
             rodsAdded += 1;
         });
     });
 
     if (rodsAdded === 0) return;
+
+    // Every successfully locked calculated rod is now outside the free pool.
+    // Seed an empty cache for groups that have no free pieces left so renderUI
+    // does not immediately ask Python to calculate an empty/new nesting set.
+    nestedByTube.forEach((_nested, tubeType) => {
+        const group = (allTubeData || []).find(
+            item => item.tubeType === tubeType
+        );
+        if (!group) return;
+        const context = buildGroupNestingContext(group);
+        if (context.piecesToNest.length !== 0) {
+            invalidateNestingCache(tubeType);
+            return;
+        }
+        nestingResultCache.set(tubeType, {
+            signature: buildClientNestingSignature(
+                group,
+                context.piecesToNest
+            ),
+            rods: [],
+            backendCacheHit: true
+        });
+        nestingErrorByTube.delete(tubeType);
+    });
+
     await saveUiState();
     await renderUI();
 }
