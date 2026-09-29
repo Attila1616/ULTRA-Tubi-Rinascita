@@ -191,6 +191,24 @@ class GeometryFitTests(unittest.TestCase):
         self.assertFalse(fit.common_line)
         self.assertEqual(fit.minimum_clearance_mm, 2.0)
 
+    def test_posed_contour_envelope_cache_reuses_pose(self):
+        from tubenest_engine import fit as fit_module
+
+        part = make_part(length=984.0)
+        part["part_fingerprint"] = "cache-test"
+        part["ends"][0]["perimeter_envelope"] = make_perimeter_envelope(
+            75.0, 75.0
+        )
+        pose = PartPose(axial_rotation_degrees=180.0)
+
+        first = fit_module._cached_posed_uniform_envelope_arrays(
+            part, pose, "start"
+        )
+        second = fit_module._cached_posed_uniform_envelope_arrays(
+            part, pose, "start"
+        )
+        self.assertIs(first, second)
+
     def test_nonplanar_end_contours_can_interlock_without_common_line(self):
         length = 984.0
         previous = make_part(

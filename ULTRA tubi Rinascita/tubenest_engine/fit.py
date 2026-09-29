@@ -31,6 +31,8 @@ EXCLUSION_WORK_BIT = 0x2
 STRAIGHT_SLOPE_EPS = 1e-5
 CONTOUR_PROFILE_TOLERANCE_MM = 0.25
 MIN_CONTOUR_SAMPLES = 32
+_POSED_ENVELOPE_CACHE = {}
+_POSED_ENVELOPE_CACHE_LIMIT = 4096
 
 
 @dataclass(frozen=True)
@@ -334,6 +336,41 @@ def _select_raw_end(part, pose, position):
     return ends[index], reverse
 
 
+def _posed_envelope_cache_key(part, pose, position):
+    fingerprint = (part or {}).get("part_fingerprint")
+    if not fingerprint:
+        fingerprint = ("object", id(part))
+    return (
+        fingerprint,
+        str(position),
+        round(float(pose.axial_rotation_degrees) % 360.0, 9),
+        bool(pose.reversed_end_for_end),
+        round(float((part or {}).get("overall_length") or 0.0), 9),
+    )
+
+
+def _cached_posed_uniform_envelope_arrays(part, pose, position):
+    key = _posed_envelope_cache_key(part, pose, position)
+    cached = _POSED_ENVELOPE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    end, reverse_transform = _select_raw_end(part, pose, position)
+    result = _posed_uniform_envelope_arrays(
+        end,
+        pose,
+        float((part or {}).get("overall_length") or 0.0),
+        reverse_transform,
+    )
+    if result is not None:
+        if len(_POSED_ENVELOPE_CACHE) >= _POSED_ENVELOPE_CACHE_LIMIT:
+            _POSED_ENVELOPE_CACHE.pop(next(iter(_POSED_ENVELOPE_CACHE)))
+        # Tuples prevent accidental mutation of a shared cached pose.
+        result = (tuple(result[0]), tuple(result[1]))
+        _POSED_ENVELOPE_CACHE[key] = result
+    return result
+
+
 def _interpolate_uniform_envelope(envelope, angle):
     count = len(envelope)
     position = (float(angle) % (2.0 * math.pi)) * count / (
@@ -430,17 +467,15 @@ def _fit_adjacent_contours(
     next_length = float(next_part.get("overall_length") or 0.0)
     required_relative_origin = -math.inf
 
-    previous_arrays = _posed_uniform_envelope_arrays(
-        previous_end,
+    previous_arrays = _cached_posed_uniform_envelope_arrays(
+        previous_part,
         previous_pose,
-        previous_length,
-        previous_reverse,
+        "end",
     )
-    next_arrays = _posed_uniform_envelope_arrays(
-        next_start,
+    next_arrays = _cached_posed_uniform_envelope_arrays(
+        next_part,
         next_pose,
-        next_length,
-        next_reverse,
+        "start",
     )
 
     if (
