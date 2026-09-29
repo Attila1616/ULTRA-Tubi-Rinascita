@@ -23,6 +23,7 @@ from .models import (
 _CACHE = {}
 _CACHE_LIMIT = 2048
 SUPPORTED_READ_VERSIONS = {"65542", "393222"}
+PERIMETER_ENVELOPE_SAMPLES = 360
 
 
 def _record_map(archive, section):
@@ -270,6 +271,108 @@ def _shape_points(shape_element, geos):
     return points, geometry.get("Class"), addr, curves
 
 
+def _periodic_z_profile(points, sample_count=PERIMETER_ENVELOPE_SAMPLES):
+    pairs = []
+    for point in points or []:
+        if len(point) < 3:
+            continue
+        x, y, z = map(float, point[:3])
+        if not all(math.isfinite(value) for value in (x, y, z)):
+            continue
+        if math.hypot(x, y) <= 1e-9:
+            continue
+        pairs.append((math.atan2(y, x) % (2.0 * math.pi), z))
+    if len(pairs) < 8:
+        return None
+
+    pairs.sort()
+    collapsed = []
+    group_angles = [pairs[0][0]]
+    group_values = [pairs[0][1]]
+    for angle, z in pairs[1:]:
+        if abs(angle - group_angles[-1]) <= 1e-9:
+            group_angles.append(angle)
+            group_values.append(z)
+            continue
+        collapsed.append((
+            sum(group_angles) / len(group_angles),
+            sum(group_values) / len(group_values),
+        ))
+        group_angles = [angle]
+        group_values = [z]
+    collapsed.append((
+        sum(group_angles) / len(group_angles),
+        sum(group_values) / len(group_values),
+    ))
+    if len(collapsed) < 8:
+        return None
+
+    angles = [item[0] for item in collapsed]
+    values = [item[1] for item in collapsed]
+    periodic_angles = [angles[-1] - 2.0 * math.pi] + angles + [
+        angles[0] + 2.0 * math.pi
+    ]
+    periodic_values = [values[-1]] + values + [values[0]]
+
+    result = []
+    segment = 0
+    for index in range(int(sample_count)):
+        target = (2.0 * math.pi * index) / float(sample_count)
+        while (
+            segment + 1 < len(periodic_angles) - 1
+            and periodic_angles[segment + 1] < target
+        ):
+            segment += 1
+        left_angle = periodic_angles[segment]
+        right_angle = periodic_angles[segment + 1]
+        left_value = periodic_values[segment]
+        right_value = periodic_values[segment + 1]
+        width = right_angle - left_angle
+        fraction = 0.0 if abs(width) <= 1e-15 else (
+            (target - left_angle) / width
+        )
+        result.append(left_value + fraction * (right_value - left_value))
+    return result
+
+
+def _perimeter_envelope(shape_element, geos):
+    if shape_element is None:
+        return None
+    outer_curves = _shape_curves(shape_element, geos, "Geometry")
+    if not outer_curves:
+        return None
+    outer_profile = _periodic_z_profile([
+        point
+        for curve in outer_curves
+        for point in curve.sample(64)
+    ])
+    if outer_profile is None:
+        return None
+
+    inner_curves = _shape_curves(shape_element, geos, "InnerGeometry")
+    inner_profile = (
+        _periodic_z_profile([
+            point
+            for curve in inner_curves
+            for point in curve.sample(64)
+        ])
+        if inner_curves
+        else None
+    )
+    if inner_profile is None:
+        inner_profile = outer_profile
+    if len(inner_profile) != len(outer_profile):
+        return None
+
+    return [
+        [
+            round(min(float(outer), float(inner)), 6),
+            round(max(float(outer), float(inner)), 6),
+        ]
+        for outer, inner in zip(outer_profile, inner_profile)
+    ]
+
+
 def _sha256_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as stream:
@@ -413,6 +516,7 @@ def read_zzx(path):
                     ),
                     curve_flags=end_curve_flags,
                     curve_normal=end_curve_normal,
+                    perimeter_envelope=_perimeter_envelope(end_xml, geos),
                 )
             )
 

@@ -177,7 +177,7 @@ class OptimizerItem:
 
     @property
     def geometry_available(self):
-        return _has_planar_ends(self.tube_part)
+        return _has_fit_geometry(self.tube_part)
 
     @property
     def physical_length(self):
@@ -231,17 +231,33 @@ def _normalize_angle(value):
     return result
 
 
-def _has_planar_ends(part):
+def _has_fit_geometry(part):
     if not isinstance(part, dict):
         return False
     ends = list(part.get("ends") or [])
     if len(ends) < 2:
         return False
     for end in ends[:2]:
-        plane = end.get("plane_z_equals_c_plus_ax_plus_by") if isinstance(end, dict) else None
-        if not plane or len(plane) != 3:
+        if not isinstance(end, dict):
             return False
-        if not all(math.isfinite(float(v)) for v in plane):
+        plane = end.get("plane_z_equals_c_plus_ax_plus_by")
+        plane_ok = bool(
+            plane
+            and len(plane) == 3
+            and all(math.isfinite(float(value)) for value in plane)
+        )
+        envelope = end.get("perimeter_envelope")
+        envelope_ok = bool(
+            isinstance(envelope, list)
+            and len(envelope) >= 32
+            and all(
+                isinstance(pair, (list, tuple))
+                and len(pair) == 2
+                and all(math.isfinite(float(value)) for value in pair)
+                for pair in envelope
+            )
+        )
+        if not plane_ok and not envelope_ok:
             return False
     return True
 

@@ -49,6 +49,7 @@ class EndCutInfo:
     work_flags: Optional[int] = None
     curve_flags: Optional[int] = None
     curve_normal: Optional[list] = None
+    perimeter_envelope: Optional[list] = None
 
 
 @dataclass

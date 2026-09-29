@@ -29,6 +29,8 @@ COMMON_LINE_NORMAL_TOLERANCE = 1e-6
 CUTOFF_FLAG = 32
 EXCLUSION_WORK_BIT = 0x2
 STRAIGHT_SLOPE_EPS = 1e-5
+CONTOUR_PROFILE_TOLERANCE_MM = 0.25
+MIN_CONTOUR_SAMPLES = 32
 
 
 @dataclass(frozen=True)
@@ -198,10 +200,10 @@ def posed_ends(part, pose: PartPose):
     length = float(part.get("overall_length") or 0.0)
     a = _raw_end(ends[0])
     b = _raw_end(ends[1])
-    if a is None or b is None:
-        return (None, None)
 
     def make(raw, reverse_transform=False):
+        if raw is None:
+            return None
         c = raw["c"]
         sx = raw["sx"]
         sv = raw["sv"]
@@ -282,6 +284,166 @@ def support_radius(profile, dx, dy):
     )
 
 
+def _valid_perimeter_envelope(end):
+    envelope = (end or {}).get("perimeter_envelope")
+    if not isinstance(envelope, list) or len(envelope) < MIN_CONTOUR_SAMPLES:
+        return None
+    result = []
+    for pair in envelope:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            return None
+        lo, hi = map(float, pair)
+        if not math.isfinite(lo) or not math.isfinite(hi) or lo > hi:
+            return None
+        result.append((lo, hi))
+    return result
+
+
+def _contour_profiles_compatible(previous_profile, next_profile):
+    previous_profile = previous_profile or {}
+    next_profile = next_profile or {}
+    kind = str(previous_profile.get("kind") or "")
+    if kind != str(next_profile.get("kind") or ""):
+        return False
+    keys = (
+        ("outside_diameter", "thickness")
+        if kind == "Circle"
+        else ("outside_width", "outside_height", "thickness")
+        if kind in ("Square", "Rect")
+        else ()
+    )
+    return bool(keys) and all(
+        _close_optional(
+            previous_profile.get(key),
+            next_profile.get(key),
+            CONTOUR_PROFILE_TOLERANCE_MM,
+        )
+        for key in keys
+    )
+
+
+def _select_raw_end(part, pose, position):
+    ends = list((part or {}).get("ends") or [])
+    if len(ends) < 2:
+        return None, False
+    reverse = bool(pose.reversed_end_for_end)
+    if position == "start":
+        index = 1 if reverse else 0
+    else:
+        index = 0 if reverse else 1
+    return ends[index], reverse
+
+
+def _interpolate_uniform_envelope(envelope, angle):
+    count = len(envelope)
+    position = (float(angle) % (2.0 * math.pi)) * count / (
+        2.0 * math.pi
+    )
+    base_float = math.floor(position)
+    base = int(base_float) % count
+    fraction = position - base_float
+    following = (base + 1) % count
+    lo = envelope[base][0] * (1.0 - fraction) + envelope[following][0] * fraction
+    hi = envelope[base][1] * (1.0 - fraction) + envelope[following][1] * fraction
+    return lo, hi
+
+
+def _posed_envelope_at(end, pose, length, global_angle, reverse_transform):
+    envelope = _valid_perimeter_envelope(end)
+    if envelope is None:
+        return None
+    rotation = math.radians(float(pose.axial_rotation_degrees))
+    if reverse_transform:
+        source_angle = math.pi + rotation - float(global_angle)
+    else:
+        source_angle = float(global_angle) - rotation
+    lo, hi = _interpolate_uniform_envelope(envelope, source_angle)
+    if reverse_transform:
+        return float(length) - hi, float(length) - lo
+    return lo, hi
+
+
+def _fit_adjacent_contours(
+    previous_part,
+    previous_pose,
+    previous_origin,
+    next_part,
+    next_pose,
+    gap_mm,
+):
+    if not _contour_profiles_compatible(
+        (previous_part or {}).get("profile"),
+        (next_part or {}).get("profile"),
+    ):
+        raise ValueError("End contours use incompatible stock profiles")
+
+    previous_end, previous_reverse = _select_raw_end(
+        previous_part, previous_pose, "end"
+    )
+    next_start, next_reverse = _select_raw_end(
+        next_part, next_pose, "start"
+    )
+    previous_envelope = _valid_perimeter_envelope(previous_end)
+    next_envelope = _valid_perimeter_envelope(next_start)
+    if previous_envelope is None or next_envelope is None:
+        raise ValueError("End contour envelope is unavailable")
+
+    target_gap = float(gap_mm)
+    if target_gap < 0:
+        raise ValueError("gap_mm cannot be negative")
+
+    sample_count = max(len(previous_envelope), len(next_envelope))
+    previous_length = float(previous_part.get("overall_length") or 0.0)
+    next_length = float(next_part.get("overall_length") or 0.0)
+    required_relative_origin = -math.inf
+
+    for index in range(sample_count):
+        angle = (2.0 * math.pi * index) / float(sample_count)
+        previous_bounds = _posed_envelope_at(
+            previous_end,
+            previous_pose,
+            previous_length,
+            angle,
+            previous_reverse,
+        )
+        next_bounds = _posed_envelope_at(
+            next_start,
+            next_pose,
+            next_length,
+            angle,
+            next_reverse,
+        )
+        if previous_bounds is None or next_bounds is None:
+            raise ValueError("End contour envelope interpolation failed")
+        required_relative_origin = max(
+            required_relative_origin,
+            previous_bounds[1] - next_bounds[0] + target_gap,
+        )
+
+    if not math.isfinite(required_relative_origin):
+        raise ValueError("End contour fit produced no finite placement")
+
+    next_origin = float(previous_origin) + required_relative_origin
+    previous_max = float(previous_origin) + previous_length
+    overlap = max(0.0, previous_max - next_origin)
+
+    # Non-planar contour fitting does not claim common-line. Shared-cut
+    # verification/removal is intentionally still limited to planar contours.
+    return AdjacencyFit(
+        next_origin=next_origin,
+        minimum_clearance_mm=target_gap,
+        common_line=False,
+        slope_delta=0.0,
+        overlap_of_axial_envelopes_mm=overlap,
+    )
+
+
+def _plane_fit_is_usable(end):
+    if end is None:
+        return False
+    return float(end.residual_mm or 0.0) <= PLANAR_FIT_TOLERANCE_MM
+
+
 def fit_adjacent_parts(
     previous_part,
     previous_pose: PartPose,
@@ -301,25 +463,41 @@ def fit_adjacent_parts(
     """
     previous_start, previous_end = posed_ends(previous_part, previous_pose)
     next_start, next_end = posed_ends(next_part, next_pose)
-    if previous_end is None or next_start is None:
-        raise ValueError("Both adjacent ends need planar geometry")
 
-    if (
-        previous_end.residual_mm is not None
-        and previous_end.residual_mm > PLANAR_FIT_TOLERANCE_MM
+    if not (
+        _plane_fit_is_usable(previous_end)
+        and _plane_fit_is_usable(next_start)
     ):
-        raise ValueError(
-            f"Previous end plane residual {previous_end.residual_mm:.6f} mm "
-            f"exceeds {PLANAR_FIT_TOLERANCE_MM:.3f} mm fitting tolerance"
-        )
-    if (
-        next_start.residual_mm is not None
-        and next_start.residual_mm > PLANAR_FIT_TOLERANCE_MM
-    ):
-        raise ValueError(
-            f"Next start plane residual {next_start.residual_mm:.6f} mm "
-            f"exceeds {PLANAR_FIT_TOLERANCE_MM:.3f} mm fitting tolerance"
-        )
+        try:
+            return _fit_adjacent_contours(
+                previous_part,
+                previous_pose,
+                previous_origin,
+                next_part,
+                next_pose,
+                gap_mm,
+            )
+        except ValueError:
+            if previous_end is None or next_start is None:
+                raise ValueError(
+                    "Adjacent ends need either usable planar geometry or "
+                    "complete perimeter contour envelopes"
+                )
+            if (
+                previous_end.residual_mm is not None
+                and previous_end.residual_mm > PLANAR_FIT_TOLERANCE_MM
+            ):
+                raise ValueError(
+                    f"Previous end plane residual "
+                    f"{previous_end.residual_mm:.6f} mm exceeds "
+                    f"{PLANAR_FIT_TOLERANCE_MM:.3f} mm fitting tolerance "
+                    "and no safe contour fit is available"
+                )
+            raise ValueError(
+                f"Next start plane residual {next_start.residual_mm:.6f} mm "
+                f"exceeds {PLANAR_FIT_TOLERANCE_MM:.3f} mm fitting tolerance "
+                "and no safe contour fit is available"
+            )
 
     dsx = next_start.slope_x - previous_end.slope_x
     dsy = next_start.slope_vertical - previous_end.slope_vertical

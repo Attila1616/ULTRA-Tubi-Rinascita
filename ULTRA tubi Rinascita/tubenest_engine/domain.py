@@ -45,6 +45,7 @@ class PartEnd:
     work_flags: Optional[int] = None
     curve_flags: Optional[int] = None
     curve_normal: Optional[list] = None
+    perimeter_envelope: Optional[list] = None
 
 
 @dataclass
@@ -97,6 +98,18 @@ def _normalize_point(point, axial_min):
     result = list(map(float, point))
     if len(result) >= 3:
         result[2] -= axial_min
+    return result
+
+
+def _normalize_perimeter_envelope(envelope, axial_min):
+    if not envelope:
+        return None
+    result = []
+    for pair in envelope:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            return None
+        lo, hi = map(float, pair)
+        result.append([lo - axial_min, hi - axial_min])
     return result
 
 
@@ -221,6 +234,10 @@ def build_tube_part(document: ZzxDocumentInfo, segment: TubeSegmentInfo):
                     list(end.curve_normal)
                     if end.curve_normal is not None
                     else None
+                ),
+                perimeter_envelope=_normalize_perimeter_envelope(
+                    end.perimeter_envelope,
+                    axial_min,
                 ),
             )
         )
