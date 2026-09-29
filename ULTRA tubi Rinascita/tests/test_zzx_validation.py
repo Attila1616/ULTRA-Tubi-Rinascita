@@ -5,6 +5,7 @@ from tubenest_engine.validation import (
     filename_profile,
     is_known_array_without_terminal_cut,
     profile_size_issue,
+    validate_tube_part_data,
 )
 
 
@@ -33,6 +34,24 @@ class ZzxValidationPolicyTests(unittest.TestCase):
         self.assertIsNotNone(issue)
         self.assertIn("30x30", issue)
         self.assertIn("26", issue)
+
+    def test_already_parsed_tube_part_validation_needs_no_file_read(self):
+        part = {
+            "overall_length": 430.0,
+            "profile": {
+                "kind": "Square",
+                "outside_width": 30.0,
+                "outside_height": 30.0,
+                "thickness": 2.0,
+            },
+        }
+        self.assertEqual(
+            validate_tube_part_data(
+                "example tubolare 30x30x2 L430 2pz.zzx",
+                part,
+            ),
+            [],
+        )
 
     def test_known_array_without_terminal_cut_is_allowed(self):
         self.assertTrue(

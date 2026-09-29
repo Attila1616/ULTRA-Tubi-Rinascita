@@ -3115,19 +3115,28 @@ async function nestGroupsBackend(groupRequests, rodLength = 6000) {
     const payload = (groupRequests || []).map(group => {
         const pieces = group.pieces || [];
         requestByTube.set(group.tubeType, pieces);
+
+        const sources = {};
+        pieces.forEach(segment => {
+            const sourceId = String(segment.sourceId || '');
+            if (!sourceId || sources[sourceId]) return;
+            const sourcePiece = sourcePieces.get(segment.sourceId);
+            sources[sourceId] = {
+                sourceId,
+                tubePart: sourcePiece?.tubePart || null,
+                filePath: sourcePiece?.filePath || '',
+                fileName: sourcePiece?.fileName || ''
+            };
+        });
+
         return {
             tubeType: group.tubeType,
-            pieces: pieces.map(segment => {
-                const sourcePiece = sourcePieces.get(segment.sourceId);
-                return {
-                    instanceKey: segment.instanceKey,
-                    sourceId: segment.sourceId,
-                    length: segment.length,
-                    tubePart: sourcePiece?.tubePart || null,
-                    filePath: sourcePiece?.filePath || '',
-                    fileName: sourcePiece?.fileName || ''
-                };
-            })
+            sources,
+            pieces: pieces.map(segment => ({
+                instanceKey: segment.instanceKey,
+                sourceId: segment.sourceId,
+                length: segment.length
+            }))
         };
     });
 
@@ -3170,7 +3179,8 @@ async function nestGroupsBackend(groupRequests, rodLength = 6000) {
             tubeType: group.tubeType,
             rods,
             cacheHit: !!group.cacheHit,
-            signature: group.signature || null
+            signature: group.signature || null,
+            performance: group.performance || null
         };
     });
 }

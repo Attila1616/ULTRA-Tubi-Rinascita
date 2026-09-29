@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from concurrent.futures import ProcessPoolExecutor
 import math
 import os
+import time
 from typing import Optional
 
 from .fit import (
@@ -31,8 +32,8 @@ DEFAULT_BEAM_WIDTH = 120
 DEFAULT_MAX_CANDIDATE_TYPES = 24
 EXACT_REQUIRE_ALL_MAX_PIECES = 8
 MERGE_PAIR_ATTEMPT_LIMIT = 160
-PARALLEL_MIN_ITEMS = 20
-MAX_CPU_WORKERS = 20
+PARALLEL_MIN_ITEMS = 8
+MAX_CPU_WORKERS = 24
 
 _PAIRWISE_FIT_CACHE = {}
 _PAIRWISE_FIT_CACHE_LIMIT = 50000
@@ -44,6 +45,13 @@ _PARALLEL_STATS = {
     "tasks": 0,
     "fallbacks": 0,
     "last_error": "",
+    "item_count": 0,
+    "workers_used": 1,
+    "used_process_pool": False,
+    "initial_seconds": 0.0,
+    "merge_seconds": 0.0,
+    "refine_seconds": 0.0,
+    "total_seconds": 0.0,
 }
 
 
@@ -55,6 +63,13 @@ def _reset_parallel_stats():
         tasks=0,
         fallbacks=0,
         last_error="",
+        item_count=0,
+        workers_used=1,
+        used_process_pool=False,
+        initial_seconds=0.0,
+        merge_seconds=0.0,
+        refine_seconds=0.0,
+        total_seconds=0.0,
     )
 
 
@@ -1702,11 +1717,15 @@ def _optimize_normalized(
     dead_zone_mm,
     gap_mm,
 ):
+    total_started = time.perf_counter()
     workers = nesting_cpu_worker_count()
     use_pool = (
         workers > 1
         and len(normalized) >= PARALLEL_MIN_ITEMS
     )
+    _PARALLEL_STATS["item_count"] = len(normalized)
+    _PARALLEL_STATS["workers_used"] = workers if use_pool else 1
+    _PARALLEL_STATS["used_process_pool"] = bool(use_pool)
 
     executor = None
     try:
@@ -1723,6 +1742,7 @@ def _optimize_normalized(
                 ),
             )
 
+        stage_started = time.perf_counter()
         rods = _build_initial_rods(
             normalized,
             rod_length=rod_length,
@@ -1730,6 +1750,11 @@ def _optimize_normalized(
             gap_mm=gap_mm,
             executor=executor,
         )
+        _PARALLEL_STATS["initial_seconds"] = (
+            time.perf_counter() - stage_started
+        )
+
+        stage_started = time.perf_counter()
         rods = _try_merge_rods(
             normalized,
             rods,
@@ -1738,6 +1763,11 @@ def _optimize_normalized(
             gap_mm=gap_mm,
             executor=executor,
         )
+        _PARALLEL_STATS["merge_seconds"] = (
+            time.perf_counter() - stage_started
+        )
+
+        stage_started = time.perf_counter()
         rods = _refine_rods(
             normalized,
             rods,
@@ -1746,10 +1776,16 @@ def _optimize_normalized(
             gap_mm=gap_mm,
             executor=executor,
         )
+        _PARALLEL_STATS["refine_seconds"] = (
+            time.perf_counter() - stage_started
+        )
         return rods
     finally:
         if executor is not None:
             executor.shutdown(wait=True)
+        _PARALLEL_STATS["total_seconds"] = (
+            time.perf_counter() - total_started
+        )
 
 
 def optimize_items_dict(

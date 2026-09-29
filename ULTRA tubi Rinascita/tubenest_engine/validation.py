@@ -95,6 +95,46 @@ def profile_size_issue(filename_profile_value, geometry_profile):
     return f"misura filename {fw:g}x{fh:g}, ZZX {float(gw):g}x{float(gh):g}"
 
 
+def validate_tube_part_data(filename, part):
+    """Validate one already-parsed singleton TubePart without touching disk."""
+    if not isinstance(part, dict):
+        return [{
+            "type": "geometry_model",
+            "message": "Geometria ZZX non utilizzabile: TubePart non disponibile",
+        }]
+
+    issues = []
+
+    declared_length = filename_length(filename)
+    if declared_length is not None:
+        geometry_length = float(part.get("overall_length"))
+        difference = geometry_length - declared_length
+        if abs(difference) > LENGTH_TOLERANCE_MM:
+            issues.append({
+                "type": "length",
+                "message": (
+                    f"Lunghezza filename L{declared_length:g}, "
+                    f"ZZX {geometry_length:.3f} mm "
+                    f"(differenza {difference:+.3f} mm)"
+                ),
+                "filenameLength": declared_length,
+                "geometryLength": geometry_length,
+                "differenceMm": difference,
+            })
+
+    size_issue = profile_size_issue(
+        filename_profile(filename),
+        part.get("profile") or {},
+    )
+    if size_issue:
+        issues.append({
+            "type": "profile_size",
+            "message": size_issue,
+        })
+
+    return issues
+
+
 def validate_zzx_file(path):
     """Return user-facing validation issues for one ZZX file."""
     filename = os.path.basename(path)
@@ -117,31 +157,5 @@ def validate_zzx_file(path):
             "message": f"Il file contiene {len(parts)} TubeSegment; atteso 1 per un file pezzo.",
         }]
 
-    part = parts[0]
-    issues = []
+    return validate_tube_part_data(filename, parts[0])
 
-    declared_length = filename_length(filename)
-    if declared_length is not None:
-        geometry_length = float(part.get("overall_length"))
-        difference = geometry_length - declared_length
-        if abs(difference) > LENGTH_TOLERANCE_MM:
-            issues.append({
-                "type": "length",
-                "message": (
-                    f"Lunghezza filename L{declared_length:g}, "
-                    f"ZZX {geometry_length:.3f} mm "
-                    f"(differenza {difference:+.3f} mm)"
-                ),
-                "filenameLength": declared_length,
-                "geometryLength": geometry_length,
-                "differenceMm": difference,
-            })
-
-    size_issue = profile_size_issue(filename_profile(filename), part.get("profile") or {})
-    if size_issue:
-        issues.append({
-            "type": "profile_size",
-            "message": size_issue,
-        })
-
-    return issues

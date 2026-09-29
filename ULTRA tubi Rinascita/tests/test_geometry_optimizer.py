@@ -174,6 +174,10 @@ class GeometryOptimizerTests(unittest.TestCase):
         self.assertEqual(len(rods), 2)
         self.assertTrue(all(rod["used"] <= 5600.0 + 1e-6 for rod in rods))
 
+    def test_parallel_threshold_targets_medium_groups(self):
+        self.assertEqual(optimizer_module.PARALLEL_MIN_ITEMS, 8)
+        self.assertEqual(optimizer_module.MAX_CPU_WORKERS, 24)
+
     def test_pairwise_geometry_fit_cache_is_reused(self):
         optimizer_module._PAIRWISE_FIT_CACHE.clear()
         a = make_part(

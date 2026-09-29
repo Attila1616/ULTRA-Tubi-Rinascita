@@ -14,7 +14,12 @@ from .domain import (
     read_tube_parts,
 )
 from .nesting import NestItem, NestPlacement, NestRod, nest_items, nest_items_dict
-from .optimizer import diagnose_items_dict, optimize_items, optimize_items_dict
+from .optimizer import (
+    diagnose_items_dict,
+    get_parallel_stats,
+    optimize_items,
+    optimize_items_dict,
+)
 from .fit import (
     AdjacencyFit,
     PartPose,
@@ -50,6 +55,7 @@ __all__ = [
     "optimize_items",
     "optimize_items_dict",
     "diagnose_items_dict",
+    "get_parallel_stats",
     "AdjacencyFit",
     "PartPose",
     "PosedEnd",

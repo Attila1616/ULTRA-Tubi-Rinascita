@@ -10,12 +10,13 @@ import sys
 import traceback
 import hashlib
 import math
+import time
 import openpyxl
 import importlib.util
 import tube_database
 import runtime_paths
 import tubenest_engine
-from tubenest_engine.validation import validate_zzx_file
+from tubenest_engine.validation import validate_tube_part_data, validate_zzx_file
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 from collections import defaultdict, Counter
@@ -51,6 +52,56 @@ HISTORY_FILE = runtime_paths.HISTORY_FILE
 
 _NESTING_GROUP_CACHE = {}
 _NESTING_GROUP_CACHE_LIMIT = 128
+_NESTING_VALIDATION_CACHE = {}
+_NESTING_VALIDATION_CACHE_LIMIT = 4096
+
+def _cached_zzx_validation(file_path):
+    """Cache disk-backed validation across repeated group expansions."""
+    normalized = os.path.normcase(os.path.abspath(str(file_path)))
+    try:
+        stat = os.stat(normalized)
+        signature = (int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        return validate_zzx_file(normalized)
+
+    cached = _NESTING_VALIDATION_CACHE.get(normalized)
+    if cached and cached[0] == signature:
+        return cached[1]
+
+    issues = validate_zzx_file(normalized)
+    if len(_NESTING_VALIDATION_CACHE) >= _NESTING_VALIDATION_CACHE_LIMIT:
+        _NESTING_VALIDATION_CACHE.pop(next(iter(_NESTING_VALIDATION_CACHE)))
+    _NESTING_VALIDATION_CACHE[normalized] = (signature, issues)
+    return issues
+
+
+def _hydrate_group_sources(group):
+    """Restore per-source metadata after the browser sends it only once."""
+    raw_sources = (group or {}).get("sources") or {}
+    sources = {}
+    if isinstance(raw_sources, dict):
+        for source_id, value in raw_sources.items():
+            if isinstance(value, dict):
+                sources[str(source_id)] = dict(value)
+    elif isinstance(raw_sources, list):
+        for value in raw_sources:
+            if not isinstance(value, dict):
+                continue
+            source_id = str(value.get("sourceId") or value.get("id") or "")
+            if source_id:
+                sources[source_id] = dict(value)
+
+    pieces = []
+    for raw_piece in (group or {}).get("pieces") or []:
+        piece = dict(raw_piece)
+        source_id = str(piece.get("sourceId") or "")
+        source = sources.get(source_id) or {}
+        for key in ("tubePart", "filePath", "fileName"):
+            if piece.get(key) in (None, "") and source.get(key) not in (None, ""):
+                piece[key] = source.get(key)
+        pieces.append(piece)
+    return pieces, sources
+
 
 def _nesting_group_signature(tube_type, pieces, rod_length, gap_mm, dead_zone_mm=400.0):
     compact = []
@@ -1144,6 +1195,7 @@ def nest_piece_instances(piece_instances, rod_length=6000):
 
 def nest_piece_groups(groups, rod_length=6000):
     """Nest multiple tube-type groups with the geometry-aware optimizer."""
+    request_started = time.perf_counter()
     try:
         config = load_config(silent=True) or {}
         try:
@@ -1152,25 +1204,48 @@ def nest_piece_groups(groups, rod_length=6000):
             gap_mm = 2.0
 
         result_groups = []
-        validation_cache = {}
         for group in groups or []:
+            group_started = time.perf_counter()
             tube_type = str(group.get("tubeType") or "")
-            pieces = []
+            pieces, sources = _hydrate_group_sources(group)
 
-            for raw_piece in group.get("pieces") or []:
-                piece = dict(raw_piece)
+            validation_started = time.perf_counter()
+            unique_sources = set()
+            validation_disk_reads = 0
+            validation_memory_checks = 0
+
+            for piece in pieces:
                 file_path = str(piece.get("filePath") or "").strip()
+                file_name = str(
+                    piece.get("fileName")
+                    or os.path.basename(file_path)
+                    or ""
+                )
+                source_id = str(piece.get("sourceId") or file_path or file_name)
+                if source_id in unique_sources:
+                    # The same source drawing may represent many quantity
+                    # instances; its validation result is identical.
+                    continue
+                unique_sources.add(source_id)
 
-                # If the drawing validator flags this ZZX, keep the piece in the
-                # plan but treat it as opaque nominal geometry. Cache by source
-                # path because one drawing may represent many requested pieces.
-                if file_path and os.path.isfile(file_path):
-                    if file_path not in validation_cache:
-                        validation_cache[file_path] = bool(validate_zzx_file(file_path))
-                    if validation_cache[file_path]:
-                        piece["tubePart"] = None
+                part = piece.get("tubePart")
+                if isinstance(part, dict):
+                    issues = validate_tube_part_data(file_name, part)
+                    validation_memory_checks += 1
+                elif file_path and os.path.isfile(file_path):
+                    issues = _cached_zzx_validation(file_path)
+                    validation_disk_reads += 1
+                else:
+                    issues = []
 
-                pieces.append(piece)
+                if issues:
+                    # Mark every instance from this source as opaque nominal
+                    # geometry, preserving the existing safety behavior.
+                    for candidate in pieces:
+                        if str(candidate.get("sourceId") or "") == str(piece.get("sourceId") or ""):
+                            candidate["tubePart"] = None
+
+            validation_seconds = time.perf_counter() - validation_started
 
             signature = _nesting_group_signature(
                 tube_type,
@@ -1180,16 +1255,43 @@ def nest_piece_groups(groups, rod_length=6000):
                 dead_zone_mm=400.0,
             )
             cached = signature in _NESTING_GROUP_CACHE
+            optimizer_seconds = 0.0
+            parallel_stats = None
             if cached:
                 rods = _NESTING_GROUP_CACHE[signature]
             else:
+                optimizer_started = time.perf_counter()
                 rods = tubenest_engine.optimize_items_dict(
                     pieces,
                     rod_length=rod_length,
                     gap_mm=gap_mm,
                     dead_zone_mm=400.0,
                 )
+                optimizer_seconds = time.perf_counter() - optimizer_started
+                parallel_stats = tubenest_engine.get_parallel_stats()
                 _cache_nesting_group(signature, rods)
+
+            total_seconds = time.perf_counter() - group_started
+            perf = {
+                "pieceCount": len(pieces),
+                "uniqueSourceCount": len(unique_sources),
+                "validationSeconds": round(validation_seconds, 6),
+                "optimizerSeconds": round(optimizer_seconds, 6),
+                "totalSeconds": round(total_seconds, 6),
+                "validationMemoryChecks": validation_memory_checks,
+                "validationDiskReads": validation_disk_reads,
+                "parallel": parallel_stats,
+            }
+            if cached:
+                perf["backendCacheHit"] = True
+
+            print(
+                f"[TubeNest PERF] {tube_type}: pieces={len(pieces)}, "
+                f"sources={len(unique_sources)}, validation={validation_seconds:.3f}s "
+                f"(memory={validation_memory_checks}, disk={validation_disk_reads}), "
+                f"optimizer={optimizer_seconds:.3f}s, total={total_seconds:.3f}s, "
+                f"cache={'HIT' if cached else 'MISS'}, parallel={parallel_stats}"
+            )
 
             result_groups.append({
                 "tubeType": tube_type,
@@ -1198,8 +1300,19 @@ def nest_piece_groups(groups, rod_length=6000):
                 "gapMm": gap_mm,
                 "cacheHit": cached,
                 "signature": signature,
+                "performance": perf,
             })
-        return {"status": "success", "groups": result_groups}
+
+        request_seconds = time.perf_counter() - request_started
+        print(
+            f"[TubeNest PERF] request total={request_seconds:.3f}s "
+            f"groups={len(result_groups)}"
+        )
+        return {
+            "status": "success",
+            "groups": result_groups,
+            "performance": {"totalSeconds": round(request_seconds, 6)},
+        }
     except Exception as exc:
         traceback.print_exc()
         return {"status": "error", "message": str(exc), "groups": []}
