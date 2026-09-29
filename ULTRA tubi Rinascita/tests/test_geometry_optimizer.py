@@ -176,7 +176,40 @@ class GeometryOptimizerTests(unittest.TestCase):
 
     def test_parallel_threshold_targets_medium_groups(self):
         self.assertEqual(optimizer_module.PARALLEL_MIN_ITEMS, 8)
+        self.assertEqual(optimizer_module.PARALLEL_MIN_UNIQUE_TYPES, 6)
         self.assertEqual(optimizer_module.MAX_CPU_WORKERS, 24)
+
+    def test_repeat_heavy_group_uses_shared_serial_cache_strategy(self):
+        repeated = [
+            optimizer_module.OptimizerItem(
+                index=index,
+                instance_key=f"A::{index}",
+                source_id="A",
+                nominal_length=100.0,
+                tube_part=make_part(100.0),
+            )
+            for index in range(20)
+        ]
+        self.assertFalse(
+            optimizer_module._should_use_process_pool(repeated)
+        )
+
+    def test_diverse_group_can_use_process_pool_strategy(self):
+        diverse = [
+            optimizer_module.OptimizerItem(
+                index=index,
+                instance_key=f"P::{index}",
+                source_id=f"P{index}",
+                nominal_length=100.0 + index,
+                tube_part=make_part(100.0 + index),
+            )
+            for index in range(8)
+        ]
+        expected = optimizer_module.nesting_cpu_worker_count() > 1
+        self.assertEqual(
+            optimizer_module._should_use_process_pool(diverse),
+            expected,
+        )
 
     def test_pairwise_geometry_fit_cache_is_reused(self):
         optimizer_module._PAIRWISE_FIT_CACHE.clear()

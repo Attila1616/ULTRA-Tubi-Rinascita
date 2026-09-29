@@ -33,10 +33,16 @@ DEFAULT_MAX_CANDIDATE_TYPES = 24
 EXACT_REQUIRE_ALL_MAX_PIECES = 8
 MERGE_PAIR_ATTEMPT_LIMIT = 160
 PARALLEL_MIN_ITEMS = 8
+PARALLEL_MIN_UNIQUE_TYPES = 6
 MAX_CPU_WORKERS = 24
 
 _PAIRWISE_FIT_CACHE = {}
 _PAIRWISE_FIT_CACHE_LIMIT = 50000
+_PAIRWISE_FIT_STATS = {
+    "hits": 0,
+    "misses": 0,
+}
+
 
 _PARALLEL_STATS = {
     "pool_runs": 0,
@@ -55,6 +61,11 @@ _PARALLEL_STATS = {
 }
 
 
+def _reset_pairwise_fit_stats():
+    _PAIRWISE_FIT_STATS["hits"] = 0
+    _PAIRWISE_FIT_STATS["misses"] = 0
+
+
 def _reset_parallel_stats():
     _PARALLEL_STATS.update(
         pool_runs=0,
@@ -70,6 +81,8 @@ def _reset_parallel_stats():
         merge_seconds=0.0,
         refine_seconds=0.0,
         total_seconds=0.0,
+        unique_type_count=0,
+        strategy="serial_small_job",
     )
 
 
@@ -77,6 +90,10 @@ def get_parallel_stats():
     result = dict(_PARALLEL_STATS)
     result["configured_workers"] = nesting_cpu_worker_count()
     result["parallel_min_items"] = PARALLEL_MIN_ITEMS
+    result["parallel_min_unique_types"] = PARALLEL_MIN_UNIQUE_TYPES
+    result["pairwise_cache_size"] = len(_PAIRWISE_FIT_CACHE)
+    result["pairwise_cache_hits"] = _PAIRWISE_FIT_STATS["hits"]
+    result["pairwise_cache_misses"] = _PAIRWISE_FIT_STATS["misses"]
     return result
 
 
@@ -121,8 +138,10 @@ def _cached_pairwise_fit(previous_item, previous_pose, item, pose, gap_mm):
     key = _pairwise_fit_key(previous_item, previous_pose, item, pose, gap_mm)
     cached = _PAIRWISE_FIT_CACHE.get(key)
     if cached is not None:
+        _PAIRWISE_FIT_STATS["hits"] += 1
         return cached
 
+    _PAIRWISE_FIT_STATS["misses"] += 1
     fit = fit_adjacent_parts(
         previous_item.tube_part,
         previous_pose,
@@ -678,6 +697,28 @@ def nesting_cpu_worker_count():
     return max(2, min(MAX_CPU_WORKERS, logical - 2))
 
 
+def _unique_type_count(items):
+    return len({item.type_key for item in items})
+
+
+def _should_use_process_pool(items):
+    """Parallelize diverse jobs; keep repeat-heavy jobs in one shared cache.
+
+    Windows process IPC and per-process fit caches are expensive when dozens of
+    physical pieces come from only a few distinct drawings. Those jobs are
+    faster in-process because each unique geometry/pose transition is solved
+    once and then reused.
+    """
+    workers = nesting_cpu_worker_count()
+    item_count = len(items)
+    unique_types = _unique_type_count(items)
+    return bool(
+        workers > 1
+        and item_count >= PARALLEL_MIN_ITEMS
+        and unique_types >= PARALLEL_MIN_UNIQUE_TYPES
+    )
+
+
 def _init_search_worker(items, rod_length, dead_zone_mm, gap_mm):
     global _PROCESS_ITEMS
     global _PROCESS_ROD_LENGTH
@@ -772,8 +813,7 @@ def _parallel_search_masks(
     tasks = list(tasks)
     workers = nesting_cpu_worker_count()
     if (
-        workers <= 1
-        or len(items) < PARALLEL_MIN_ITEMS
+        not _should_use_process_pool(items)
         or len(tasks) < 2
     ):
         return [
@@ -848,7 +888,7 @@ def _search_single_rod_parallel(
 ):
     """Same beam semantics, with coarse beam chunks expanded in worker processes."""
     workers = nesting_cpu_worker_count()
-    if workers <= 1 or len(items) < PARALLEL_MIN_ITEMS:
+    if not _should_use_process_pool(items):
         return _search_single_rod(
             items,
             allowed_mask=allowed_mask,
@@ -1719,17 +1759,26 @@ def _optimize_normalized(
 ):
     total_started = time.perf_counter()
     configured_workers = nesting_cpu_worker_count()
+    unique_types = _unique_type_count(normalized)
     pool_workers = min(
         configured_workers,
         max(1, len(normalized)),
     )
-    use_pool = (
-        pool_workers > 1
-        and len(normalized) >= PARALLEL_MIN_ITEMS
-    )
+    use_pool = _should_use_process_pool(normalized)
     _PARALLEL_STATS["item_count"] = len(normalized)
+    _PARALLEL_STATS["unique_type_count"] = unique_types
     _PARALLEL_STATS["workers_used"] = pool_workers if use_pool else 1
     _PARALLEL_STATS["used_process_pool"] = bool(use_pool)
+    _PARALLEL_STATS["strategy"] = (
+        "process_pool_diverse_types"
+        if use_pool
+        else (
+            "serial_shared_cache_repeated_types"
+            if len(normalized) >= PARALLEL_MIN_ITEMS
+            and unique_types < PARALLEL_MIN_UNIQUE_TYPES
+            else "serial_small_job"
+        )
+    )
 
     executor = None
     try:
@@ -1799,6 +1848,7 @@ def optimize_items_dict(
     dead_zone_mm=DEFAULT_CHUCK_DEAD_ZONE,
 ):
     _reset_parallel_stats()
+    _reset_pairwise_fit_stats()
     normalized = _normalize_items(items, rod_length)
     if not normalized:
         return []
