@@ -9,6 +9,21 @@ from tubenest_engine.fit import (
 )
 
 
+def make_perimeter_envelope(center, amplitude, sample_count=360):
+    import math
+    return [
+        [
+            float(center) + float(amplitude) * math.sin(
+                2.0 * math.pi * index / sample_count
+            ),
+            float(center) + float(amplitude) * math.sin(
+                2.0 * math.pi * index / sample_count
+            ),
+        ]
+        for index in range(sample_count)
+    ]
+
+
 def make_part(
     length=1000.0,
     profile=None,
@@ -175,6 +190,50 @@ class GeometryFitTests(unittest.TestCase):
 
         self.assertFalse(fit.common_line)
         self.assertEqual(fit.minimum_clearance_mm, 2.0)
+
+    def test_nonplanar_end_contours_can_interlock_without_common_line(self):
+        length = 984.0
+        previous = make_part(
+            length=length,
+            start_plane=(75.0, 0.0, 1.0),
+            end_plane=(length - 75.0, 0.0, -1.0),
+        )
+        following = make_part(
+            length=length,
+            start_plane=(75.0, 0.0, 1.0),
+            end_plane=(length - 75.0, 0.0, -1.0),
+        )
+        for part in (previous, following):
+            part["ends"][0]["plane_max_residual_mm"] = 8.0
+            part["ends"][1]["plane_max_residual_mm"] = 8.0
+            part["ends"][0]["perimeter_envelope"] = make_perimeter_envelope(
+                75.0, 75.0
+            )
+            part["ends"][1]["perimeter_envelope"] = make_perimeter_envelope(
+                length - 75.0, -75.0
+            )
+
+        result = fit_adjacent_parts(
+            previous,
+            PartPose(),
+            0.0,
+            following,
+            PartPose(axial_rotation_degrees=180.0),
+            gap_mm=2.0,
+            allow_common_line=True,
+        )
+
+        self.assertFalse(result.common_line)
+        self.assertAlmostEqual(result.minimum_clearance_mm, 2.0)
+        self.assertAlmostEqual(
+            result.next_origin,
+            length - 150.0 + 2.0,
+            places=3,
+        )
+        self.assertGreater(
+            result.overlap_of_axial_envelopes_mm,
+            140.0,
+        )
 
     def test_large_plane_residual_is_rejected(self):
         previous = make_part(end_plane=(950.0, 0.0, 1.0))

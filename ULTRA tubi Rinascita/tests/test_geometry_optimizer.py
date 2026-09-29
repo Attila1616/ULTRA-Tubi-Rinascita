@@ -66,7 +66,64 @@ def item(key, length, part):
     }
 
 
+def make_nonplanar_v_part(length=984.0, sample_count=360):
+    import math
+    part = make_part(
+        length,
+        start_plane=(75.0, 0.0, 1.0),
+        end_plane=(length - 75.0, 0.0, -1.0),
+    )
+    for end in part["ends"]:
+        end["plane_max_residual_mm"] = 8.0
+
+    start = []
+    finish = []
+    for index in range(sample_count):
+        angle = 2.0 * math.pi * index / sample_count
+        wave = 75.0 * math.sin(angle)
+        start.append([75.0 + wave, 75.0 + wave])
+        finish.append([
+            length - 75.0 - wave,
+            length - 75.0 - wave,
+        ])
+    part["ends"][0]["perimeter_envelope"] = start
+    part["ends"][1]["perimeter_envelope"] = finish
+    return part
+
+
 class GeometryOptimizerTests(unittest.TestCase):
+    def test_repeated_nonplanar_v_cuts_choose_interlocking_rotation(self):
+        part = make_nonplanar_v_part()
+        pieces = [
+            {
+                "instanceKey": f"V::{index}",
+                "sourceId": "same-v-cut",
+                "length": 984.0,
+                "tubePart": part,
+            }
+            for index in range(4)
+        ]
+
+        rods = optimize_items_dict(
+            pieces,
+            rod_length=6000.0,
+            gap_mm=2.0,
+            dead_zone_mm=400.0,
+        )
+
+        self.assertEqual(len(rods), 1)
+        self.assertLess(rods[0]["used"], 3600.0)
+        overlaps = [
+            placement["overlap_before_mm"]
+            for placement in rods[0]["placements"][1:]
+        ]
+        self.assertTrue(all(value > 140.0 for value in overlaps))
+        rotations = {
+            round(placement["axial_rotation_degrees"]) % 360
+            for placement in rods[0]["placements"]
+        }
+        self.assertTrue({0, 180}.issubset(rotations))
+
     def test_angled_45_and_30_ends_interlock_with_two_mm_surface_gap(self):
         previous = make_part(
             1000,

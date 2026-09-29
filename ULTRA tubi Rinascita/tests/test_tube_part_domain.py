@@ -21,6 +21,19 @@ class TubePartDomainTests(unittest.TestCase):
         self.assertAlmostEqual(part.overall_length, 1215.0, places=3)
         self.assertAlmostEqual(part.axial_min + part.overall_length, part.axial_max, places=9)
         self.assertEqual(len(part.ends), 2)
+        for end in part.ends:
+            self.assertIsNotNone(end.perimeter_envelope)
+            self.assertEqual(len(end.perimeter_envelope), 360)
+            envelope_z = [
+                value
+                for pair in end.perimeter_envelope
+                for value in pair
+            ]
+            self.assertGreaterEqual(min(envelope_z), -1e-6)
+            self.assertLessEqual(
+                max(envelope_z),
+                part.overall_length + 1e-6,
+            )
         self.assertEqual(part.active_layers, [1, 4])
         self.assertEqual(len(part.source_sha256), 64)
         self.assertEqual(part.part_fingerprint, f"{part.source_sha256}:{part.segment_handle}")

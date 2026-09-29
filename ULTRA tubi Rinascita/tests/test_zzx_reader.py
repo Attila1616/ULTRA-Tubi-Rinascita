@@ -29,6 +29,16 @@ class ZzxReaderTests(unittest.TestCase):
         self.assertEqual(segment.active_layers, [1, 4])
         self.assertEqual([cut.operation_layer for cut in segment.end_cuts], [1, 4])
 
+        for cut in segment.end_cuts:
+            self.assertIsNotNone(cut.perimeter_envelope)
+            self.assertEqual(len(cut.perimeter_envelope), 360)
+            self.assertTrue(
+                all(
+                    len(pair) == 2 and pair[0] <= pair[1]
+                    for pair in cut.perimeter_envelope
+                )
+            )
+
         angles = [cut.cut_angle_from_perpendicular_degrees for cut in segment.end_cuts]
         self.assertAlmostEqual(angles[0], 0.0, places=3)
         self.assertAlmostEqual(angles[1], 45.0, places=2)
