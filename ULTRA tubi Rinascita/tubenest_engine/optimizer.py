@@ -35,6 +35,15 @@ MERGE_PAIR_ATTEMPT_LIMIT = 160
 PARALLEL_MIN_ITEMS = 8
 PARALLEL_MIN_UNIQUE_TYPES = 6
 CONTOUR_MAX_CPU_WORKERS = 12
+CONTOUR_LARGE_JOB_MIN_ITEMS = 24
+CONTOUR_INITIAL_BEAM_WIDTH = 48
+CONTOUR_INITIAL_MAX_CANDIDATE_TYPES = 18
+CONTOUR_MERGE_PAIR_ATTEMPT_LIMIT = 32
+CONTOUR_MERGE_BEAM_WIDTH = 72
+CONTOUR_MERGE_MAX_CANDIDATE_TYPES = 24
+CONTOUR_REFINE_BEAM_WIDTH = 72
+CONTOUR_REFINE_MAX_CANDIDATE_TYPES = 24
+CONTOUR_REFINE_UTILIZATION_THRESHOLD = 0.94
 MAX_CPU_WORKERS = 24
 
 _PAIRWISE_FIT_CACHE = {}
@@ -694,7 +703,15 @@ def _search_single_rod(
     return min(terminals, key=lambda state: _terminal_score(state, require_all))
 
 
-def _build_initial_rods(items, rod_length, dead_zone_mm, gap_mm, executor=None):
+def _build_initial_rods(
+    items,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+    executor=None,
+    beam_width=DEFAULT_BEAM_WIDTH,
+    max_candidate_types=DEFAULT_MAX_CANDIDATE_TYPES,
+):
     all_mask = (1 << len(items)) - 1
     remaining_mask = all_mask
     rods = []
@@ -707,6 +724,8 @@ def _build_initial_rods(items, rod_length, dead_zone_mm, gap_mm, executor=None):
             dead_zone_mm=dead_zone_mm,
             gap_mm=gap_mm,
             require_all=False,
+            beam_width=int(beam_width),
+            max_candidate_types=int(max_candidate_types),
             executor=executor,
         )
         if state is None or state.used_mask == 0:
@@ -1218,12 +1237,25 @@ def _search_single_rod_parallel(
     )
 
 
-def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm, executor=None):
+def _try_merge_rods(
+    items,
+    rods,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+    executor=None,
+    attempt_limit=MERGE_PAIR_ATTEMPT_LIMIT,
+    beam_width=None,
+    max_candidate_types=100,
+):
     # Test the most promising rod pairs first. On large jobs, independent pair
     # searches from the current round are distributed across CPU processes.
     attempts = 0
+    attempt_limit = max(0, int(attempt_limit))
+    if beam_width is None:
+        beam_width = max(DEFAULT_BEAM_WIDTH * 2, 220)
 
-    while attempts < MERGE_PAIR_ATTEMPT_LIMIT:
+    while attempts < attempt_limit:
         pair_candidates = []
         for i in range(len(rods)):
             for j in range(i + 1, len(rods)):
@@ -1238,7 +1270,7 @@ def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm, executor=None
                 ))
         pair_candidates.sort()
 
-        remaining_budget = MERGE_PAIR_ATTEMPT_LIMIT - attempts
+        remaining_budget = attempt_limit - attempts
         selected = []
         for _combined_used, _shortest, union_nominal, i, j in pair_candidates:
             if len(selected) >= remaining_budget:
@@ -1252,7 +1284,7 @@ def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm, executor=None
 
         attempts += len(selected)
         tasks = [
-            (mask, max(DEFAULT_BEAM_WIDTH * 2, 220), 100)
+            (mask, int(beam_width), int(max_candidate_types))
             for _i, _j, mask in selected
         ]
         merged_states = _parallel_search_masks(
@@ -1289,13 +1321,48 @@ def _try_merge_rods(items, rods, rod_length, dead_zone_mm, gap_mm, executor=None
 
     return rods
 
-def _refine_rods(items, rods, rod_length, dead_zone_mm, gap_mm, executor=None):
+def _refine_rods(
+    items,
+    rods,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+    executor=None,
+    beam_width=None,
+    max_candidate_types=40,
+    utilization_threshold=None,
+):
     if not rods:
         return []
 
+    if beam_width is None:
+        beam_width = max(DEFAULT_BEAM_WIDTH * 2, 220)
+
+    selected_indices = []
+    for index, rod in enumerate(rods):
+        if utilization_threshold is None:
+            selected_indices.append(index)
+            continue
+        utilization = (
+            float(rod.used_span) / float(rod_length)
+            if float(rod_length) > EPS
+            else 1.0
+        )
+        # Small memberships are cheap/exact; otherwise only spend refinement
+        # time on rods with meaningful free material left.
+        if rod.piece_count <= EXACT_REQUIRE_ALL_MAX_PIECES or utilization < float(utilization_threshold):
+            selected_indices.append(index)
+
+    if not selected_indices:
+        return list(rods)
+
     tasks = [
-        (rod.used_mask, max(DEFAULT_BEAM_WIDTH * 2, 220), 40)
-        for rod in rods
+        (
+            rods[index].used_mask,
+            int(beam_width),
+            int(max_candidate_types),
+        )
+        for index in selected_indices
     ]
     refined_states = _parallel_search_masks(
         items,
@@ -1305,10 +1372,12 @@ def _refine_rods(items, rods, rod_length, dead_zone_mm, gap_mm, executor=None):
         gap_mm=gap_mm,
         executor=executor,
     )
-    return [
-        refined or original
-        for original, refined in zip(rods, refined_states)
-    ]
+
+    result = list(rods)
+    for index, refined in zip(selected_indices, refined_states):
+        if refined is not None:
+            result[index] = refined
+    return result
 
 
 def _posed_end_dict(end):
@@ -1939,6 +2008,10 @@ def _optimize_normalized(
     _PARALLEL_STATS["unique_type_count"] = unique_types
     _PARALLEL_STATS["workers_used"] = pool_workers if use_pool else 1
     _PARALLEL_STATS["used_process_pool"] = bool(use_pool)
+    _PARALLEL_STATS["large_contour_job"] = bool(
+        contour_heavy
+        and len(normalized) >= CONTOUR_LARGE_JOB_MIN_ITEMS
+    )
     _PARALLEL_STATS["strategy"] = (
         "precomputed_contour_catalog_process_pool"
         if contour_heavy and use_pool
@@ -1974,6 +2047,21 @@ def _optimize_normalized(
                 ),
             )
 
+        large_contour_job = bool(
+            contour_heavy
+            and len(normalized) >= CONTOUR_LARGE_JOB_MIN_ITEMS
+        )
+        initial_beam_width = (
+            CONTOUR_INITIAL_BEAM_WIDTH
+            if large_contour_job
+            else DEFAULT_BEAM_WIDTH
+        )
+        initial_max_types = (
+            CONTOUR_INITIAL_MAX_CANDIDATE_TYPES
+            if large_contour_job
+            else DEFAULT_MAX_CANDIDATE_TYPES
+        )
+
         stage_started = time.perf_counter()
         rods = _build_initial_rods(
             normalized,
@@ -1981,6 +2069,8 @@ def _optimize_normalized(
             dead_zone_mm=dead_zone_mm,
             gap_mm=gap_mm,
             executor=executor,
+            beam_width=initial_beam_width,
+            max_candidate_types=initial_max_types,
         )
         _PARALLEL_STATS["initial_seconds"] = (
             time.perf_counter() - stage_started
@@ -1994,6 +2084,21 @@ def _optimize_normalized(
             dead_zone_mm=dead_zone_mm,
             gap_mm=gap_mm,
             executor=executor,
+            attempt_limit=(
+                CONTOUR_MERGE_PAIR_ATTEMPT_LIMIT
+                if large_contour_job
+                else MERGE_PAIR_ATTEMPT_LIMIT
+            ),
+            beam_width=(
+                CONTOUR_MERGE_BEAM_WIDTH
+                if large_contour_job
+                else max(DEFAULT_BEAM_WIDTH * 2, 220)
+            ),
+            max_candidate_types=(
+                CONTOUR_MERGE_MAX_CANDIDATE_TYPES
+                if large_contour_job
+                else 100
+            ),
         )
         _PARALLEL_STATS["merge_seconds"] = (
             time.perf_counter() - stage_started
@@ -2007,6 +2112,21 @@ def _optimize_normalized(
             dead_zone_mm=dead_zone_mm,
             gap_mm=gap_mm,
             executor=executor,
+            beam_width=(
+                CONTOUR_REFINE_BEAM_WIDTH
+                if large_contour_job
+                else max(DEFAULT_BEAM_WIDTH * 2, 220)
+            ),
+            max_candidate_types=(
+                CONTOUR_REFINE_MAX_CANDIDATE_TYPES
+                if large_contour_job
+                else 40
+            ),
+            utilization_threshold=(
+                CONTOUR_REFINE_UTILIZATION_THRESHOLD
+                if large_contour_job
+                else None
+            ),
         )
         _PARALLEL_STATS["refine_seconds"] = (
             time.perf_counter() - stage_started

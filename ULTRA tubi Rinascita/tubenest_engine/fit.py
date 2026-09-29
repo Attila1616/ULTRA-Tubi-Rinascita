@@ -366,8 +366,10 @@ def _cached_posed_uniform_envelope_arrays(part, pose, position):
     if result is not None:
         if len(_POSED_ENVELOPE_CACHE) >= _POSED_ENVELOPE_CACHE_LIMIT:
             _POSED_ENVELOPE_CACHE.pop(next(iter(_POSED_ENVELOPE_CACHE)))
-        # Tuples prevent accidental mutation of a shared cached pose.
-        result = (tuple(result[0]), tuple(result[1]))
+        # Keep vectorized NumPy arrays. Mark them read-only so cached poses
+        # cannot be mutated by a caller.
+        result[0].setflags(write=False)
+        result[1].setflags(write=False)
         _POSED_ENVELOPE_CACHE[key] = result
     return result
 

@@ -1,11 +1,19 @@
+from pathlib import Path
 import unittest
 
+from tubenest_engine import read_tube_parts
 from tubenest_engine.fit import (
     PartPose,
     fit_adjacent_parts,
     posed_ends,
     rectangular_rotation_family,
     tail_flip_eligibility,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+REAL_CHEVRON_SAMPLE = (
+    ROOT / "tests" / "fixtures" / "TD1909A00039_150x150x5_L984.zzx"
 )
 
 
@@ -225,6 +233,27 @@ class GeometryFitTests(unittest.TestCase):
             part, pose, "start"
         )
         self.assertIs(first, second)
+
+    def test_real_150_square_chevron_interlocks_at_180(self):
+        part = read_tube_parts(REAL_CHEVRON_SAMPLE)[0].to_dict()
+        result = fit_adjacent_parts(
+            part,
+            PartPose(),
+            0.0,
+            part,
+            PartPose(axial_rotation_degrees=180.0),
+            gap_mm=2.0,
+            allow_common_line=True,
+        )
+        self.assertFalse(result.common_line)
+        self.assertGreater(
+            result.overlap_of_axial_envelopes_mm,
+            100.0,
+        )
+        self.assertLess(
+            result.next_origin,
+            float(part["overall_length"]) - 100.0,
+        )
 
     def test_nonplanar_end_contours_can_interlock_without_common_line(self):
         length = 984.0
