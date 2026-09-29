@@ -348,6 +348,39 @@ def _interpolate_uniform_envelope(envelope, angle):
     return lo, hi
 
 
+def _posed_uniform_envelope_arrays(end, pose, length, reverse_transform):
+    envelope = _valid_perimeter_envelope(end)
+    if envelope is None:
+        return None
+    count = len(envelope)
+    step_degrees = 360.0 / float(count)
+    raw_shift = float(pose.axial_rotation_degrees) / step_degrees
+    shift = int(round(raw_shift))
+    if abs(raw_shift - shift) > 1e-9:
+        return None
+
+    lows = [0.0] * count
+    highs = [0.0] * count
+    half_turn = count // 2
+    if reverse_transform and count % 2:
+        return None
+
+    for global_index in range(count):
+        if reverse_transform:
+            source_index = (
+                half_turn + shift - global_index
+            ) % count
+            lo, hi = envelope[source_index]
+            lows[global_index] = float(length) - hi
+            highs[global_index] = float(length) - lo
+        else:
+            source_index = (global_index - shift) % count
+            lo, hi = envelope[source_index]
+            lows[global_index] = lo
+            highs[global_index] = hi
+    return lows, highs
+
+
 def _posed_envelope_at(end, pose, length, global_angle, reverse_transform):
     envelope = _valid_perimeter_envelope(end)
     if envelope is None:
@@ -397,28 +430,56 @@ def _fit_adjacent_contours(
     next_length = float(next_part.get("overall_length") or 0.0)
     required_relative_origin = -math.inf
 
-    for index in range(sample_count):
-        angle = (2.0 * math.pi * index) / float(sample_count)
-        previous_bounds = _posed_envelope_at(
-            previous_end,
-            previous_pose,
-            previous_length,
-            angle,
-            previous_reverse,
+    previous_arrays = _posed_uniform_envelope_arrays(
+        previous_end,
+        previous_pose,
+        previous_length,
+        previous_reverse,
+    )
+    next_arrays = _posed_uniform_envelope_arrays(
+        next_start,
+        next_pose,
+        next_length,
+        next_reverse,
+    )
+
+    if (
+        previous_arrays is not None
+        and next_arrays is not None
+        and len(previous_arrays[0]) == len(next_arrays[0])
+    ):
+        previous_highs = previous_arrays[1]
+        next_lows = next_arrays[0]
+        required_relative_origin = target_gap + max(
+            previous_high - next_low
+            for previous_high, next_low in zip(
+                previous_highs,
+                next_lows,
+            )
         )
-        next_bounds = _posed_envelope_at(
-            next_start,
-            next_pose,
-            next_length,
-            angle,
-            next_reverse,
-        )
-        if previous_bounds is None or next_bounds is None:
-            raise ValueError("End contour envelope interpolation failed")
-        required_relative_origin = max(
-            required_relative_origin,
-            previous_bounds[1] - next_bounds[0] + target_gap,
-        )
+    else:
+        for index in range(sample_count):
+            angle = (2.0 * math.pi * index) / float(sample_count)
+            previous_bounds = _posed_envelope_at(
+                previous_end,
+                previous_pose,
+                previous_length,
+                angle,
+                previous_reverse,
+            )
+            next_bounds = _posed_envelope_at(
+                next_start,
+                next_pose,
+                next_length,
+                angle,
+                next_reverse,
+            )
+            if previous_bounds is None or next_bounds is None:
+                raise ValueError("End contour envelope interpolation failed")
+            required_relative_origin = max(
+                required_relative_origin,
+                previous_bounds[1] - next_bounds[0] + target_gap,
+            )
 
     if not math.isfinite(required_relative_origin):
         raise ValueError("End contour fit produced no finite placement")

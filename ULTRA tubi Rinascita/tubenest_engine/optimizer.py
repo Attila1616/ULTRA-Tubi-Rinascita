@@ -37,7 +37,7 @@ PARALLEL_MIN_UNIQUE_TYPES = 6
 MAX_CPU_WORKERS = 24
 
 _PAIRWISE_FIT_CACHE = {}
-_PAIRWISE_FIT_CACHE_LIMIT = 50000
+_PAIRWISE_FIT_CACHE_LIMIT = 200000
 _PAIRWISE_FIT_STATS = {
     "hits": 0,
     "misses": 0,
@@ -717,6 +717,32 @@ def _unique_type_count(items):
     return len({item.type_key for item in items})
 
 
+def _has_contour_fit_geometry(item):
+    part = item.tube_part if isinstance(item, OptimizerItem) else item
+    if not isinstance(part, dict):
+        return False
+    for end in list(part.get("ends") or [])[:2]:
+        if not isinstance(end, dict):
+            continue
+        residual = end.get("plane_max_residual_mm")
+        envelope = end.get("perimeter_envelope")
+        try:
+            nonplanar = residual is None or float(residual) > 0.05
+        except (TypeError, ValueError):
+            nonplanar = True
+        if (
+            nonplanar
+            and isinstance(envelope, list)
+            and len(envelope) >= 32
+        ):
+            return True
+    return False
+
+
+def _contains_contour_fit_geometry(items):
+    return any(_has_contour_fit_geometry(item) for item in items)
+
+
 def _should_use_process_pool(items):
     """Parallelize diverse jobs; keep repeat-heavy jobs in one shared cache.
 
@@ -728,6 +754,14 @@ def _should_use_process_pool(items):
     workers = nesting_cpu_worker_count()
     item_count = len(items)
     unique_types = _unique_type_count(items)
+
+    # Non-planar contour fits are comparatively expensive and the process
+    # workers do not share _PAIRWISE_FIT_CACHE. Keeping these jobs in the
+    # parent process lets initial search, merge and refinement all reuse one
+    # transition catalog instead of recomputing it in 20+ processes.
+    if _contains_contour_fit_geometry(items):
+        return False
+
     return bool(
         workers > 1
         and item_count >= PARALLEL_MIN_ITEMS
@@ -1789,10 +1823,14 @@ def _optimize_normalized(
         "process_pool_diverse_types"
         if use_pool
         else (
-            "serial_shared_cache_repeated_types"
-            if len(normalized) >= PARALLEL_MIN_ITEMS
-            and unique_types < PARALLEL_MIN_UNIQUE_TYPES
-            else "serial_small_job"
+            "serial_shared_cache_contour_geometry"
+            if _contains_contour_fit_geometry(normalized)
+            else (
+                "serial_shared_cache_repeated_types"
+                if len(normalized) >= PARALLEL_MIN_ITEMS
+                and unique_types < PARALLEL_MIN_UNIQUE_TYPES
+                else "serial_small_job"
+            )
         )
     )
 

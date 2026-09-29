@@ -251,6 +251,24 @@ class GeometryOptimizerTests(unittest.TestCase):
             optimizer_module._should_use_process_pool(repeated)
         )
 
+    def test_diverse_nonplanar_group_uses_one_shared_cache(self):
+        items = []
+        for index in range(8):
+            part = make_nonplanar_v_part(length=984.0 + index)
+            items.append(
+                optimizer_module.OptimizerItem(
+                    index=index,
+                    instance_key=f"NP::{index}",
+                    source_id=f"NP{index}",
+                    nominal_length=984.0 + index,
+                    tube_part=part,
+                )
+            )
+
+        self.assertFalse(
+            optimizer_module._should_use_process_pool(items)
+        )
+
     def test_diverse_group_can_use_process_pool_strategy(self):
         diverse = [
             optimizer_module.OptimizerItem(
