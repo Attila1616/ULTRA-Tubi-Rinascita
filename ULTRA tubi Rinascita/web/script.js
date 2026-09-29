@@ -1611,7 +1611,7 @@ function buildClientNestingSignature(group, piecesToNest) {
             part.part_fingerprint || '',
             part.source_sha256 || ''
         ];
-    });
+    }).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
 
     return JSON.stringify([
         nestingSettingsKey,
@@ -1662,6 +1662,15 @@ async function ensureGroupNesting(tubeType) {
                     rods: result.rods || [],
                     backendCacheHit: !!result.cacheHit
                 });
+            } else {
+                console.warn(
+                    '[TubeNest UI] completed result discarded because the nesting input changed',
+                    {
+                        tubeType,
+                        requestedSignature: signature,
+                        latestSignature
+                    }
+                );
             }
         }
         return result.rods || [];

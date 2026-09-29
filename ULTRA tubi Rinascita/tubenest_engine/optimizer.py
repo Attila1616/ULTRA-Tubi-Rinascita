@@ -36,6 +36,8 @@ PARALLEL_MIN_ITEMS = 8
 PARALLEL_MIN_UNIQUE_TYPES = 6
 CONTOUR_MAX_CPU_WORKERS = 12
 CONTOUR_LARGE_JOB_MIN_ITEMS = 24
+LARGE_SEARCH_MIN_ITEMS = 32
+LARGE_SEARCH_MIN_UNIQUE_TYPES = 8
 CONTOUR_INITIAL_BEAM_WIDTH = 48
 CONTOUR_INITIAL_MAX_CANDIDATE_TYPES = 18
 CONTOUR_MERGE_PAIR_ATTEMPT_LIMIT = 32
@@ -2233,6 +2235,10 @@ def _optimize_normalized(
         contour_heavy
         and len(normalized) >= CONTOUR_LARGE_JOB_MIN_ITEMS
     )
+    _PARALLEL_STATS["large_search_job"] = bool(
+        len(normalized) >= LARGE_SEARCH_MIN_ITEMS
+        and unique_types >= LARGE_SEARCH_MIN_UNIQUE_TYPES
+    )
     _PARALLEL_STATS["strategy"] = (
         "precomputed_contour_catalog_process_pool"
         if contour_heavy and use_pool
@@ -2272,6 +2278,10 @@ def _optimize_normalized(
             contour_heavy
             and len(normalized) >= CONTOUR_LARGE_JOB_MIN_ITEMS
         )
+        large_search_job = bool(
+            len(normalized) >= LARGE_SEARCH_MIN_ITEMS
+            and unique_types >= LARGE_SEARCH_MIN_UNIQUE_TYPES
+        )
         initial_beam_width = (
             CONTOUR_INITIAL_BEAM_WIDTH
             if large_contour_job
@@ -2307,32 +2317,32 @@ def _optimize_normalized(
             executor=executor,
             attempt_limit=(
                 CONTOUR_MERGE_PAIR_ATTEMPT_LIMIT
-                if large_contour_job
+                if large_search_job
                 else MERGE_PAIR_ATTEMPT_LIMIT
             ),
             beam_width=(
                 CONTOUR_MERGE_BEAM_WIDTH
-                if large_contour_job
+                if large_search_job
                 else max(DEFAULT_BEAM_WIDTH * 2, 220)
             ),
             max_candidate_types=(
                 CONTOUR_MERGE_MAX_CANDIDATE_TYPES
-                if large_contour_job
+                if large_search_job
                 else 100
             ),
-            stitch_only=large_contour_job,
+            stitch_only=large_search_job,
         )
         _PARALLEL_STATS["merge_seconds"] = (
             time.perf_counter() - stage_started
         )
         _PARALLEL_STATS["merge_strategy"] = (
             "stitch_existing_sequences"
-            if large_contour_job
+            if large_search_job
             else "beam_research"
         )
 
         stage_started = time.perf_counter()
-        if large_contour_job:
+        if large_search_job:
             rods = _refine_rods_fixed_order(
                 normalized,
                 rods,

@@ -321,6 +321,25 @@ class GeometryOptimizerTests(unittest.TestCase):
         self.assertEqual(len(rods), 2)
         self.assertTrue(all(rod["used"] <= 5600.0 + 1e-6 for rod in rods))
 
+    def test_large_diverse_planar_job_uses_fast_post_search_strategy_thresholds(self):
+        self.assertEqual(optimizer_module.LARGE_SEARCH_MIN_ITEMS, 32)
+        self.assertEqual(optimizer_module.LARGE_SEARCH_MIN_UNIQUE_TYPES, 8)
+        pieces = [
+            optimizer_module.OptimizerItem(
+                index=index,
+                instance_key=f"P::{index}",
+                source_id=f"S{index % 15}",
+                nominal_length=500.0 + index,
+                tube_part=make_part(500.0 + index),
+            )
+            for index in range(55)
+        ]
+        self.assertGreaterEqual(len(pieces), optimizer_module.LARGE_SEARCH_MIN_ITEMS)
+        self.assertGreaterEqual(
+            optimizer_module._unique_type_count(pieces),
+            optimizer_module.LARGE_SEARCH_MIN_UNIQUE_TYPES,
+        )
+
     def test_parallel_threshold_targets_medium_groups(self):
         self.assertEqual(optimizer_module.PARALLEL_MIN_ITEMS, 8)
         self.assertEqual(optimizer_module.PARALLEL_MIN_UNIQUE_TYPES, 6)
