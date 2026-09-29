@@ -43,7 +43,7 @@ CONTOUR_MERGE_BEAM_WIDTH = 72
 CONTOUR_MERGE_MAX_CANDIDATE_TYPES = 24
 CONTOUR_REFINE_BEAM_WIDTH = 72
 CONTOUR_REFINE_MAX_CANDIDATE_TYPES = 24
-CONTOUR_REFINE_UTILIZATION_THRESHOLD = 0.94
+CONTOUR_REFINE_UTILIZATION_THRESHOLD = 0.90
 MAX_CPU_WORKERS = 24
 
 _PAIRWISE_FIT_CACHE = {}
@@ -1237,6 +1237,118 @@ def _search_single_rod_parallel(
     )
 
 
+def _stitch_rod_states(
+    items,
+    first,
+    second,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Append an already-valid rod sequence after another without re-searching.
+
+    Internal poses/order are preserved. Only the connecting boundary and the
+    translated downstream positions are recalculated through _append_candidate.
+    """
+    if first is None or second is None:
+        return None
+    if first.tail_used:
+        return None
+    if first.used_mask & second.used_mask:
+        return None
+
+    state = first
+    accessible_limit = float(rod_length) - float(dead_zone_mm)
+    for placed in second.placed:
+        item = items[placed.item_index]
+        candidate = _append_candidate(
+            state,
+            item,
+            placed.pose,
+            items,
+            rod_length=rod_length,
+            accessible_limit=accessible_limit,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+        )
+        if candidate is None:
+            return None
+        state = candidate
+
+    if state.used_mask != (first.used_mask | second.used_mask):
+        return None
+    return state
+
+
+def _try_stitch_merge_rods(
+    items,
+    rods,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Greedily merge existing sequences using only boundary lookups."""
+    rods = list(rods)
+    while True:
+        best = None
+        for i in range(len(rods)):
+            for j in range(i + 1, len(rods)):
+                a = rods[i]
+                b = rods[j]
+
+                # Quick impossible lower bound: even if the connecting
+                # boundary recovered all configured gap, wildly oversized
+                # pairs are not worth replaying.
+                if (
+                    float(a.nominal_packed) + float(b.nominal_packed)
+                    > float(rod_length) + 3000.0
+                ):
+                    continue
+
+                candidates = (
+                    _stitch_rod_states(
+                        items,
+                        a,
+                        b,
+                        rod_length,
+                        dead_zone_mm,
+                        gap_mm,
+                    ),
+                    _stitch_rod_states(
+                        items,
+                        b,
+                        a,
+                        rod_length,
+                        dead_zone_mm,
+                        gap_mm,
+                    ),
+                )
+                for merged in candidates:
+                    if merged is None:
+                        continue
+                    key = (
+                        round(float(merged.used_span), 6),
+                        -int(merged.common_lines),
+                        bool(merged.tail_used),
+                        i,
+                        j,
+                    )
+                    if best is None or key < best[0]:
+                        best = (key, i, j, merged)
+
+        if best is None:
+            break
+
+        _key, i, j, merged = best
+        rods = [
+            rod
+            for index, rod in enumerate(rods)
+            if index not in (i, j)
+        ] + [merged]
+
+    return rods
+
+
 def _try_merge_rods(
     items,
     rods,
@@ -1247,7 +1359,17 @@ def _try_merge_rods(
     attempt_limit=MERGE_PAIR_ATTEMPT_LIMIT,
     beam_width=None,
     max_candidate_types=100,
+    stitch_only=False,
 ):
+    if stitch_only:
+        return _try_stitch_merge_rods(
+            items,
+            rods,
+            rod_length,
+            dead_zone_mm,
+            gap_mm,
+        )
+
     # Test the most promising rod pairs first. On large jobs, independent pair
     # searches from the current round are distributed across CPU processes.
     attempts = 0
@@ -2099,9 +2221,15 @@ def _optimize_normalized(
                 if large_contour_job
                 else 100
             ),
+            stitch_only=large_contour_job,
         )
         _PARALLEL_STATS["merge_seconds"] = (
             time.perf_counter() - stage_started
+        )
+        _PARALLEL_STATS["merge_strategy"] = (
+            "stitch_existing_sequences"
+            if large_contour_job
+            else "beam_research"
         )
 
         stage_started = time.perf_counter()

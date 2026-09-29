@@ -92,6 +92,49 @@ def make_nonplanar_v_part(length=984.0, sample_count=360):
 
 
 class GeometryOptimizerTests(unittest.TestCase):
+    def test_stitch_merge_replays_existing_sequences(self):
+        part = make_nonplanar_v_part()
+        pieces = [
+            {
+                "instanceKey": f"S::{index}",
+                "sourceId": "same-v-cut",
+                "length": 984.0,
+                "tubePart": part,
+            }
+            for index in range(4)
+        ]
+        normalized = optimizer_module._normalize_items(
+            pieces,
+            6000.0,
+        )
+        first = optimizer_module._search_single_rod(
+            normalized,
+            allowed_mask=(1 << 0) | (1 << 1),
+            rod_length=6000.0,
+            dead_zone_mm=400.0,
+            gap_mm=2.0,
+            require_all=True,
+        )
+        second = optimizer_module._search_single_rod(
+            normalized,
+            allowed_mask=(1 << 2) | (1 << 3),
+            rod_length=6000.0,
+            dead_zone_mm=400.0,
+            gap_mm=2.0,
+            require_all=True,
+        )
+        merged = optimizer_module._stitch_rod_states(
+            normalized,
+            first,
+            second,
+            6000.0,
+            400.0,
+            2.0,
+        )
+        self.assertIsNotNone(merged)
+        self.assertEqual(merged.used_mask.bit_count(), 4)
+        self.assertLess(merged.used_span, 3600.0)
+
     def test_repeated_nonplanar_v_cuts_choose_interlocking_rotation(self):
         part = make_nonplanar_v_part()
         pieces = [
