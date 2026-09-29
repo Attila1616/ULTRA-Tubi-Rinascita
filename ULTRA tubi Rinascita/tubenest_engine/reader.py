@@ -80,37 +80,8 @@ def _normalized_process_signature(shape_record):
     return digest.hexdigest()
 
 
-def _shape_geometry_source(shape_element, shapes_xml):
-    current = shape_element
-    seen = set()
-    while current is not None:
-        handle = current.get("Handle")
-        if handle in seen:
-            raise FormatError("Cyclic Shape CopyHandle chain")
-        seen.add(handle)
-
-        if any(child.get("GeoAddr") is not None for child in list(current)):
-            return current
-
-        copy_handle = current.get("CopyHandle")
-        if copy_handle is None:
-            return current
-        try:
-            current = shapes_xml.get(int(copy_handle))
-        except (TypeError, ValueError):
-            current = None
-        if current is None:
-            raise FormatError(f"Dangling Shape CopyHandle {copy_handle}")
-    return shape_element
-
-
-def _shape_curves(shape_element, geos, tag, shapes_xml=None):
-    source = (
-        _shape_geometry_source(shape_element, shapes_xml)
-        if shapes_xml is not None
-        else shape_element
-    )
-    element = source.find(tag)
+def _shape_curves(shape_element, geos, tag):
+    element = shape_element.find(tag)
     if element is None or element.get("GeoAddr") is None:
         return None
     record = geos.get(int(element.get("GeoAddr")))
@@ -141,21 +112,11 @@ def _rigid_contour_signature(curves):
     return digest.hexdigest()
 
 
-def _boundary_signature(shape_element, geos, shapes_xml=None):
-    outer = _shape_curves(
-        shape_element,
-        geos,
-        "Geometry",
-        shapes_xml=shapes_xml,
-    )
+def _boundary_signature(shape_element, geos):
+    outer = _shape_curves(shape_element, geos, "Geometry")
     if not outer:
         return None
-    inner = _shape_curves(
-        shape_element,
-        geos,
-        "InnerGeometry",
-        shapes_xml=shapes_xml,
-    )
+    inner = _shape_curves(shape_element, geos, "InnerGeometry")
     digest = hashlib.sha256()
     digest.update((_rigid_contour_signature(outer) or "").encode("ascii"))
     digest.update(b"|")
@@ -296,13 +257,8 @@ def _fit_plane(points):
     return [c, ax, by], residual, angle_axis, angle_perpendicular
 
 
-def _shape_points(shape_element, geos, shapes_xml=None):
-    source = (
-        _shape_geometry_source(shape_element, shapes_xml)
-        if shapes_xml is not None
-        else shape_element
-    )
-    geometry = source.find("Geometry")
+def _shape_points(shape_element, geos):
+    geometry = shape_element.find("Geometry")
     if geometry is None or geometry.get("GeoAddr") is None:
         return [], None, None, []
     addr = int(geometry.get("GeoAddr"))
@@ -383,11 +339,7 @@ def read_zzx(path):
             if channel is not None:
                 layers.add(channel)
 
-            points, geometry_class, geometry_addr, curves = _shape_points(
-                xml_shape,
-                geos,
-                shapes_xml=shapes_xml,
-            )
+            points, geometry_class, geometry_addr, curves = _shape_points(xml_shape, geos)
             start_parameter = curve_start_parameter(shape_record)
             start_point = point_at_composite_parameter(curves, start_parameter)
             points_by_handle[shape_handle] = points
@@ -445,11 +397,7 @@ def read_zzx(path):
                     start_parameter=shape_info.start_parameter if shape_info else None,
                     start_point=shape_info.start_point if shape_info else None,
                     boundary_signature=(
-                        _boundary_signature(
-                            end_xml,
-                            geos,
-                            shapes_xml=shapes_xml,
-                        )
+                        _boundary_signature(end_xml, geos)
                         if end_xml is not None
                         else None
                     ),

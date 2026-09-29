@@ -1389,7 +1389,7 @@ def export_locked_rod_zzx(payload):
         except (TypeError, ValueError):
             gap_mm = 2.0
 
-        result = tubenest_engine.export_nested_rod_to_directory(
+        result = tubenest_engine.export_flat_nested_rod_to_directory(
             segments,
             output_dir,
             tube_type=str((payload or {}).get("tubeType") or "Tube"),
@@ -1404,10 +1404,8 @@ def export_locked_rod_zzx(payload):
             "status": "success",
             **result,
             "safetyNote": (
-                "ZZX multi-segmento sperimentale: import/display TubePro verificati "
-                "per il catalogo geometrie nel primo segmento, ma il comportamento "
-                "dei supporti/pistoni per pezzo non e' ancora verificato sulla macchina. "
-                "Eseguire la normale validazione macchina prima dell'uso."
+                "ZZX generato con rappresentazione single-segment a contorni posizionati. "
+                "Aprirlo e controllarlo in TubePro/TubesT prima di qualsiasi uso macchina."
             ),
         }
     except Exception as exc:
