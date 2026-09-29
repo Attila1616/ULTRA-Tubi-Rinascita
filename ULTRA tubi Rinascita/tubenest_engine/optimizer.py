@@ -1443,6 +1443,105 @@ def _try_merge_rods(
 
     return rods
 
+def _refine_fixed_sequence_poses(
+    items,
+    rod,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Optimize poses for one existing piece order without reordering pieces."""
+    if rod is None or not rod.placed:
+        return rod
+
+    sequence = [placed.item_index for placed in rod.placed]
+    accessible_limit = float(rod_length) - float(dead_zone_mm)
+    states = [RodSearchState()]
+
+    for item_index in sequence:
+        item = items[item_index]
+        next_states = []
+        for state in states:
+            if not state.placed:
+                poses = _first_pose_candidates(item)
+            else:
+                previous = state.placed[-1]
+                previous_item = items[previous.item_index]
+                poses = _next_pose_candidates(
+                    previous_item,
+                    previous.pose,
+                    item,
+                    state.rectangle_family,
+                )
+            for pose in poses:
+                candidate = _append_candidate(
+                    state,
+                    item,
+                    pose,
+                    items,
+                    rod_length=rod_length,
+                    accessible_limit=accessible_limit,
+                    dead_zone_mm=dead_zone_mm,
+                    gap_mm=gap_mm,
+                )
+                if candidate is not None:
+                    next_states.append(candidate)
+
+        if not next_states:
+            return rod
+
+        best_by_pose = {}
+        for state in next_states:
+            last = state.placed[-1]
+            key = (
+                round(
+                    _normalize_angle(
+                        last.pose.axial_rotation_degrees
+                    ),
+                    6,
+                ),
+                bool(last.pose.reversed_end_for_end),
+                state.rectangle_family,
+                bool(state.tail_used),
+            )
+            previous = best_by_pose.get(key)
+            if previous is None or _terminal_score(
+                state,
+                True,
+            ) < _terminal_score(previous, True):
+                best_by_pose[key] = state
+        states = list(best_by_pose.values())
+
+    if not states:
+        return rod
+    best = min(
+        states,
+        key=lambda state: _terminal_score(state, True),
+    )
+    if best.used_mask != rod.used_mask:
+        return rod
+    return best
+
+
+def _refine_rods_fixed_order(
+    items,
+    rods,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    return [
+        _refine_fixed_sequence_poses(
+            items,
+            rod,
+            rod_length,
+            dead_zone_mm,
+            gap_mm,
+        )
+        for rod in rods
+    ]
+
+
 def _refine_rods(
     items,
     rods,
@@ -2233,29 +2332,30 @@ def _optimize_normalized(
         )
 
         stage_started = time.perf_counter()
-        rods = _refine_rods(
-            normalized,
-            rods,
-            rod_length=rod_length,
-            dead_zone_mm=dead_zone_mm,
-            gap_mm=gap_mm,
-            executor=executor,
-            beam_width=(
-                CONTOUR_REFINE_BEAM_WIDTH
-                if large_contour_job
-                else max(DEFAULT_BEAM_WIDTH * 2, 220)
-            ),
-            max_candidate_types=(
-                CONTOUR_REFINE_MAX_CANDIDATE_TYPES
-                if large_contour_job
-                else 40
-            ),
-            utilization_threshold=(
-                CONTOUR_REFINE_UTILIZATION_THRESHOLD
-                if large_contour_job
-                else None
-            ),
-        )
+        if large_contour_job:
+            rods = _refine_rods_fixed_order(
+                normalized,
+                rods,
+                rod_length=rod_length,
+                dead_zone_mm=dead_zone_mm,
+                gap_mm=gap_mm,
+            )
+            _PARALLEL_STATS["refine_strategy"] = (
+                "fixed_order_pose_dynamic_program"
+            )
+        else:
+            rods = _refine_rods(
+                normalized,
+                rods,
+                rod_length=rod_length,
+                dead_zone_mm=dead_zone_mm,
+                gap_mm=gap_mm,
+                executor=executor,
+                beam_width=max(DEFAULT_BEAM_WIDTH * 2, 220),
+                max_candidate_types=40,
+                utilization_threshold=None,
+            )
+            _PARALLEL_STATS["refine_strategy"] = "beam_research"
         _PARALLEL_STATS["refine_seconds"] = (
             time.perf_counter() - stage_started
         )

@@ -92,6 +92,53 @@ def make_nonplanar_v_part(length=984.0, sample_count=360):
 
 
 class GeometryOptimizerTests(unittest.TestCase):
+    def test_fixed_order_pose_refine_recovers_interlock(self):
+        part = make_nonplanar_v_part()
+        pieces = [
+            {
+                "instanceKey": f"R::{index}",
+                "sourceId": "same-v-cut",
+                "length": 984.0,
+                "tubePart": part,
+            }
+            for index in range(4)
+        ]
+        normalized = optimizer_module._normalize_items(
+            pieces,
+            6000.0,
+        )
+
+        # Start from a deliberately non-interlocking all-zero pose sequence.
+        state = optimizer_module.RodSearchState()
+        for item in normalized:
+            candidate = optimizer_module._append_candidate(
+                state,
+                item,
+                optimizer_module.PartPose(),
+                normalized,
+                rod_length=6000.0,
+                accessible_limit=5600.0,
+                dead_zone_mm=400.0,
+                gap_mm=2.0,
+            )
+            self.assertIsNotNone(candidate)
+            state = candidate
+
+        refined = optimizer_module._refine_fixed_sequence_poses(
+            normalized,
+            state,
+            6000.0,
+            400.0,
+            2.0,
+        )
+        self.assertLess(refined.used_span, state.used_span)
+        self.assertLess(refined.used_span, 3600.0)
+        rotations = {
+            round(placed.pose.axial_rotation_degrees) % 360
+            for placed in refined.placed
+        }
+        self.assertTrue({0, 180}.issubset(rotations))
+
     def test_stitch_merge_replays_existing_sequences(self):
         part = make_nonplanar_v_part()
         pieces = [
