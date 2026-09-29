@@ -81,12 +81,20 @@ def coordinate_candidates(curve, axis):
     return sorted(result)
 
 
-def select_round_start(curves, radius, tie_tolerance=1e-7):
+def select_round_start(
+    curves,
+    radius,
+    tie_tolerance=1e-7,
+    stock_origin_tolerance=1e-3,
+):
     """Select the global minimum-Z outer-contour point.
 
     Positioned stock must use nonnegative global Z with +Z toward the
-    retained/chuck side. Perpendicular ties are resolved at local +Y, then by
-    smallest |X|, then deterministically by child index/parameter.
+    retained/chuck side. A very small negative value within
+    stock_origin_tolerance is accepted as reader/spline-extrema normalization
+    residue; larger negative values still indicate a bad stock origin/chuck
+    direction. Perpendicular ties are resolved at local +Y, then by smallest
+    |X|, then deterministically by child index/parameter.
     """
     if not math.isfinite(radius) or radius <= 0:
         raise ValueError("Invalid circle radius")
@@ -110,7 +118,13 @@ def select_round_start(curves, radius, tie_tolerance=1e-7):
         raise ValueError("Empty round cutoff contour")
 
     minimum = min(choice[0] for choice in choices)
-    if minimum < -tie_tolerance:
+    stock_origin_tolerance = float(stock_origin_tolerance)
+    if (
+        not math.isfinite(stock_origin_tolerance)
+        or stock_origin_tolerance < tie_tolerance
+    ):
+        raise ValueError("Invalid stock-origin tolerance")
+    if minimum < -stock_origin_tolerance:
         raise ValueError(
             "Negative stock Z: establish chuck direction/origin before "
             "choosing closest-to-zero release"

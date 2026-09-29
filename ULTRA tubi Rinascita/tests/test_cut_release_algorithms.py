@@ -202,6 +202,39 @@ class CutReleaseAlgorithmTests(unittest.TestCase):
             places=12,
         )
 
+    def test_round_start_allows_sub_micron_negative_origin_residue(self):
+        curves = [
+            Line(
+                (0.0, 25.0, -0.00003401040421),
+                (0.0, 0.0, 1.0),
+            ),
+        ]
+        selected = select_round_start(
+            curves,
+            25.0,
+        )
+        self.assertAlmostEqual(
+            selected["minimum_z"],
+            -0.00003401040421,
+            places=12,
+        )
+
+    def test_round_start_still_rejects_meaningful_negative_stock(self):
+        curves = [
+            Line(
+                (0.0, 25.0, -0.01),
+                (0.0, 0.0, 1.0),
+            ),
+        ]
+        with self.assertRaisesRegex(
+            ValueError,
+            "Negative stock Z",
+        ):
+            select_round_start(
+                curves,
+                25.0,
+            )
+
     def test_perpendicular_round_tie_uses_local_positive_y(self):
         source = APP_ROOT / (
             "Round tube Ø30 L1215, first cut 0° layer 1, "
