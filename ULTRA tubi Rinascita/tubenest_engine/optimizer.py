@@ -1718,13 +1718,17 @@ def _optimize_normalized(
     gap_mm,
 ):
     total_started = time.perf_counter()
-    workers = nesting_cpu_worker_count()
+    configured_workers = nesting_cpu_worker_count()
+    pool_workers = min(
+        configured_workers,
+        max(1, len(normalized)),
+    )
     use_pool = (
-        workers > 1
+        pool_workers > 1
         and len(normalized) >= PARALLEL_MIN_ITEMS
     )
     _PARALLEL_STATS["item_count"] = len(normalized)
-    _PARALLEL_STATS["workers_used"] = workers if use_pool else 1
+    _PARALLEL_STATS["workers_used"] = pool_workers if use_pool else 1
     _PARALLEL_STATS["used_process_pool"] = bool(use_pool)
 
     executor = None
@@ -1732,7 +1736,7 @@ def _optimize_normalized(
         if use_pool:
             _PARALLEL_STATS["pool_runs"] += 1
             executor = ProcessPoolExecutor(
-                max_workers=workers,
+                max_workers=pool_workers,
                 initializer=_init_search_worker,
                 initargs=(
                     normalized,
