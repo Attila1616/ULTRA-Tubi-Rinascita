@@ -251,22 +251,43 @@ class GeometryOptimizerTests(unittest.TestCase):
             optimizer_module._should_use_process_pool(repeated)
         )
 
-    def test_diverse_nonplanar_group_uses_one_shared_cache(self):
-        items = []
-        for index in range(8):
-            part = make_nonplanar_v_part(length=984.0 + index)
-            items.append(
-                optimizer_module.OptimizerItem(
-                    index=index,
-                    instance_key=f"NP::{index}",
-                    source_id=f"NP{index}",
-                    nominal_length=984.0 + index,
-                    tube_part=part,
-                )
+    def test_contour_catalog_precomputes_successes_and_failures(self):
+        items = [
+            optimizer_module.OptimizerItem(
+                index=index,
+                instance_key=f"NP::{index}",
+                source_id=f"NP{index}",
+                nominal_length=984.0 + index,
+                tube_part=make_nonplanar_v_part(length=984.0 + index),
             )
-
-        self.assertFalse(
-            optimizer_module._should_use_process_pool(items)
+            for index in range(3)
+        ]
+        optimizer_module._PAIRWISE_FIT_CACHE.clear()
+        catalog = optimizer_module._precompute_pairwise_catalog(
+            items,
+            2.0,
+        )
+        self.assertTrue(catalog)
+        before = optimizer_module._PAIRWISE_FIT_STATS["misses"]
+        previous = items[0]
+        following = items[1]
+        previous_pose = optimizer_module._first_pose_candidates(previous)[0]
+        next_pose = optimizer_module._next_pose_candidates(
+            previous,
+            previous_pose,
+            following,
+            None,
+        )[0]
+        optimizer_module._cached_pairwise_fit(
+            previous,
+            previous_pose,
+            following,
+            next_pose,
+            2.0,
+        )
+        self.assertEqual(
+            optimizer_module._PAIRWISE_FIT_STATS["misses"],
+            before,
         )
 
     def test_diverse_group_can_use_process_pool_strategy(self):

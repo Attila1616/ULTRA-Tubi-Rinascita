@@ -34,9 +34,11 @@ EXACT_REQUIRE_ALL_MAX_PIECES = 8
 MERGE_PAIR_ATTEMPT_LIMIT = 160
 PARALLEL_MIN_ITEMS = 8
 PARALLEL_MIN_UNIQUE_TYPES = 6
+CONTOUR_MAX_CPU_WORKERS = 12
 MAX_CPU_WORKERS = 24
 
 _PAIRWISE_FIT_CACHE = {}
+_PAIRWISE_FIT_ERROR_TAG = "__FIT_ERROR__"
 _PAIRWISE_FIT_CACHE_LIMIT = 200000
 _PAIRWISE_FIT_STATS = {
     "hits": 0,
@@ -58,6 +60,9 @@ _PARALLEL_STATS = {
     "merge_seconds": 0.0,
     "refine_seconds": 0.0,
     "total_seconds": 0.0,
+    "precompute_seconds": 0.0,
+    "precomputed_transitions": 0,
+    "precomputed_failures": 0,
 }
 
 
@@ -81,6 +86,9 @@ def _reset_parallel_stats():
         merge_seconds=0.0,
         refine_seconds=0.0,
         total_seconds=0.0,
+        precompute_seconds=0.0,
+        precomputed_transitions=0,
+        precomputed_failures=0,
         unique_type_count=0,
         strategy="serial_small_job",
     )
@@ -134,23 +142,41 @@ def _pairwise_fit_key(previous_item, previous_pose, item, pose, gap_mm):
     )
 
 
+def _store_pairwise_cache_value(key, value):
+    if len(_PAIRWISE_FIT_CACHE) >= _PAIRWISE_FIT_CACHE_LIMIT:
+        _PAIRWISE_FIT_CACHE.pop(next(iter(_PAIRWISE_FIT_CACHE)))
+    _PAIRWISE_FIT_CACHE[key] = value
+
+
 def _cached_pairwise_fit(previous_item, previous_pose, item, pose, gap_mm):
     key = _pairwise_fit_key(previous_item, previous_pose, item, pose, gap_mm)
-    cached = _PAIRWISE_FIT_CACHE.get(key)
-    if cached is not None:
+    if key in _PAIRWISE_FIT_CACHE:
         _PAIRWISE_FIT_STATS["hits"] += 1
+        cached = _PAIRWISE_FIT_CACHE[key]
+        if (
+            isinstance(cached, tuple)
+            and cached
+            and cached[0] == _PAIRWISE_FIT_ERROR_TAG
+        ):
+            raise ValueError(cached[1])
         return cached
 
     _PAIRWISE_FIT_STATS["misses"] += 1
-    fit = fit_adjacent_parts(
-        previous_item.tube_part,
-        previous_pose,
-        0.0,
-        item.tube_part,
-        pose,
-        gap_mm=gap_mm,
-        allow_common_line=True,
-    )
+    try:
+        fit = fit_adjacent_parts(
+            previous_item.tube_part,
+            previous_pose,
+            0.0,
+            item.tube_part,
+            pose,
+            gap_mm=gap_mm,
+            allow_common_line=True,
+        )
+    except (ValueError, TypeError) as exc:
+        cached = (_PAIRWISE_FIT_ERROR_TAG, str(exc))
+        _store_pairwise_cache_value(key, cached)
+        raise
+
     cached = (
         float(fit.next_origin),
         float(fit.minimum_clearance_mm),
@@ -158,10 +184,7 @@ def _cached_pairwise_fit(previous_item, previous_pose, item, pose, gap_mm):
         float(fit.slope_delta),
         float(fit.overlap_of_axial_envelopes_mm),
     )
-
-    if len(_PAIRWISE_FIT_CACHE) >= _PAIRWISE_FIT_CACHE_LIMIT:
-        _PAIRWISE_FIT_CACHE.pop(next(iter(_PAIRWISE_FIT_CACHE)))
-    _PAIRWISE_FIT_CACHE[key] = cached
+    _store_pairwise_cache_value(key, cached)
     return cached
 
 
@@ -743,6 +766,76 @@ def _contains_contour_fit_geometry(items):
     return any(_has_contour_fit_geometry(item) for item in items)
 
 
+def _representative_items_by_type(items):
+    representatives = {}
+    for item in items:
+        representatives.setdefault(item.type_key, item)
+    return list(representatives.values())
+
+
+def _precompute_pairwise_catalog(items, gap_mm):
+    """Build every legal type/pose transition once in the parent process."""
+    representatives = _representative_items_by_type(items)
+    catalog_keys = set()
+    failures = 0
+    started = time.perf_counter()
+
+    for previous_item in representatives:
+        for previous_pose in _first_pose_candidates(previous_item):
+            rectangle_family = (
+                _rectangle_family(previous_pose.axial_rotation_degrees)
+                if _profile_kind(previous_item) == "Rect"
+                else None
+            )
+            for item in representatives:
+                poses = _next_pose_candidates(
+                    previous_item,
+                    previous_pose,
+                    item,
+                    rectangle_family,
+                )
+                for pose in poses:
+                    key = _pairwise_fit_key(
+                        previous_item,
+                        previous_pose,
+                        item,
+                        pose,
+                        gap_mm,
+                    )
+                    catalog_keys.add(key)
+                    if key in _PAIRWISE_FIT_CACHE:
+                        continue
+                    try:
+                        _cached_pairwise_fit(
+                            previous_item,
+                            previous_pose,
+                            item,
+                            pose,
+                            gap_mm,
+                        )
+                    except (ValueError, TypeError):
+                        failures += 1
+
+    catalog = {
+        key: _PAIRWISE_FIT_CACHE[key]
+        for key in catalog_keys
+        if key in _PAIRWISE_FIT_CACHE
+    }
+    elapsed = time.perf_counter() - started
+    _PARALLEL_STATS["precompute_seconds"] = elapsed
+    _PARALLEL_STATS["precomputed_transitions"] = len(catalog)
+    _PARALLEL_STATS["precomputed_failures"] = sum(
+        1
+        for value in catalog.values()
+        if (
+            isinstance(value, tuple)
+            and value
+            and value[0] == _PAIRWISE_FIT_ERROR_TAG
+        )
+    )
+    return catalog
+
+
 def _should_use_process_pool(items):
     """Parallelize diverse jobs; keep repeat-heavy jobs in one shared cache.
 
@@ -755,13 +848,6 @@ def _should_use_process_pool(items):
     item_count = len(items)
     unique_types = _unique_type_count(items)
 
-    # Non-planar contour fits are comparatively expensive and the process
-    # workers do not share _PAIRWISE_FIT_CACHE. Keeping these jobs in the
-    # parent process lets initial search, merge and refinement all reuse one
-    # transition catalog instead of recomputing it in 20+ processes.
-    if _contains_contour_fit_geometry(items):
-        return False
-
     return bool(
         workers > 1
         and item_count >= PARALLEL_MIN_ITEMS
@@ -769,15 +855,23 @@ def _should_use_process_pool(items):
     )
 
 
-def _init_search_worker(items, rod_length, dead_zone_mm, gap_mm):
+def _init_search_worker(
+    items,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+    seeded_pairwise_cache=None,
+):
     global _PROCESS_ITEMS
     global _PROCESS_ROD_LENGTH
     global _PROCESS_DEAD_ZONE_MM
     global _PROCESS_GAP_MM
+    global _PAIRWISE_FIT_CACHE
     _PROCESS_ITEMS = items
     _PROCESS_ROD_LENGTH = float(rod_length)
     _PROCESS_DEAD_ZONE_MM = float(dead_zone_mm)
     _PROCESS_GAP_MM = float(gap_mm)
+    _PAIRWISE_FIT_CACHE = dict(seeded_pairwise_cache or {})
 
 
 def _expand_state_worker(task):
@@ -888,7 +982,13 @@ def _parallel_search_masks(
             local_executor = ProcessPoolExecutor(
                 max_workers=min(workers, len(tasks)),
                 initializer=_init_search_worker,
-                initargs=(items, rod_length, dead_zone_mm, gap_mm),
+                initargs=(
+                    items,
+                    rod_length,
+                    dead_zone_mm,
+                    gap_mm,
+                    dict(_PAIRWISE_FIT_CACHE),
+                ),
             )
 
         _PARALLEL_STATS["mask_pool_runs"] += 1
@@ -1002,7 +1102,13 @@ def _search_single_rod_parallel(
             local_executor = ProcessPoolExecutor(
                 max_workers=workers,
                 initializer=_init_search_worker,
-                initargs=(items, rod_length, dead_zone_mm, gap_mm),
+                initargs=(
+                    items,
+                    rod_length,
+                    dead_zone_mm,
+                    gap_mm,
+                    dict(_PAIRWISE_FIT_CACHE),
+                ),
             )
 
         _PARALLEL_STATS["initial_pool_runs"] += 1
@@ -1810,26 +1916,44 @@ def _optimize_normalized(
     total_started = time.perf_counter()
     configured_workers = nesting_cpu_worker_count()
     unique_types = _unique_type_count(normalized)
+    contour_heavy = _contains_contour_fit_geometry(normalized)
+
+    seeded_catalog = None
+    if contour_heavy:
+        seeded_catalog = _precompute_pairwise_catalog(
+            normalized,
+            gap_mm,
+        )
+
+    use_pool = _should_use_process_pool(normalized)
+    worker_cap = (
+        min(configured_workers, CONTOUR_MAX_CPU_WORKERS)
+        if contour_heavy
+        else configured_workers
+    )
     pool_workers = min(
-        configured_workers,
+        worker_cap,
         max(1, len(normalized)),
     )
-    use_pool = _should_use_process_pool(normalized)
     _PARALLEL_STATS["item_count"] = len(normalized)
     _PARALLEL_STATS["unique_type_count"] = unique_types
     _PARALLEL_STATS["workers_used"] = pool_workers if use_pool else 1
     _PARALLEL_STATS["used_process_pool"] = bool(use_pool)
     _PARALLEL_STATS["strategy"] = (
-        "process_pool_diverse_types"
-        if use_pool
+        "precomputed_contour_catalog_process_pool"
+        if contour_heavy and use_pool
         else (
-            "serial_shared_cache_contour_geometry"
-            if _contains_contour_fit_geometry(normalized)
+            "serial_precomputed_contour_catalog"
+            if contour_heavy
             else (
-                "serial_shared_cache_repeated_types"
-                if len(normalized) >= PARALLEL_MIN_ITEMS
-                and unique_types < PARALLEL_MIN_UNIQUE_TYPES
-                else "serial_small_job"
+                "process_pool_diverse_types"
+                if use_pool
+                else (
+                    "serial_shared_cache_repeated_types"
+                    if len(normalized) >= PARALLEL_MIN_ITEMS
+                    and unique_types < PARALLEL_MIN_UNIQUE_TYPES
+                    else "serial_small_job"
+                )
             )
         )
     )
@@ -1846,6 +1970,7 @@ def _optimize_normalized(
                     rod_length,
                     dead_zone_mm,
                     gap_mm,
+                    seeded_catalog or {},
                 ),
             )
 
@@ -1903,6 +2028,7 @@ def optimize_items_dict(
 ):
     _reset_parallel_stats()
     _reset_pairwise_fit_stats()
+    _PAIRWISE_FIT_CACHE.clear()
     normalized = _normalize_items(items, rod_length)
     if not normalized:
         return []

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import numpy as np
 from typing import Optional
 
 
@@ -415,7 +416,10 @@ def _posed_uniform_envelope_arrays(end, pose, length, reverse_transform):
             lo, hi = envelope[source_index]
             lows[global_index] = lo
             highs[global_index] = hi
-    return lows, highs
+    return (
+        np.asarray(lows, dtype=np.float64),
+        np.asarray(highs, dtype=np.float64),
+    )
 
 
 def _posed_envelope_at(end, pose, length, global_angle, reverse_transform):
@@ -485,12 +489,8 @@ def _fit_adjacent_contours(
     ):
         previous_highs = previous_arrays[1]
         next_lows = next_arrays[0]
-        required_relative_origin = target_gap + max(
-            previous_high - next_low
-            for previous_high, next_low in zip(
-                previous_highs,
-                next_lows,
-            )
+        required_relative_origin = target_gap + float(
+            np.max(previous_highs - next_lows)
         )
     else:
         for index in range(sample_count):

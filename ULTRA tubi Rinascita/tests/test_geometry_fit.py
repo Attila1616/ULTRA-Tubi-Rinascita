@@ -191,6 +191,23 @@ class GeometryFitTests(unittest.TestCase):
         self.assertFalse(fit.common_line)
         self.assertEqual(fit.minimum_clearance_mm, 2.0)
 
+    def test_vectorized_contour_arrays_are_numpy(self):
+        import numpy as np
+        from tubenest_engine import fit as fit_module
+
+        part = make_part(length=984.0)
+        part["part_fingerprint"] = "numpy-array-test"
+        part["ends"][0]["perimeter_envelope"] = make_perimeter_envelope(
+            75.0, 75.0
+        )
+        arrays = fit_module._cached_posed_uniform_envelope_arrays(
+            part,
+            PartPose(axial_rotation_degrees=180.0),
+            "start",
+        )
+        self.assertIsInstance(arrays[0], np.ndarray)
+        self.assertIsInstance(arrays[1], np.ndarray)
+
     def test_posed_contour_envelope_cache_reuses_pose(self):
         from tubenest_engine import fit as fit_module
 
