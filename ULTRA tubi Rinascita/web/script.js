@@ -1576,6 +1576,62 @@ function invalidateNestingCache(tubeType = null) {
     nestingErrorByTube.clear();
 }
 
+function nestingInstanceKeySignature(segments) {
+    return (segments || [])
+        .map(segment => String(segment?.instanceKey || ''))
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b))
+        .join('\u001f');
+}
+
+function retainCachedNestingAfterRodLock(tubeType, lockedSegmentKeys, cachedBeforeLock) {
+    if (!cachedBeforeLock || !Array.isArray(cachedBeforeLock.rods)) {
+        return false;
+    }
+
+    const lockedSignature = (lockedSegmentKeys || [])
+        .map(key => String(key || ''))
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b))
+        .join('\u001f');
+    if (!lockedSignature) return false;
+
+    const lockedIndex = cachedBeforeLock.rods.findIndex(rod => (
+        nestingInstanceKeySignature(rod?.segments) === lockedSignature
+    ));
+    if (lockedIndex < 0) return false;
+
+    const remainingRods = cachedBeforeLock.rods.filter(
+        (_rod, index) => index !== lockedIndex
+    );
+    const group = (allTubeData || []).find(item => item.tubeType === tubeType);
+    if (!group) return false;
+
+    const context = buildGroupNestingContext(group);
+    const freeSignature = nestingInstanceKeySignature(context.piecesToNest);
+    const cachedRemainingSignature = nestingInstanceKeySignature(
+        remainingRods.flatMap(rod => rod?.segments || [])
+    );
+
+    // Reuse only when removing the locked rod leaves exactly the currently
+    // free instances. Any quantity/file change forces a fresh calculation.
+    if (freeSignature !== cachedRemainingSignature) {
+        return false;
+    }
+
+    const signature = buildClientNestingSignature(
+        group,
+        context.piecesToNest
+    );
+    nestingResultCache.set(tubeType, {
+        ...cachedBeforeLock,
+        signature,
+        rods: remainingRods
+    });
+    nestingErrorByTube.delete(tubeType);
+    return true;
+}
+
 function buildGroupNestingContext(group) {
     const pieceInstances = buildPieceInstances(group?.pieces || []);
     const lockedForTube = reconcileLockedRodsForTube(group.tubeType, pieceInstances);
@@ -2806,6 +2862,7 @@ function unlockAllLockedRods() {
     const hasLockedRods = Object.values(lockedRods || {}).some(rods => Array.isArray(rods) && rods.length > 0);
     if (!hasLockedRods) return;
     lockedRods = {};
+    invalidateNestingCache();
     saveUiState();
     renderUI();
 }
@@ -2831,6 +2888,8 @@ function lockUnlockedRod(tubeType, segmentKeys) {
         );
         return;
     }
+
+    const cachedBeforeLock = nestingResultCache.get(tubeType);
     const rod = {
         rodId: makeRodId(),
         tubeType,
@@ -2842,11 +2901,27 @@ function lockUnlockedRod(tubeType, segmentKeys) {
     };
     lockedRods[tubeType] = lockedRods[tubeType] || [];
     lockedRods[tubeType].push(rod);
+
+    // Locking an already-calculated rod does not change any of the remaining
+    // placements. Remove that rod from the cached result and re-key the cache
+    // to the smaller free-piece set instead of nesting everything again.
+    if (!retainCachedNestingAfterRodLock(
+        tubeType,
+        segmentKeys,
+        cachedBeforeLock
+    )) {
+        invalidateNestingCache(tubeType);
+    }
+
     saveUiState();
     renderUI();
 }
 function unlockLockedRod(tubeType, rodId) {
+    const before = (lockedRods[tubeType] || []).length;
     lockedRods[tubeType] = (lockedRods[tubeType] || []).filter(rod => rod.rodId !== rodId);
+    if ((lockedRods[tubeType] || []).length !== before) {
+        invalidateNestingCache(tubeType);
+    }
     saveUiState();
     renderUI();
 }
@@ -2940,6 +3015,11 @@ function handleRodDrop(event) {
     if (targetKind === 'unlocked') {
         if (draggedSegment.sourceKind === 'locked') {
             moved = !!removeSegmentFromLockedRod(draggedSegment.tubeType, draggedSegment.sourceRodId, draggedSegment.instanceKey);
+            if (moved) {
+                // This piece has re-entered the free pool, so the previous
+                // remaining-rod solution is no longer the same problem.
+                invalidateNestingCache(draggedSegment.tubeType);
+            }
         }
         clearSegmentDragState();
         if (moved) {
