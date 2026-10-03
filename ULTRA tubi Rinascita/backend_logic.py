@@ -11,6 +11,7 @@ import traceback
 import hashlib
 import math
 import time
+import threading
 import openpyxl
 import importlib.util
 import tube_database
@@ -49,9 +50,13 @@ APP_DATA_PATH = get_app_data_path()
 CONFIG_FILE = runtime_paths.CONFIG_FILE
 UI_STATE_FILE = runtime_paths.UI_STATE_FILE
 HISTORY_FILE = runtime_paths.HISTORY_FILE
+NESTING_CACHE_FILE = runtime_paths.NESTING_CACHE_FILE
 
 _NESTING_GROUP_CACHE = {}
 _NESTING_GROUP_CACHE_LIMIT = 128
+_NESTING_CACHE_VERSION = 1
+_NESTING_GROUP_CACHE_LOADED = False
+_NESTING_CACHE_LOCK = threading.RLock()
 _NESTING_VALIDATION_CACHE = {}
 _NESTING_VALIDATION_CACHE_LIMIT = 4096
 
@@ -114,21 +119,138 @@ def _nesting_group_signature(tube_type, pieces, rod_length, gap_mm, dead_zone_mm
             "partFingerprint": part.get("part_fingerprint") if isinstance(part, dict) else None,
             "sourceSha256": part.get("source_sha256") if isinstance(part, dict) else None,
         })
+
+    # Directory enumeration/UI ordering must not invalidate an otherwise
+    # identical nesting problem after a restart.
+    compact.sort(
+        key=lambda item: (
+            str(item.get("instanceKey") or ""),
+            str(item.get("filePath") or ""),
+            float(item.get("length") or 0.0),
+        )
+    )
+
     payload = {
+        "cacheVersion": _NESTING_CACHE_VERSION,
         "tubeType": tube_type,
         "rodLength": float(rod_length),
         "gapMm": float(gap_mm),
         "deadZoneMm": float(dead_zone_mm),
         "pieces": compact,
     }
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _load_persistent_nesting_cache():
+    global _NESTING_GROUP_CACHE_LOADED
+    with _NESTING_CACHE_LOCK:
+        if _NESTING_GROUP_CACHE_LOADED:
+            return
+        _NESTING_GROUP_CACHE_LOADED = True
+
+        if not os.path.exists(NESTING_CACHE_FILE):
+            return
+
+        try:
+            with open(NESTING_CACHE_FILE, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+
+            if int(payload.get("version", -1)) != _NESTING_CACHE_VERSION:
+                print(
+                    "[TubeNest CACHE] Persistent cache version changed; "
+                    "old entries will be ignored."
+                )
+                return
+
+            entries = payload.get("entries") or []
+            if not isinstance(entries, list):
+                return
+
+            loaded = 0
+            for entry in entries[-_NESTING_GROUP_CACHE_LIMIT:]:
+                if not isinstance(entry, dict):
+                    continue
+                signature = str(entry.get("signature") or "")
+                rods = entry.get("rods")
+                if len(signature) != 64 or not isinstance(rods, list):
+                    continue
+                _NESTING_GROUP_CACHE[signature] = rods
+                loaded += 1
+
+            if loaded:
+                print(
+                    f"[TubeNest CACHE] Loaded {loaded} persistent nesting "
+                    f"entr{'y' if loaded == 1 else 'ies'} from "
+                    f"{NESTING_CACHE_FILE}"
+                )
+        except Exception as exc:
+            # A corrupt cache must never prevent the application from opening.
+            print(
+                "[TubeNest CACHE] Could not load persistent nesting cache: "
+                f"{exc}"
+            )
+
+
+def _save_persistent_nesting_cache():
+    with _NESTING_CACHE_LOCK:
+        directory = os.path.dirname(NESTING_CACHE_FILE)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
+        entries = [
+            {"signature": signature, "rods": rods}
+            for signature, rods in list(
+                _NESTING_GROUP_CACHE.items()
+            )[-_NESTING_GROUP_CACHE_LIMIT:]
+        ]
+        payload = {
+            "version": _NESTING_CACHE_VERSION,
+            "savedAt": datetime.now().isoformat(timespec="seconds"),
+            "entries": entries,
+        }
+
+        temp_path = (
+            f"{NESTING_CACHE_FILE}.tmp-"
+            f"{os.getpid()}-{uuid.uuid4().hex}"
+        )
+        try:
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    payload,
+                    handle,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, NESTING_CACHE_FILE)
+        except Exception as exc:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError:
+                pass
+            print(
+                "[TubeNest CACHE] Could not save persistent nesting cache: "
+                f"{exc}"
+            )
+
+
 def _cache_nesting_group(signature, rods):
-    if len(_NESTING_GROUP_CACHE) >= _NESTING_GROUP_CACHE_LIMIT:
-        _NESTING_GROUP_CACHE.pop(next(iter(_NESTING_GROUP_CACHE)))
-    _NESTING_GROUP_CACHE[signature] = rods
+    _load_persistent_nesting_cache()
+    with _NESTING_CACHE_LOCK:
+        # Refresh insertion order for recently calculated results.
+        _NESTING_GROUP_CACHE.pop(signature, None)
+        while len(_NESTING_GROUP_CACHE) >= _NESTING_GROUP_CACHE_LIMIT:
+            _NESTING_GROUP_CACHE.pop(next(iter(_NESTING_GROUP_CACHE)))
+        _NESTING_GROUP_CACHE[signature] = rods
+        _save_persistent_nesting_cache()
 
 
 def load_config(silent=False):
@@ -1202,6 +1324,8 @@ def nest_piece_groups(groups, rod_length=6000):
             gap_mm = max(0.0, float(config.get("nesting_gap_mm", 2.0)))
         except (TypeError, ValueError):
             gap_mm = 2.0
+
+        _load_persistent_nesting_cache()
 
         result_groups = []
         for group in groups or []:
