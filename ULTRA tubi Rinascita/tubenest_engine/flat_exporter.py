@@ -496,10 +496,281 @@ def _shape_z_bounds(shape_xml, lite_by_addr):
 
 
 MARKING_COLLISION_CLEARANCE_MM = 1.0
+MARKING_END_PLANE_TOLERANCE_MM = 0.05
+MARKING_END_EPSILON_MM = 1e-5
 ROUND_MARKING_ANGLE_STEP_DEG = 15
 ROUND_TIP_MARKING_PLANAR_TOLERANCE_MM = 0.05
 ROUND_TIP_MARKING_MIN_ANGLE_DEG = 0.25
 ROUND_TIP_MARKING_RADIUS_TOLERANCE_MM = 0.1
+
+
+def _shape_geometry_points(shape_xml, lite_by_addr, sample_count=64):
+    points = []
+    sample_count = max(2, int(sample_count))
+    for child in shape_xml:
+        if child.get("GeoAddr") is None:
+            continue
+        record = lite_by_addr.get(int(child.get("GeoAddr")))
+        if record is None:
+            continue
+        for curve in primitives(record):
+            points.extend(curve.sample(sample_count))
+
+    finite = [
+        tuple(map(float, point[:3]))
+        for point in points
+        if len(point) >= 3
+        and all(math.isfinite(float(value)) for value in point[:3])
+    ]
+    return finite
+
+
+def _solve_marking_plane_3x3(matrix, values):
+    augmented = [
+        [float(value) for value in row] + [float(rhs)]
+        for row, rhs in zip(matrix, values)
+    ]
+    for column in range(3):
+        pivot = max(
+            range(column, 3),
+            key=lambda row: abs(augmented[row][column]),
+        )
+        if abs(augmented[pivot][column]) < 1e-12:
+            raise ValueError("Singular marking end-plane fit")
+        augmented[column], augmented[pivot] = (
+            augmented[pivot],
+            augmented[column],
+        )
+        scale = augmented[column][column]
+        for index in range(column, 4):
+            augmented[column][index] /= scale
+        for row in range(3):
+            if row == column:
+                continue
+            factor = augmented[row][column]
+            for index in range(column, 4):
+                augmented[row][index] -= factor * augmented[column][index]
+    return [augmented[index][3] for index in range(3)]
+
+
+def _fit_shape_z_plane(
+    shape_xml,
+    lite_by_addr,
+    *,
+    tolerance=MARKING_END_PLANE_TOLERANCE_MM,
+):
+    points = _shape_geometry_points(shape_xml, lite_by_addr, sample_count=64)
+    if len(points) < 3:
+        return None
+
+    count = float(len(points))
+    sx = sum(point[0] for point in points)
+    sy = sum(point[1] for point in points)
+    sz = sum(point[2] for point in points)
+    sxx = sum(point[0] * point[0] for point in points)
+    syy = sum(point[1] * point[1] for point in points)
+    sxy = sum(point[0] * point[1] for point in points)
+    sxz = sum(point[0] * point[2] for point in points)
+    syz = sum(point[1] * point[2] for point in points)
+    try:
+        c, ax, by = _solve_marking_plane_3x3(
+            [
+                [count, sx, sy],
+                [sx, sxx, sxy],
+                [sy, sxy, syy],
+            ],
+            [sz, sxz, syz],
+        )
+    except ValueError:
+        return None
+
+    residual = max(
+        abs(point[2] - (c + ax * point[0] + by * point[1]))
+        for point in points
+    )
+    if not math.isfinite(residual) or residual > float(tolerance):
+        return None
+    return {
+        "c": float(c),
+        "ax": float(ax),
+        "by": float(by),
+        "residual": float(residual),
+    }
+
+
+def _plane_z_at(plane, x, y):
+    return (
+        float(plane["c"])
+        + float(plane["ax"]) * float(x)
+        + float(plane["by"]) * float(y)
+    )
+
+
+def _candidate_geometry_points(addition):
+    points = []
+    for record in addition.get("geometry_records") or []:
+        for curve in primitives(record):
+            sample_count = 2 if isinstance(curve, Line) else 8
+            points.extend(curve.sample(sample_count))
+    return [
+        tuple(map(float, point[:3]))
+        for point in points
+        if len(point) >= 3
+        and all(math.isfinite(float(value)) for value in point[:3])
+    ]
+
+
+def _marking_start_limits(
+    probe,
+    *,
+    near_plane,
+    far_plane,
+    near_max_z,
+    far_min_z,
+    near_clearance_mm,
+):
+    points = _candidate_geometry_points(probe)
+    if not points:
+        raise MarkingFitError("Generated TEXT marking has no usable 3D points")
+
+    local_min_z = min(point[2] for point in points)
+    local_max_z = max(point[2] for point in points)
+    near_clearance_mm = max(0.0, float(near_clearance_mm))
+
+    if near_plane is not None:
+        earliest_start = max(
+            _plane_z_at(near_plane, point[0], point[1])
+            + float(near_plane["residual"])
+            + near_clearance_mm
+            - point[2]
+            for point in points
+        )
+    else:
+        earliest_start = (
+            float(near_max_z)
+            + near_clearance_mm
+            - local_min_z
+        )
+
+    if far_plane is not None:
+        latest_start = min(
+            _plane_z_at(far_plane, point[0], point[1])
+            - float(far_plane["residual"])
+            - MARKING_END_EPSILON_MM
+            - point[2]
+            for point in points
+        )
+    else:
+        latest_start = (
+            float(far_min_z)
+            - MARKING_END_EPSILON_MM
+            - local_max_z
+        )
+
+    return {
+        "earliest": float(earliest_start),
+        "latest": float(latest_start),
+        "localMinZ": float(local_min_z),
+        "localMaxZ": float(local_max_z),
+    }
+
+
+def _marking_end_clearances(
+    candidate,
+    *,
+    near_plane,
+    far_plane,
+    near_max_z,
+    far_min_z,
+):
+    points = _candidate_geometry_points(candidate)
+    if not points:
+        return None
+
+    if near_plane is not None:
+        near_values = [
+            point[2]
+            - (
+                _plane_z_at(near_plane, point[0], point[1])
+                + float(near_plane["residual"])
+            )
+            for point in points
+        ]
+    else:
+        near_values = [
+            point[2] - float(near_max_z)
+            for point in points
+        ]
+
+    if far_plane is not None:
+        far_values = [
+            (
+                _plane_z_at(far_plane, point[0], point[1])
+                - float(far_plane["residual"])
+            )
+            - point[2]
+            for point in points
+        ]
+    else:
+        far_values = [
+            float(far_min_z) - point[2]
+            for point in points
+        ]
+
+    return {
+        "near": min(near_values),
+        "far": min(far_values),
+    }
+
+
+def _candidate_marking_start_positions_in_range(
+    preferred_start,
+    earliest_start,
+    latest_start,
+    local_min_z,
+    local_max_z,
+    obstacles,
+    *,
+    clearance=MARKING_COLLISION_CLEARANCE_MM,
+):
+    preferred_start = float(preferred_start)
+    earliest_start = float(earliest_start)
+    latest_start = float(latest_start)
+    local_min_z = float(local_min_z)
+    local_max_z = float(local_max_z)
+    clearance = max(0.0, float(clearance))
+    if latest_start < earliest_start - 1e-8:
+        return []
+
+    candidates = {earliest_start, latest_start}
+    if earliest_start - 1e-8 <= preferred_start <= latest_start + 1e-8:
+        candidates.add(preferred_start)
+
+    for obstacle in obstacles:
+        lo_z = float(obstacle["bounds"][0][2])
+        hi_z = float(obstacle["bounds"][1][2])
+        candidates.add(hi_z + clearance - local_min_z)
+        candidates.add(lo_z - clearance - local_max_z)
+
+    valid = sorted(
+        {
+            round(value, 9)
+            for value in candidates
+            if earliest_start - 1e-7 <= value <= latest_start + 1e-7
+        }
+    )
+    if not valid:
+        return []
+
+    preferred_valid = (
+        earliest_start - 1e-8 <= preferred_start <= latest_start + 1e-8
+    )
+    if not preferred_valid:
+        return valid
+
+    later = [value for value in valid if value >= preferred_start - 1e-8]
+    earlier = [value for value in valid if value < preferred_start - 1e-8]
+    return sorted(later) + sorted(earlier, reverse=True)
 
 
 def _shape_xyz_bounds(shape_xml, lite_by_addr):
@@ -641,6 +912,74 @@ def _flat_marking_faces():
     return ("+Y", "+X", "-Y", "-X")
 
 
+_FLAT_MARKING_FACE_VECTORS = {
+    "+Y": (0.0, 1.0),
+    "+X": (1.0, 0.0),
+    "-Y": (0.0, -1.0),
+    "-X": (-1.0, 0.0),
+}
+
+
+def _relative_axial_rotation(item, base_rotation):
+    return (
+        float(item.placement.get("axial_rotation_degrees") or 0.0)
+        - float(base_rotation)
+    )
+
+
+def _normalize_marking_angle(degrees):
+    value = float(degrees) % 360.0
+    if abs(value - 360.0) <= 1e-9 or abs(value) <= 1e-9:
+        return 0.0
+    return value
+
+
+def _posed_flat_marking_faces(item, base_rotation):
+    rotation = _relative_axial_rotation(item, base_rotation)
+    reversed_end = bool(item.placement.get("reversed_end_for_end"))
+    result = []
+    for local_face in _flat_marking_faces():
+        x, y = _FLAT_MARKING_FACE_VECTORS[local_face]
+        if reversed_end:
+            x = -x
+        x, y = _rotate_xy(x, y, rotation)
+        posed_face, alignment = max(
+            (
+                (face, x * vector_xy[0] + y * vector_xy[1])
+                for face, vector_xy in _FLAT_MARKING_FACE_VECTORS.items()
+            ),
+            key=lambda item: item[1],
+        )
+        if alignment < 1.0 - 1e-6:
+            raise FormatError(
+                "Flat-profile TEXT marking requires a quarter-turn axial "
+                f"orientation; got relative rotation {rotation:.6f} degrees"
+            )
+        if posed_face not in [value for _local, value in result]:
+            result.append((local_face, posed_face))
+    return result
+
+
+def _posed_flat_profile_dimensions(item, base_rotation):
+    profile = item.part.profile
+    width = float(profile.outside_width or 0.0)
+    height = float(profile.outside_height or 0.0)
+    if width <= 0.0 or height <= 0.0:
+        raise ValueError("Invalid flat tube dimensions for TEXT marking")
+
+    rotation = _relative_axial_rotation(item, base_rotation) % 180.0
+    distance_zero = min(abs(rotation), abs(rotation - 180.0))
+    distance_ninety = abs(rotation - 90.0)
+    if distance_zero <= 1e-6:
+        return width, height
+    if distance_ninety <= 1e-6:
+        return height, width
+    raise FormatError(
+        "Flat-profile TEXT marking requires a 0/90/180-degree posed profile; "
+        f"got relative rotation {rotation:.6f} degrees"
+    )
+
+
 def _round_marking_angles():
     # Try the four principal orientations first, then fill the full circle
     # at 15-degree increments.
@@ -650,6 +989,24 @@ def _round_marking_angles():
         for angle in range(0, 360, ROUND_MARKING_ANGLE_STEP_DEG)
         if angle not in preferred
     ]
+
+
+def _posed_round_marking_angles(item, base_rotation):
+    rotation = _relative_axial_rotation(item, base_rotation)
+    reversed_end = bool(item.placement.get("reversed_end_for_end"))
+    result = []
+    seen = set()
+    for local_angle in _round_marking_angles():
+        posed_angle = float(local_angle)
+        if reversed_end:
+            posed_angle = -posed_angle
+        posed_angle = _normalize_marking_angle(posed_angle - rotation)
+        key = round(posed_angle, 9)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append((float(local_angle), posed_angle))
+    return result
 
 
 def _posed_part_end(item, side):
@@ -1050,7 +1407,14 @@ def _flat_transform(
                 preferred_start_z = (
                     near_max_z + float(text_marking_offset_mm)
                 )
-                marking_max_z = far_min_z
+                near_plane = _fit_shape_z_plane(
+                    near_xml,
+                    lite_by_addr,
+                )
+                far_plane = _fit_shape_z_plane(
+                    far_xml,
+                    lite_by_addr,
+                )
 
                 source_marking_record = shape_record_by_addr.get(
                     int(near_xml.get("DataAddr"))
@@ -1074,7 +1438,31 @@ def _flat_transform(
                 collision_attempts = []
                 selected_layout_index = None
                 selected_spatial_position = None
+                selected_local_surface_position = None
                 selected_start_z = None
+                selected_start_limits = None
+                selected_end_clearances = None
+
+                if marking_profile_kind in {"Square", "Rect"}:
+                    posed_width, posed_height = _posed_flat_profile_dimensions(
+                        item,
+                        base_rotation,
+                    )
+                    posed_corner_radius = float(
+                        item.part.profile.corner_radius or 0.0
+                    )
+                    spatial_positions = _posed_flat_marking_faces(
+                        item,
+                        base_rotation,
+                    )
+                else:
+                    posed_width = None
+                    posed_height = None
+                    posed_corner_radius = None
+                    spatial_positions = _posed_round_marking_angles(
+                        item,
+                        base_rotation,
+                    )
 
                 for layout_index, layout_lines in enumerate(layouts):
                     prepared_layout = layout_text_strokes(
@@ -1082,33 +1470,72 @@ def _flat_transform(
                         layout_lines,
                         text_marking_height_mm,
                     )
-                    axial_width = float(
-                        prepared_layout[1].get(
-                            "visible_axial_width_mm",
-                            0.0,
-                        )
-                    )
-                    start_positions = _candidate_marking_start_positions(
-                        preferred_start_z,
-                        marking_max_z,
-                        axial_width,
-                        obstacles,
-                    )
-                    if not start_positions:
-                        fit_errors.append(
-                            f"layout {layout_index + 1}: axial width "
-                            f"{axial_width:.3f} mm does not fit"
-                        )
-                        continue
 
-                    spatial_positions = (
-                        _flat_marking_faces()
-                        if marking_profile_kind in {"Square", "Rect"}
-                        else _round_marking_angles()
-                    )
+                    for local_surface_position, spatial_position in spatial_positions:
+                        try:
+                            if marking_profile_kind in {"Square", "Rect"}:
+                                probe = build_marking_records(
+                                    source_shape_record=source_marking_record,
+                                    font_path=text_marking_font_path,
+                                    lines=layout_lines,
+                                    height_mm=text_marking_height_mm,
+                                    start_z=0.0,
+                                    outside_width=posed_width,
+                                    outside_height=posed_height,
+                                    corner_radius=posed_corner_radius,
+                                    max_z=1e12,
+                                    first_handle=next_marking_handle,
+                                    face=spatial_position,
+                                    prepared_layout=prepared_layout,
+                                )
+                            else:
+                                probe = build_round_marking_records(
+                                    source_shape_record=source_marking_record,
+                                    font_path=text_marking_font_path,
+                                    lines=layout_lines,
+                                    height_mm=text_marking_height_mm,
+                                    start_z=0.0,
+                                    radius=marking_radius,
+                                    max_z=1e12,
+                                    first_handle=next_marking_handle,
+                                    circumferential_center_deg=spatial_position,
+                                    prepared_layout=prepared_layout,
+                                )
 
-                    for candidate_start_z in start_positions:
-                        for spatial_position in spatial_positions:
+                            start_limits = _marking_start_limits(
+                                probe,
+                                near_plane=near_plane,
+                                far_plane=far_plane,
+                                near_max_z=near_max_z,
+                                far_min_z=far_min_z,
+                                near_clearance_mm=text_marking_offset_mm,
+                            )
+                        except MarkingFitError as exc:
+                            message = (
+                                f"layout {layout_index + 1}, "
+                                f"position {spatial_position}: {exc}"
+                            )
+                            if message not in fit_errors:
+                                fit_errors.append(message)
+                            continue
+
+                        start_positions = _candidate_marking_start_positions_in_range(
+                            preferred_start_z,
+                            start_limits["earliest"],
+                            start_limits["latest"],
+                            start_limits["localMinZ"],
+                            start_limits["localMaxZ"],
+                            obstacles,
+                        )
+                        if not start_positions:
+                            fit_errors.append(
+                                f"layout {layout_index + 1}, "
+                                f"position {spatial_position}: surface-aware "
+                                "axial range is too short"
+                            )
+                            continue
+
+                        for candidate_start_z in start_positions:
                             try:
                                 if marking_profile_kind in {"Square", "Rect"}:
                                     candidate = build_marking_records(
@@ -1117,10 +1544,10 @@ def _flat_transform(
                                         lines=layout_lines,
                                         height_mm=text_marking_height_mm,
                                         start_z=candidate_start_z,
-                                        outside_width=marking_outside_width,
-                                        outside_height=marking_outside_height,
-                                        corner_radius=marking_corner_radius,
-                                        max_z=marking_max_z,
+                                        outside_width=posed_width,
+                                        outside_height=posed_height,
+                                        corner_radius=posed_corner_radius,
+                                        max_z=1e12,
                                         first_handle=next_marking_handle,
                                         face=spatial_position,
                                         prepared_layout=prepared_layout,
@@ -1133,7 +1560,7 @@ def _flat_transform(
                                         height_mm=text_marking_height_mm,
                                         start_z=candidate_start_z,
                                         radius=marking_radius,
-                                        max_z=marking_max_z,
+                                        max_z=1e12,
                                         first_handle=next_marking_handle,
                                         circumferential_center_deg=spatial_position,
                                         prepared_layout=prepared_layout,
@@ -1148,6 +1575,29 @@ def _flat_transform(
                                     fit_errors.append(message)
                                 continue
 
+                            end_clearances = _marking_end_clearances(
+                                candidate,
+                                near_plane=near_plane,
+                                far_plane=far_plane,
+                                near_max_z=near_max_z,
+                                far_min_z=far_min_z,
+                            )
+                            if (
+                                end_clearances is None
+                                or end_clearances["near"]
+                                < float(text_marking_offset_mm)
+                                - MARKING_END_EPSILON_MM
+                                or end_clearances["far"]
+                                < -MARKING_END_EPSILON_MM
+                            ):
+                                fit_errors.append(
+                                    f"layout {layout_index + 1}, "
+                                    f"position {spatial_position}, "
+                                    f"Z {candidate_start_z:.3f}: marking "
+                                    "crosses an end-cut boundary"
+                                )
+                                continue
+
                             colliding = _colliding_obstacle_handles(
                                 candidate["report"]["geometry_3d_bounds"],
                                 obstacles,
@@ -1157,6 +1607,7 @@ def _flat_transform(
                                     {
                                         "layout": layout_index + 1,
                                         "position": spatial_position,
+                                        "localPosition": local_surface_position,
                                         "startZ": candidate_start_z,
                                         "shapeHandles": colliding,
                                     }
@@ -1166,7 +1617,12 @@ def _flat_transform(
                             addition = candidate
                             selected_layout_index = layout_index
                             selected_spatial_position = spatial_position
+                            selected_local_surface_position = (
+                                local_surface_position
+                            )
                             selected_start_z = candidate_start_z
+                            selected_start_limits = start_limits
+                            selected_end_clearances = end_clearances
                             break
 
                         if addition is not None:
@@ -1202,6 +1658,8 @@ def _flat_transform(
                             "obstacleCount": len(obstacles),
                             "nearCutZBounds": [near_min_z, near_max_z],
                             "farCutZBounds": [far_min_z, far_max_z],
+                            "nearEndPlaneAware": near_plane is not None,
+                            "farEndPlaneAware": far_plane is not None,
                         }
                     )
                 else:
@@ -1239,6 +1697,13 @@ def _flat_transform(
                         )
 
                     report = dict(addition["report"])
+                    geometry_bounds = report["geometry_3d_bounds"]
+                    tip_region_used = (
+                        float(geometry_bounds[0][2])
+                        < preferred_start_z - MARKING_END_EPSILON_MM
+                        or float(geometry_bounds[1][2])
+                        > far_min_z + MARKING_END_EPSILON_MM
+                    )
                     report.update(
                         {
                             "status": "generated",
@@ -1249,11 +1714,27 @@ def _flat_transform(
                             "layoutAttempt": selected_layout_index + 1,
                             "fallbackUsed": bool(selected_layout_index),
                             "selectedSurfacePosition": selected_spatial_position,
+                            "selectedLocalSurfacePosition": (
+                                selected_local_surface_position
+                            ),
                             "selectedStartZ": selected_start_z,
                             "preferredStartZ": preferred_start_z,
                             "shiftedAxially": (
                                 abs(selected_start_z - preferred_start_z) > 1e-6
                             ),
+                            "tipRegionUsed": tip_region_used,
+                            "surfaceAwareStartRange": [
+                                selected_start_limits["earliest"],
+                                selected_start_limits["latest"],
+                            ],
+                            "nearEndClearanceMm": (
+                                selected_end_clearances["near"]
+                            ),
+                            "farEndClearanceMm": (
+                                selected_end_clearances["far"]
+                            ),
+                            "nearEndPlaneAware": near_plane is not None,
+                            "farEndPlaneAware": far_plane is not None,
                             "obstacleCount": len(obstacles),
                             "collisionAttemptsBeforeSuccess": collision_attempts,
                             "fitErrorsBeforeSuccess": fit_errors,
@@ -1262,6 +1743,7 @@ def _flat_transform(
                         }
                     )
                     marking_reports.append(report)
+
 
         if (
             round_tip_marking_enabled

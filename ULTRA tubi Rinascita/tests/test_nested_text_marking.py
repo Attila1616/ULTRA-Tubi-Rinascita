@@ -13,6 +13,7 @@ from tubenest_engine.flat_exporter import (
     _bounds_overlap,
     _candidate_marking_start_positions,
     _flat_marking_faces,
+    _posed_round_marking_angles,
     _round_marking_angles,
     export_flat_nested_rod,
 )
@@ -436,6 +437,191 @@ class NestedTextMarkingTests(unittest.TestCase):
                             places=8,
                         )
 
+
+    def test_round_text_can_use_material_inside_angled_tip_envelope(self):
+        source = APP_ROOT / (
+            "Round tube Ø30 L1215, first cut 0° layer 1, "
+            "second cut 45° layer 4.zzx"
+        )
+        part = read_tube_parts(source)[0]
+        self.assertEqual(part.profile.kind, "Circle")
+
+        angled_end = max(
+            part.ends,
+            key=lambda end: abs(end.angle_from_perpendicular_degrees or 0.0),
+        )
+        spread = (
+            float(angled_end.sampled_bounds[1][2])
+            - float(angled_end.sampled_bounds[0][2])
+        )
+        self.assertGreater(spread, 1.0)
+
+        length = float(part.overall_length)
+        # Reverse the part so the angled cut is the incoming/near end.
+        original_a = part.ends[0]
+        original_b = part.ends[1]
+        near_max = length - float(original_b.sampled_bounds[0][2])
+        far_min = length - float(original_a.sampled_bounds[1][2])
+        conservative_width = far_min - (near_max + 5.0)
+        self.assertGreater(conservative_width, 10.0)
+        requested_width = conservative_width + min(5.0, spread / 4.0)
+
+        placements = [
+            {
+                "instanceKey": "round-tip-text::1",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "markingText": "TIP TEXT",
+                "nestPlacement": {
+                    "z_start": 0.0,
+                    "z_end": length,
+                    "axial_rotation_degrees": 0.0,
+                    "reversed_end_for_end": True,
+                    "common_line_before": False,
+                },
+            }
+        ]
+
+        def fake_decode(_font, _text, _height):
+            strokes = [
+                [(0.0, -1.0), (requested_width, -1.0)],
+                [(0.0, 1.0), (requested_width, 1.0)],
+            ]
+            return strokes, {
+                "font_sha256": "test",
+                "font_name": "ROMANS",
+                "cap_height_units": 21,
+                "decoded_characters": list("TIP TEXT"),
+                "glyph_advances_mm": [],
+                "validated_shape_numbers": [],
+                "opcodes": ["vector"],
+                "text_bounds_2d_mm": [
+                    [0.0, -1.0],
+                    [requested_width, 1.0],
+                ],
+                "glyph_line_primitives": 2,
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch(
+                "tubenest_engine.flat_exporter.validate_romans_font",
+                return_value="test",
+            ), patch(
+                "tubenest_engine.text_marking.decode_strokes",
+                side_effect=fake_decode,
+            ):
+                result = export_flat_nested_rod(
+                    placements,
+                    Path(temp_dir) / "tip_text.zzx",
+                    text_marking_enabled=True,
+                    text_marking_height_mm=5.0,
+                    text_marking_font_path="dummy.shx",
+                )
+
+        report = result["textMarkings"][0]
+        self.assertEqual(report["status"], "generated")
+        self.assertTrue(report["nearEndPlaneAware"])
+        self.assertTrue(report["tipRegionUsed"])
+        self.assertLess(
+            report["selectedStartZ"],
+            report["preferredStartZ"],
+        )
+        self.assertGreaterEqual(report["nearEndClearanceMm"], 5.0 - 1e-4)
+        self.assertGreaterEqual(report["farEndClearanceMm"], -1e-4)
+
+    def test_round_text_surface_follows_axial_rotation_and_flip(self):
+        source = APP_ROOT / (
+            "Round tube Ø30 L1215, first cut 0° layer 1, "
+            "second cut 45° layer 4.zzx"
+        )
+        part = read_tube_parts(source)[0]
+        length = float(part.overall_length)
+        placements = [
+            {
+                "instanceKey": "round-orientation::1",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "markingText": "TEST",
+                "nestPlacement": {
+                    "z_start": 0.0,
+                    "z_end": length,
+                    "axial_rotation_degrees": 0.0,
+                    "reversed_end_for_end": False,
+                    "common_line_before": False,
+                },
+            },
+            {
+                "instanceKey": "round-orientation::2",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "markingText": "TEST",
+                "nestPlacement": {
+                    "z_start": length + 50.0,
+                    "z_end": length * 2.0 + 50.0,
+                    "axial_rotation_degrees": 90.0,
+                    "reversed_end_for_end": True,
+                    "common_line_before": False,
+                },
+            },
+        ]
+
+        fake_strokes = [
+            [(0.0, -1.0), (10.0, -1.0)],
+            [(0.0, 1.0), (10.0, 1.0)],
+        ]
+        fake_report = {
+            "font_sha256": "test",
+            "font_name": "ROMANS",
+            "cap_height_units": 21,
+            "decoded_characters": list("TEST"),
+            "glyph_advances_mm": [],
+            "validated_shape_numbers": [],
+            "opcodes": ["vector"],
+            "text_bounds_2d_mm": [[0.0, -1.0], [10.0, 1.0]],
+            "glyph_line_primitives": 2,
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch(
+                "tubenest_engine.flat_exporter.validate_romans_font",
+                return_value="test",
+            ), patch(
+                "tubenest_engine.text_marking.decode_strokes",
+                return_value=(fake_strokes, fake_report),
+            ):
+                result = export_flat_nested_rod(
+                    placements,
+                    Path(temp_dir) / "rotated_text.zzx",
+                    text_marking_enabled=True,
+                    text_marking_height_mm=5.0,
+                    text_marking_font_path="dummy.shx",
+                )
+
+        reports = result["textMarkings"]
+        self.assertEqual(len(reports), 2)
+        self.assertTrue(all(report["status"] == "generated" for report in reports))
+        self.assertEqual(reports[0]["selectedLocalSurfacePosition"], 0.0)
+        self.assertEqual(reports[1]["selectedLocalSurfacePosition"], 0.0)
+        self.assertAlmostEqual(reports[0]["selectedSurfacePosition"], 0.0, places=6)
+        self.assertAlmostEqual(reports[1]["selectedSurfacePosition"], 270.0, places=6)
+
+        posed = _posed_round_marking_angles(
+            type(
+                "Item",
+                (),
+                {
+                    "placement": {
+                        "axial_rotation_degrees": 90.0,
+                        "reversed_end_for_end": True,
+                    }
+                },
+            )(),
+            0.0,
+        )
+        self.assertEqual(posed[0], (0.0, 270.0))
 
     def test_round_angled_planar_tip_gets_axial_centerline_mark(self):
         source = APP_ROOT / (
