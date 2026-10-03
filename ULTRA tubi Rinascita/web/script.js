@@ -681,11 +681,11 @@ async function initialize() {
         dbCollapsedRipiani = uiPreferences.databaseCollapsedRipiani;
         dbCollapsedLocations = uiPreferences.databaseCollapsedLocations;
         lockedRods = sanitizeLockedRods(savedState.lockedRods || {});
+        restoreNestingResultCache(savedState.nestingResultCache || {});
 
-        // Main nesting groups always start collapsed. No optimizer work runs
-        // until the user explicitly opens a tube group.
+        // Main nesting groups always start collapsed. Cached rods are retained
+        // across restarts but no optimizer work runs until a group is opened.
         expandedState = {};
-        invalidateNestingCache();
 
         const configResponse = await window.pywebview.api.get_config_settings();
         if (configResponse?.status === 'success') {
@@ -724,11 +724,14 @@ async function loadTubeData() {
             throw new Error("Received null or undefined data from backend. Check the Python console for a traceback.");
         }
         allTubeData = data;
-        invalidateNestingCache();
+        const nestingCacheChanged = pruneNestingCacheAgainstCurrentData();
         unmatchedIgsFiles = await window.pywebview.api.get_unmatched_igs_files();
         zzxValidationIssues = await window.pywebview.api.get_zzx_validation_issues();
         console.log("Received fresh data from backend:", allTubeData);
         await renderUI();
+        if (nestingCacheChanged) {
+            await saveUiState();
+        }
         showIgsWarningAlertIfNeeded();
         showZzxWarningAlertIfNeeded();
     } catch (e) {
@@ -1556,11 +1559,76 @@ async function selectFolderAndReload() {
         console.error(e);
     }
 }
+function serializeNestingResultCache() {
+    const serialized = {};
+    nestingResultCache.forEach((entry, tubeType) => {
+        if (
+            !entry
+            || typeof entry.signature !== 'string'
+            || !Array.isArray(entry.rods)
+        ) return;
+        serialized[tubeType] = {
+            signature: entry.signature,
+            rods: entry.rods,
+            backendCacheHit: !!entry.backendCacheHit
+        };
+    });
+    return serialized;
+}
+
+function restoreNestingResultCache(raw) {
+    nestingResultCache = new Map();
+    Object.entries(raw || {}).forEach(([tubeType, entry]) => {
+        if (
+            !entry
+            || typeof entry.signature !== 'string'
+            || !Array.isArray(entry.rods)
+        ) return;
+        nestingResultCache.set(tubeType, {
+            signature: entry.signature,
+            rods: entry.rods,
+            backendCacheHit: !!entry.backendCacheHit
+        });
+    });
+}
+
+function pruneNestingCacheAgainstCurrentData() {
+    const groupsByType = new Map(
+        (allTubeData || []).map(group => [group.tubeType, group])
+    );
+    let changed = false;
+
+    Array.from(nestingResultCache.entries()).forEach(
+        ([tubeType, cached]) => {
+            const group = groupsByType.get(tubeType);
+            if (!group) {
+                nestingResultCache.delete(tubeType);
+                nestingErrorByTube.delete(tubeType);
+                changed = true;
+                return;
+            }
+
+            const context = buildGroupNestingContext(group);
+            const signature = buildClientNestingSignature(
+                group,
+                context.piecesToNest
+            );
+            if (cached.signature !== signature) {
+                nestingResultCache.delete(tubeType);
+                nestingErrorByTube.delete(tubeType);
+                changed = true;
+            }
+        }
+    );
+    return changed;
+}
+
 async function saveUiState() {
     await window.pywebview.api.save_ui_state({
         daFareOverrides: daFareOverrides,
         uiPreferences: uiPreferences,
-        lockedRods: lockedRods
+        lockedRods: lockedRods,
+        nestingResultCache: serializeNestingResultCache()
     });
 }
 
@@ -1718,6 +1786,7 @@ async function ensureGroupNesting(tubeType) {
                     rods: result.rods || [],
                     backendCacheHit: !!result.cacheHit
                 });
+                await saveUiState();
             } else {
                 console.warn(
                     '[TubeNest UI] completed result discarded because the nesting input changed',
