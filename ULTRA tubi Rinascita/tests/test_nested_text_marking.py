@@ -615,6 +615,15 @@ class NestedTextMarkingTests(unittest.TestCase):
         self.assertEqual(reports[0]["textAxialDirection"], 1)
         self.assertEqual(reports[1]["markingAnchorEnd"], "far")
         self.assertEqual(reports[1]["textAxialDirection"], -1)
+        self.assertAlmostEqual(
+            reports[1]["requiredFarEndClearanceMm"],
+            5.0,
+            places=6,
+        )
+        self.assertGreaterEqual(
+            reports[1]["farEndClearanceMm"],
+            5.0 - 1e-4,
+        )
 
         second_piece_start = length + 50.0
         second_piece_far = second_piece_start + length

@@ -628,6 +628,7 @@ def _marking_start_limits(
     near_max_z,
     far_min_z,
     near_clearance_mm,
+    far_clearance_mm=0.0,
 ):
     points = _candidate_geometry_points(probe)
     if not points:
@@ -636,6 +637,7 @@ def _marking_start_limits(
     local_min_z = min(point[2] for point in points)
     local_max_z = max(point[2] for point in points)
     near_clearance_mm = max(0.0, float(near_clearance_mm))
+    far_clearance_mm = max(0.0, float(far_clearance_mm))
 
     if near_plane is not None:
         earliest_start = max(
@@ -656,6 +658,7 @@ def _marking_start_limits(
         latest_start = min(
             _plane_z_at(far_plane, point[0], point[1])
             - float(far_plane["residual"])
+            - far_clearance_mm
             - MARKING_END_EPSILON_MM
             - point[2]
             for point in points
@@ -663,6 +666,7 @@ def _marking_start_limits(
     else:
         latest_start = (
             float(far_min_z)
+            - far_clearance_mm
             - MARKING_END_EPSILON_MM
             - local_max_z
         )
@@ -1514,13 +1518,24 @@ def _flat_transform(
                                     axial_direction=marking_axial_direction,
                                 )
 
+                            required_near_clearance = (
+                                float(text_marking_offset_mm)
+                                if marking_anchor_side == "near"
+                                else 0.0
+                            )
+                            required_far_clearance = (
+                                float(text_marking_offset_mm)
+                                if marking_anchor_side == "far"
+                                else 0.0
+                            )
                             start_limits = _marking_start_limits(
                                 probe,
                                 near_plane=near_plane,
                                 far_plane=far_plane,
                                 near_max_z=near_max_z,
                                 far_min_z=far_min_z,
-                                near_clearance_mm=text_marking_offset_mm,
+                                near_clearance_mm=required_near_clearance,
+                                far_clearance_mm=required_far_clearance,
                             )
                             if marking_anchor_side == "near":
                                 preferred_start_z = (
@@ -1609,10 +1624,11 @@ def _flat_transform(
                             if (
                                 end_clearances is None
                                 or end_clearances["near"]
-                                < float(text_marking_offset_mm)
+                                < required_near_clearance
                                 - MARKING_END_EPSILON_MM
                                 or end_clearances["far"]
-                                < -MARKING_END_EPSILON_MM
+                                < required_far_clearance
+                                - MARKING_END_EPSILON_MM
                             ):
                                 fit_errors.append(
                                     f"layout {layout_index + 1}, "
@@ -1764,6 +1780,16 @@ def _flat_transform(
                             ),
                             "farEndClearanceMm": (
                                 selected_end_clearances["far"]
+                            ),
+                            "requiredNearEndClearanceMm": (
+                                float(text_marking_offset_mm)
+                                if marking_anchor_side == "near"
+                                else 0.0
+                            ),
+                            "requiredFarEndClearanceMm": (
+                                float(text_marking_offset_mm)
+                                if marking_anchor_side == "far"
+                                else 0.0
                             ),
                             "nearEndPlaneAware": near_plane is not None,
                             "farEndPlaneAware": far_plane is not None,
