@@ -415,6 +415,10 @@ async function openSettingsModal() {
         document.getElementById('settings-nested-text-marking-height-mm').value = Number.isFinite(Number(config.nested_text_marking_height_mm))
             ? Math.min(10, Math.max(1, Number(config.nested_text_marking_height_mm)))
             : 5;
+        document.getElementById('settings-round-tip-marking-enabled').checked = config.nested_round_tip_marking_enabled !== false;
+        document.getElementById('settings-round-tip-marking-length-mm').value = Number.isFinite(Number(config.nested_round_tip_marking_length_mm))
+            ? Math.min(100, Math.max(1, Number(config.nested_round_tip_marking_length_mm)))
+            : 20;
         document.getElementById('settings-order-include-low-priority').checked = config.order_include_low_priority !== false;
         settingsIgnoredFolders = Array.isArray(config.ignore_folders) ? [...config.ignore_folders] : [];
         settingsIgnoreInput.value = '';
@@ -534,6 +538,14 @@ async function saveSettings() {
                 Math.max(
                     1,
                     Number(document.getElementById('settings-nested-text-marking-height-mm').value) || 5
+                )
+            ),
+            nested_round_tip_marking_enabled: document.getElementById('settings-round-tip-marking-enabled').checked,
+            nested_round_tip_marking_length_mm: Math.min(
+                100,
+                Math.max(
+                    1,
+                    Number(document.getElementById('settings-round-tip-marking-length-mm').value) || 20
                 )
             ),
         };

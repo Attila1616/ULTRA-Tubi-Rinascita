@@ -51,6 +51,8 @@ class Api:
         self.config.setdefault("nesting_debug_enabled", True)
         self.config.setdefault("nested_text_marking_enabled", False)
         self.config.setdefault("nested_text_marking_height_mm", 5.0)
+        self.config.setdefault("nested_round_tip_marking_enabled", True)
+        self.config.setdefault("nested_round_tip_marking_length_mm", 20.0)
         return {"status": "success", "config": self.config}
 
     def save_config_settings(self, payload):
@@ -102,6 +104,31 @@ class Api:
             )
         except (TypeError, ValueError):
             updated["nested_text_marking_height_mm"] = 5.0
+
+        updated["nested_round_tip_marking_enabled"] = bool(
+            payload.get(
+                "nested_round_tip_marking_enabled",
+                updated.get("nested_round_tip_marking_enabled", True),
+            )
+        )
+        try:
+            updated["nested_round_tip_marking_length_mm"] = min(
+                100.0,
+                max(
+                    1.0,
+                    float(
+                        payload.get(
+                            "nested_round_tip_marking_length_mm",
+                            updated.get(
+                                "nested_round_tip_marking_length_mm",
+                                20.0,
+                            ),
+                        )
+                    ),
+                ),
+            )
+        except (TypeError, ValueError):
+            updated["nested_round_tip_marking_length_mm"] = 20.0
 
         updated["nesting_debug_enabled"] = bool(
             payload.get("nesting_debug_enabled", updated.get("nesting_debug_enabled", True))

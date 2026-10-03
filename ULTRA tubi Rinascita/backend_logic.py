@@ -1603,6 +1603,20 @@ def export_locked_rod_zzx(payload):
             max(1.0, text_marking_height_mm),
         )
 
+        round_tip_marking_enabled = bool(
+            config.get("nested_round_tip_marking_enabled", True)
+        )
+        try:
+            round_tip_marking_length_mm = float(
+                config.get("nested_round_tip_marking_length_mm", 20.0)
+            )
+        except (TypeError, ValueError):
+            round_tip_marking_length_mm = 20.0
+        round_tip_marking_length_mm = min(
+            100.0,
+            max(1.0, round_tip_marking_length_mm),
+        )
+
         text_marking_font_path = None
         if text_marking_enabled:
             text_marking_font_path = _resolve_nested_marking_font_path()
@@ -1636,6 +1650,8 @@ def export_locked_rod_zzx(payload):
             text_marking_enabled=text_marking_enabled,
             text_marking_height_mm=text_marking_height_mm,
             text_marking_font_path=text_marking_font_path,
+            round_tip_marking_enabled=round_tip_marking_enabled,
+            round_tip_marking_length_mm=round_tip_marking_length_mm,
         )
         return {
             "status": "success",

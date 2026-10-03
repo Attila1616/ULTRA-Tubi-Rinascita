@@ -795,3 +795,88 @@ def build_round_marking_records(
     )
     result["report"] = report
     return result
+
+
+
+def build_round_tip_line_records(
+    *,
+    source_shape_record,
+    radius,
+    circumferential_angle_deg,
+    tip_z,
+    length_mm,
+    inward_direction,
+    first_handle,
+):
+    """Build one channel-4 axial reference line on a round tube surface.
+
+    The line starts exactly at an angled-cut projecting tip and extends inward
+    along the tube axis while staying at the same circumferential position.
+    """
+    radius = float(radius)
+    angle_deg = float(circumferential_angle_deg)
+    tip_z = float(tip_z)
+    length_mm = float(length_mm)
+    inward_direction = float(inward_direction)
+
+    if not all(
+        math.isfinite(value)
+        for value in (
+            radius,
+            angle_deg,
+            tip_z,
+            length_mm,
+            inward_direction,
+        )
+    ):
+        raise ValueError("Nonfinite round tip marking parameter")
+    if radius <= 0.0:
+        raise ValueError("Round tube outside radius must be positive")
+    if length_mm <= 0.0:
+        raise ValueError("Round tip marking length must be positive")
+    if inward_direction not in (-1.0, 1.0):
+        raise ValueError("Round tip marking direction must be -1 or +1")
+
+    theta = math.radians(angle_deg)
+    x = radius * math.sin(theta)
+    y = radius * math.cos(theta)
+    inner_z = tip_z + inward_direction * length_mm
+    path = [(x, y, tip_z), (x, y, inner_z)]
+
+    result = _build_shape_records(
+        source_shape_record=source_shape_record,
+        paths=[path],
+        first_handle=first_handle,
+        curve_flags=ROUND_CURVE_FLAGS,
+        planar_normal=(0.0, 0.0, 0.0),
+    )
+    result["report"] = {
+        "profile_kind": "Circle",
+        "marking_kind": "angled_planar_tip_centerline",
+        "marking_shapes": 1,
+        "new_shape_handles": [
+            int(element.get("Handle"))
+            for element, _geometry in result["shape_elements"]
+        ],
+        "new_shape_channels": [MARKING_CHANNEL],
+        "curve_flags": ROUND_CURVE_FLAGS,
+        "planar_normal": [0.0, 0.0, 0.0],
+        "outside_radius_mm": radius,
+        "circumferential_angle_deg": angle_deg,
+        "tip_z_mm": tip_z,
+        "inner_z_mm": inner_z,
+        "length_mm": length_mm,
+        "inward_direction": int(inward_direction),
+        "geometry_3d_bounds": [
+            [
+                min(path[0][axis], path[1][axis])
+                for axis in range(3)
+            ],
+            [
+                max(path[0][axis], path[1][axis])
+                for axis in range(3)
+            ],
+        ],
+        "representation": "channel-4 axial Line3D on outside cylinder",
+    }
+    return result

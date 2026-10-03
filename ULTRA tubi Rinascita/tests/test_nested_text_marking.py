@@ -437,6 +437,141 @@ class NestedTextMarkingTests(unittest.TestCase):
                         )
 
 
+    def test_round_angled_planar_tip_gets_axial_centerline_mark(self):
+        source = APP_ROOT / (
+            "Round tube Ø30 L1215, first cut 0° layer 1, "
+            "second cut 45° layer 4.zzx"
+        )
+        part = read_tube_parts(source)[0]
+        self.assertEqual(part.profile.kind, "Circle")
+        self.assertTrue(
+            any(
+                end.plane_max_residual_mm is not None
+                and end.plane_max_residual_mm <= 0.05
+                and abs(end.angle_from_perpendicular_degrees or 0.0) > 0.25
+                for end in part.ends
+            )
+        )
+
+        length = float(part.overall_length)
+        placements = [
+            {
+                "instanceKey": "round-tip::1",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "nestPlacement": {
+                    "z_start": 0.0,
+                    "z_end": length,
+                    "axial_rotation_degrees": 0.0,
+                    "reversed_end_for_end": False,
+                    "common_line_before": False,
+                },
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "round_tip_marked.zzx"
+            result = export_flat_nested_rod(
+                placements,
+                output,
+                round_tip_marking_enabled=True,
+                round_tip_marking_length_mm=25.0,
+            )
+
+            generated = [
+                report
+                for report in result["roundTipMarkings"]
+                if report.get("status") == "generated"
+            ]
+            self.assertEqual(len(generated), 1)
+            report = generated[0]
+            self.assertEqual(report["profile_kind"], "Circle")
+            self.assertEqual(
+                report["marking_kind"],
+                "angled_planar_tip_centerline",
+            )
+            self.assertAlmostEqual(report["actualLengthMm"], 25.0, places=5)
+            self.assertFalse(report["lengthClipped"])
+
+            archive = Archive.read(output)
+            archive.validate()
+            shapes = {
+                element.get("Handle"): element
+                for element in archive.xml("Shapes/content.xml")
+                if element.tag != "MD5"
+            }
+            shape_records = {
+                record.address: record
+                for record in archive.stream("Shapes").records
+            }
+            lite_records = {
+                record.address: record
+                for record in archive.stream("LiteGeos").records
+            }
+            radius = float(part.profile.outside_diameter) / 2.0
+
+            handle = str(report["new_shape_handles"][0])
+            element = shapes[handle]
+            shape_record = shape_records[int(element.get("DataAddr"))]
+            shape_block = next(
+                block
+                for block in shape_record.blocks
+                if block.name == "Shape"
+            )
+            self.assertEqual(
+                struct.unpack_from("<I", shape_block.payload, 0)[0],
+                4,
+            )
+
+            geometry = element.find("Geometry")
+            record = lite_records[int(geometry.get("GeoAddr"))]
+            curves = list(primitives(record))
+            self.assertEqual(len(curves), 1)
+            first = curves[0].at(0.0)
+            last = curves[0].at(1.0)
+            self.assertAlmostEqual(first[0], last[0], places=8)
+            self.assertAlmostEqual(first[1], last[1], places=8)
+            self.assertAlmostEqual(
+                abs(last[2] - first[2]),
+                25.0,
+                places=5,
+            )
+            for point in (first, last):
+                self.assertAlmostEqual(
+                    math.hypot(point[0], point[1]),
+                    radius,
+                    places=7,
+                )
+
+    def test_round_tip_marking_is_not_added_to_square_tubes(self):
+        source = APP_ROOT / "Tube with sample text.zzx"
+        part = read_tube_parts(source)[0]
+        self.assertIn(part.profile.kind, {"Square", "Rect"})
+        placements = [
+            {
+                "instanceKey": "flat-tip::1",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "nestPlacement": {
+                    "z_start": 0.0,
+                    "z_end": float(part.overall_length),
+                    "axial_rotation_degrees": 0.0,
+                    "reversed_end_for_end": False,
+                    "common_line_before": False,
+                },
+            }
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = export_flat_nested_rod(
+                placements,
+                Path(temp_dir) / "flat_no_tip_mark.zzx",
+                round_tip_marking_enabled=True,
+                round_tip_marking_length_mm=20.0,
+            )
+        self.assertEqual(result["roundTipMarkings"], [])
+
     def test_surface_scan_covers_all_flat_faces_and_round_circumference(self):
         self.assertEqual(
             set(_flat_marking_faces()),

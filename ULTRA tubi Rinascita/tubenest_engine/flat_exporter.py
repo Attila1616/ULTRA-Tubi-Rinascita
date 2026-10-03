@@ -23,10 +23,12 @@ from .domain import read_tube_parts
 from .geometry import Line, Polyline, Spline, primitives
 from .zzx_merge import nest_singletons
 from .cut_release import repair_single_segment_cut_release
+from .release_starts import coordinate_candidates
 from .text_marking import (
     MarkingFitError,
     build_marking_records,
     build_round_marking_records,
+    build_round_tip_line_records,
     layout_text_strokes,
     marking_layout_candidates,
     validate_romans_font,
@@ -495,6 +497,9 @@ def _shape_z_bounds(shape_xml, lite_by_addr):
 
 MARKING_COLLISION_CLEARANCE_MM = 1.0
 ROUND_MARKING_ANGLE_STEP_DEG = 15
+ROUND_TIP_MARKING_PLANAR_TOLERANCE_MM = 0.05
+ROUND_TIP_MARKING_MIN_ANGLE_DEG = 0.25
+ROUND_TIP_MARKING_RADIUS_TOLERANCE_MM = 0.1
 
 
 def _shape_xyz_bounds(shape_xml, lite_by_addr):
@@ -647,6 +652,163 @@ def _round_marking_angles():
     ]
 
 
+def _posed_part_end(item, side):
+    ends = list(item.part.ends or [])
+    if len(ends) < 2:
+        return None
+    reversed_end = bool(item.placement.get("reversed_end_for_end"))
+    if side == "near":
+        index = 1 if reversed_end else 0
+    elif side == "far":
+        index = 0 if reversed_end else 1
+    else:
+        raise ValueError(f"Unknown piece end side {side!r}")
+    return ends[index]
+
+
+def _is_angled_planar_round_end(end):
+    if end is None:
+        return False
+    try:
+        residual = float(end.plane_max_residual_mm)
+        angle = abs(float(end.angle_from_perpendicular_degrees))
+    except (TypeError, ValueError):
+        return False
+    return (
+        math.isfinite(residual)
+        and math.isfinite(angle)
+        and residual <= ROUND_TIP_MARKING_PLANAR_TOLERANCE_MM
+        and angle >= ROUND_TIP_MARKING_MIN_ANGLE_DEG
+    )
+
+
+def _shape_outer_curves(shape_xml, lite_by_addr):
+    curves = []
+    for child in list(shape_xml):
+        if child.tag != "Geometry" or child.get("GeoAddr") is None:
+            continue
+        record = lite_by_addr.get(int(child.get("GeoAddr")))
+        if record is None:
+            continue
+        curves.extend(primitives(record))
+    return curves
+
+
+def _round_cut_tip_point(
+    shape_xml,
+    lite_by_addr,
+    radius,
+    *,
+    maximum_z,
+):
+    curves = _shape_outer_curves(shape_xml, lite_by_addr)
+    if not curves:
+        raise FormatError(
+            f"Shape {shape_xml.get('Handle')} has no outer contour geometry"
+        )
+
+    choices = []
+    for curve_index, curve in enumerate(curves):
+        if isinstance(curve, (Line, Spline)):
+            parameters = coordinate_candidates(curve, 2)
+            points = [
+                (parameter, curve.at(parameter))
+                for parameter in parameters
+            ]
+        else:
+            sampled = curve.sample(256)
+            points = [
+                (
+                    index / max(1, len(sampled) - 1),
+                    point,
+                )
+                for index, point in enumerate(sampled)
+            ]
+
+        for parameter, point in points:
+            if not all(math.isfinite(float(value)) for value in point[:3]):
+                continue
+            choices.append(
+                (
+                    float(point[2]),
+                    float(point[1]),
+                    -abs(float(point[0])),
+                    curve_index,
+                    float(parameter),
+                    tuple(map(float, point[:3])),
+                )
+            )
+
+    if not choices:
+        raise FormatError(
+            f"Shape {shape_xml.get('Handle')} has no finite outer contour points"
+        )
+
+    selected = (
+        max(choices)
+        if maximum_z
+        else min(
+            choices,
+            key=lambda value: (
+                value[0],
+                -value[1],
+                abs(value[2]),
+                value[3],
+                value[4],
+            ),
+        )
+    )
+    point = selected[-1]
+    radial = math.hypot(point[0], point[1])
+    if abs(radial - float(radius)) > ROUND_TIP_MARKING_RADIUS_TOLERANCE_MM:
+        raise ValueError(
+            f"Selected round cut tip radius {radial:.4f} mm does not match "
+            f"outside radius {float(radius):.4f} mm"
+        )
+    return point
+
+
+def _append_marking_addition(
+    addition,
+    *,
+    segment,
+    shapes_stream,
+    lite_stream,
+    shapes_root,
+    shapes_by_handle,
+    marking_pending,
+):
+    segment_shapes = segment.find("Shapes")
+    if segment_shapes is None:
+        raise FormatError("TubeSegment has no Shapes list for marking")
+
+    for (
+        shape_record,
+        geometry_record,
+        (shape_element, geometry_element),
+        segment_ref,
+    ) in zip(
+        addition["shape_records"],
+        addition["geometry_records"],
+        addition["shape_elements"],
+        addition["segment_refs"],
+    ):
+        shapes_stream.records.append(shape_record)
+        lite_stream.records.append(geometry_record)
+        shapes_root.append(shape_element)
+        segment_shapes.append(segment_ref)
+        shapes_by_handle[shape_element.get("Handle")] = shape_element
+        marking_pending.append(
+            (
+                shape_element,
+                geometry_element,
+                shape_record,
+                geometry_record,
+            )
+        )
+    return addition["next_handle"]
+
+
 def _next_export_handle(archive):
     values = []
     for name, data in archive.entries.items():
@@ -684,6 +846,8 @@ def _flat_transform(
     text_marking_height_mm=5.0,
     text_marking_font_path=None,
     text_marking_offset_mm=5.0,
+    round_tip_marking_enabled=False,
+    round_tip_marking_length_mm=20.0,
 ):
     segments_root = archive.xml("Segments/content.xml")
     shapes_root = archive.xml("Shapes/content.xml")
@@ -717,6 +881,7 @@ def _flat_transform(
     warnings = []
     placement_audit = []
     marking_reports = []
+    round_tip_marking_reports = []
     marking_pending = []
     next_marking_handle = _next_export_handle(archive)
     shared_cut_pairs = []
@@ -724,6 +889,24 @@ def _flat_transform(
     previous_far_handle = None
     piece_order_specs = []
     stock_profile = resolved[0].part.profile
+    stock_profile_kind = str(stock_profile.kind or "")
+
+    round_tip_marking_length_mm = float(round_tip_marking_length_mm)
+    if (
+        bool(round_tip_marking_enabled)
+        and (
+            not math.isfinite(round_tip_marking_length_mm)
+            or round_tip_marking_length_mm <= 0.0
+        )
+    ):
+        raise ValueError("Round tip marking length must be positive")
+
+    round_tip_marking_radius = None
+    if bool(round_tip_marking_enabled) and stock_profile_kind == "Circle":
+        diameter = float(stock_profile.outside_diameter or 0.0)
+        if not math.isfinite(diameter) or diameter <= 0.0:
+            raise ValueError("Invalid round tube diameter for tip marking")
+        round_tip_marking_radius = diameter / 2.0
 
     if text_marking_enabled:
         if text_marking_font_path is None:
@@ -733,7 +916,7 @@ def _flat_transform(
         if not (1.0 <= text_marking_height_mm <= 10.0):
             raise ValueError("Text marking height must be between 1 and 10 mm")
 
-        marking_profile_kind = str(stock_profile.kind or "")
+        marking_profile_kind = stock_profile_kind
         if marking_profile_kind in {"Square", "Rect"}:
             marking_outside_width = float(stock_profile.outside_width or 0.0)
             marking_outside_height = float(stock_profile.outside_height or 0.0)
@@ -1067,6 +1250,131 @@ def _flat_transform(
                     )
                     marking_reports.append(report)
 
+        if (
+            bool(round_tip_marking_enabled)
+            and stock_profile_kind == "Circle"
+            and round_tip_marking_radius is not None
+        ):
+            near_xml = shapes_by_handle.get(str(near_handle))
+            far_xml = shapes_by_handle.get(str(far_handle))
+            if near_xml is None or far_xml is None:
+                raise FormatError(
+                    f"{item.file_name}: cannot resolve end cuts for round tip marking"
+                )
+
+            near_min_z, near_max_z = _shape_z_bounds(
+                near_xml,
+                lite_by_addr,
+            )
+            far_min_z, far_max_z = _shape_z_bounds(
+                far_xml,
+                lite_by_addr,
+            )
+
+            for side, end_xml, end_handle, maximum_z, direction in (
+                ("near", near_xml, near_handle, True, 1.0),
+                ("far", far_xml, far_handle, False, -1.0),
+            ):
+                end_meta = _posed_part_end(item, side)
+                if not _is_angled_planar_round_end(end_meta):
+                    continue
+
+                try:
+                    tip_point = _round_cut_tip_point(
+                        end_xml,
+                        lite_by_addr,
+                        round_tip_marking_radius,
+                        maximum_z=maximum_z,
+                    )
+                    tip_z = float(tip_point[2])
+                    safe_length = (
+                        far_min_z - tip_z
+                        if side == "near"
+                        else tip_z - near_max_z
+                    )
+                    actual_length = min(
+                        round_tip_marking_length_mm,
+                        max(0.0, safe_length - 1e-6),
+                    )
+                    if actual_length <= 1e-3:
+                        raise MarkingFitError(
+                            "No axial room is available for the configured "
+                            "tip reference line"
+                        )
+
+                    angle_deg = math.degrees(
+                        math.atan2(
+                            float(tip_point[0]),
+                            float(tip_point[1]),
+                        )
+                    )
+                    source_record = shape_record_by_addr.get(
+                        int(end_xml.get("DataAddr"))
+                    )
+                    if source_record is None:
+                        raise FormatError(
+                            f"{item.file_name}: tip cut record is missing"
+                        )
+
+                    addition = build_round_tip_line_records(
+                        source_shape_record=source_record,
+                        radius=round_tip_marking_radius,
+                        circumferential_angle_deg=angle_deg,
+                        tip_z=tip_z,
+                        length_mm=actual_length,
+                        inward_direction=direction,
+                        first_handle=next_marking_handle,
+                    )
+                    next_marking_handle = _append_marking_addition(
+                        addition,
+                        segment=segment,
+                        shapes_stream=shapes_stream,
+                        lite_stream=lite_stream,
+                        shapes_root=shapes_root,
+                        shapes_by_handle=shapes_by_handle,
+                        marking_pending=marking_pending,
+                    )
+
+                    report = dict(addition["report"])
+                    report.update(
+                        {
+                            "status": "generated",
+                            "instanceKey": item.instance_key,
+                            "fileName": item.file_name,
+                            "side": side,
+                            "cutHandle": str(end_handle),
+                            "cutAngleFromPerpendicularDegrees": float(
+                                end_meta.angle_from_perpendicular_degrees
+                            ),
+                            "planeResidualMm": float(
+                                end_meta.plane_max_residual_mm
+                            ),
+                            "configuredLengthMm": round_tip_marking_length_mm,
+                            "actualLengthMm": actual_length,
+                            "lengthClipped": (
+                                actual_length
+                                < round_tip_marking_length_mm - 1e-6
+                            ),
+                            "tipPoint": list(tip_point),
+                        }
+                    )
+                    round_tip_marking_reports.append(report)
+                except (FormatError, ValueError, MarkingFitError) as exc:
+                    warnings.append(
+                        f"{item.file_name}: round tip marking omitted on "
+                        f"{side} angled cut: {exc}"
+                    )
+                    round_tip_marking_reports.append(
+                        {
+                            "status": "skipped",
+                            "instanceKey": item.instance_key,
+                            "fileName": item.file_name,
+                            "side": side,
+                            "cutHandle": str(end_handle),
+                            "reason": str(exc),
+                        }
+                    )
+
         piece_order_specs.append(
             (segment, str(near_handle), str(far_handle), item.file_name)
         )
@@ -1228,6 +1536,7 @@ def _flat_transform(
         warnings,
         used_end,
         marking_reports,
+        round_tip_marking_reports,
         cut_release_report,
     )
 
@@ -1242,6 +1551,8 @@ def export_flat_nested_rod(
     text_marking_enabled=False,
     text_marking_height_mm=5.0,
     text_marking_font_path=None,
+    round_tip_marking_enabled=False,
+    round_tip_marking_length_mm=20.0,
 ):
     """Export one locked rod using the TubePro-verified single-segment form."""
     rod_length = float(rod_length)
@@ -1267,6 +1578,7 @@ def export_flat_nested_rod(
         warnings,
         used_end,
         marking_reports,
+        round_tip_marking_reports,
         cut_release_report,
     ) = _flat_transform(
         intermediate,
@@ -1275,6 +1587,8 @@ def export_flat_nested_rod(
         text_marking_enabled=bool(text_marking_enabled),
         text_marking_height_mm=float(text_marking_height_mm),
         text_marking_font_path=text_marking_font_path,
+        round_tip_marking_enabled=bool(round_tip_marking_enabled),
+        round_tip_marking_length_mm=float(round_tip_marking_length_mm),
     )
     _update_metadata(archive.entries, title or Path(output_path).stem)
     archive.refresh_checksums()
@@ -1291,6 +1605,9 @@ def export_flat_nested_rod(
         "placements": audit,
         "textMarkings": marking_reports,
         "textMarkingEnabled": bool(text_marking_enabled),
+        "roundTipMarkings": round_tip_marking_reports,
+        "roundTipMarkingEnabled": bool(round_tip_marking_enabled),
+        "roundTipMarkingLengthMm": float(round_tip_marking_length_mm),
         "cutReleaseRepair": cut_release_report,
         "fileVersion": WRITABLE_FILE_VERSION,
         "exportMode": "single_segment_positioned_contours",
@@ -1323,4 +1640,6 @@ def export_flat_nested_rod_to_directory(
         text_marking_enabled=text_marking_enabled,
         text_marking_height_mm=text_marking_height_mm,
         text_marking_font_path=text_marking_font_path,
+        round_tip_marking_enabled=round_tip_marking_enabled,
+        round_tip_marking_length_mm=round_tip_marking_length_mm,
     )
