@@ -108,6 +108,7 @@ def data_file(name):
 CONFIG_FILE = data_file("config.json")
 UI_STATE_FILE = data_file("state.json")
 HISTORY_FILE = data_file("history.json")
+NESTING_CACHE_FILE = data_file("nesting_cache.json")
 DATABASE_DIR = data_file("Database Tubi")
 CODE_CATALOG_FILE = data_file("codici_tubi.json")
 INVENTORY_XLSX_FILE = data_file("Conteggio Tubi.xlsx")
@@ -123,4 +124,5 @@ def describe():
         "config_file": CONFIG_FILE,
         "state_file": UI_STATE_FILE,
         "history_file": HISTORY_FILE,
+        "nesting_cache_file": NESTING_CACHE_FILE,
     }
