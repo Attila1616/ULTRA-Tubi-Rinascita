@@ -1625,6 +1625,8 @@ def export_flat_nested_rod_to_directory(
     text_marking_enabled=False,
     text_marking_height_mm=5.0,
     text_marking_font_path=None,
+    round_tip_marking_enabled=False,
+    round_tip_marking_length_mm=20.0,
 ):
     if not str(output_dir or "").strip():
         raise ValueError("Nested ZZX output directory is not configured")
