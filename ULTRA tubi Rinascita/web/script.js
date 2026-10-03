@@ -415,7 +415,10 @@ async function openSettingsModal() {
         document.getElementById('settings-nested-text-marking-height-mm').value = Number.isFinite(Number(config.nested_text_marking_height_mm))
             ? Math.min(10, Math.max(1, Number(config.nested_text_marking_height_mm)))
             : 5;
-        document.getElementById('settings-round-tip-marking-enabled').checked = config.nested_round_tip_marking_enabled !== false;
+        const roundTipMode = ['short', 'long', 'both', 'none'].includes(String(config.nested_round_tip_marking_mode || '').toLowerCase())
+            ? String(config.nested_round_tip_marking_mode).toLowerCase()
+            : (config.nested_round_tip_marking_enabled !== false ? 'short' : 'none');
+        document.getElementById('settings-round-tip-marking-mode').value = roundTipMode;
         document.getElementById('settings-round-tip-marking-length-mm').value = Number.isFinite(Number(config.nested_round_tip_marking_length_mm))
             ? Math.min(100, Math.max(1, Number(config.nested_round_tip_marking_length_mm)))
             : 20;
@@ -540,7 +543,8 @@ async function saveSettings() {
                     Number(document.getElementById('settings-nested-text-marking-height-mm').value) || 5
                 )
             ),
-            nested_round_tip_marking_enabled: document.getElementById('settings-round-tip-marking-enabled').checked,
+            nested_round_tip_marking_mode: document.getElementById('settings-round-tip-marking-mode').value,
+            nested_round_tip_marking_enabled: document.getElementById('settings-round-tip-marking-mode').value !== 'none',
             nested_round_tip_marking_length_mm: Math.min(
                 100,
                 Math.max(

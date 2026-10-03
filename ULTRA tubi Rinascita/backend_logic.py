@@ -1603,9 +1603,16 @@ def export_locked_rod_zzx(payload):
             max(1.0, text_marking_height_mm),
         )
 
-        round_tip_marking_enabled = bool(
-            config.get("nested_round_tip_marking_enabled", True)
-        )
+        round_tip_marking_mode = str(
+            config.get("nested_round_tip_marking_mode") or ""
+        ).strip().lower()
+        if round_tip_marking_mode not in {"short", "long", "both", "none"}:
+            round_tip_marking_mode = (
+                "short"
+                if config.get("nested_round_tip_marking_enabled", True)
+                else "none"
+            )
+        round_tip_marking_enabled = round_tip_marking_mode != "none"
         try:
             round_tip_marking_length_mm = float(
                 config.get("nested_round_tip_marking_length_mm", 20.0)
@@ -1651,6 +1658,7 @@ def export_locked_rod_zzx(payload):
             text_marking_height_mm=text_marking_height_mm,
             text_marking_font_path=text_marking_font_path,
             round_tip_marking_enabled=round_tip_marking_enabled,
+            round_tip_marking_mode=round_tip_marking_mode,
             round_tip_marking_length_mm=round_tip_marking_length_mm,
         )
         return {

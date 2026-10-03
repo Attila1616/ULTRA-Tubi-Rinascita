@@ -51,7 +51,17 @@ class Api:
         self.config.setdefault("nesting_debug_enabled", True)
         self.config.setdefault("nested_text_marking_enabled", False)
         self.config.setdefault("nested_text_marking_height_mm", 5.0)
-        self.config.setdefault("nested_round_tip_marking_enabled", True)
+        round_tip_mode = str(
+            self.config.get("nested_round_tip_marking_mode") or ""
+        ).strip().lower()
+        if round_tip_mode not in {"short", "long", "both", "none"}:
+            round_tip_mode = (
+                "short"
+                if self.config.get("nested_round_tip_marking_enabled", True)
+                else "none"
+            )
+        self.config["nested_round_tip_marking_mode"] = round_tip_mode
+        self.config["nested_round_tip_marking_enabled"] = round_tip_mode != "none"
         self.config.setdefault("nested_round_tip_marking_length_mm", 20.0)
         return {"status": "success", "config": self.config}
 
@@ -105,12 +115,24 @@ class Api:
         except (TypeError, ValueError):
             updated["nested_text_marking_height_mm"] = 5.0
 
-        updated["nested_round_tip_marking_enabled"] = bool(
+        round_tip_mode = str(
             payload.get(
-                "nested_round_tip_marking_enabled",
-                updated.get("nested_round_tip_marking_enabled", True),
+                "nested_round_tip_marking_mode",
+                updated.get("nested_round_tip_marking_mode", ""),
             )
-        )
+            or ""
+        ).strip().lower()
+        if round_tip_mode not in {"short", "long", "both", "none"}:
+            round_tip_mode = (
+                "short"
+                if payload.get(
+                    "nested_round_tip_marking_enabled",
+                    updated.get("nested_round_tip_marking_enabled", True),
+                )
+                else "none"
+            )
+        updated["nested_round_tip_marking_mode"] = round_tip_mode
+        updated["nested_round_tip_marking_enabled"] = round_tip_mode != "none"
         try:
             updated["nested_round_tip_marking_length_mm"] = min(
                 100.0,

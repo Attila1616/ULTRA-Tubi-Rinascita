@@ -475,7 +475,7 @@ class NestedTextMarkingTests(unittest.TestCase):
             result = export_flat_nested_rod(
                 placements,
                 output,
-                round_tip_marking_enabled=True,
+                round_tip_marking_mode="short",
                 round_tip_marking_length_mm=25.0,
             )
 
@@ -487,6 +487,7 @@ class NestedTextMarkingTests(unittest.TestCase):
             self.assertEqual(len(generated), 1)
             report = generated[0]
             self.assertEqual(report["profile_kind"], "Circle")
+            self.assertEqual(report["tipSide"], "short")
             self.assertEqual(
                 report["marking_kind"],
                 "angled_planar_tip_centerline",
@@ -543,6 +544,84 @@ class NestedTextMarkingTests(unittest.TestCase):
                     radius,
                     places=7,
                 )
+
+    def test_round_angled_planar_tip_side_modes(self):
+        source = APP_ROOT / (
+            "Round tube Ø30 L1215, first cut 0° layer 1, "
+            "second cut 45° layer 4.zzx"
+        )
+        part = read_tube_parts(source)[0]
+        placements = [
+            {
+                "instanceKey": "round-tip-modes::1",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "nestPlacement": {
+                    "z_start": 0.0,
+                    "z_end": float(part.overall_length),
+                    "axial_rotation_degrees": 0.0,
+                    "reversed_end_for_end": False,
+                    "common_line_before": False,
+                },
+            }
+        ]
+
+        def export_mode(temp_dir, mode):
+            result = export_flat_nested_rod(
+                placements,
+                Path(temp_dir) / f"round_tip_{mode}.zzx",
+                round_tip_marking_mode=mode,
+                round_tip_marking_length_mm=20.0,
+            )
+            generated = [
+                report
+                for report in result["roundTipMarkings"]
+                if report.get("status") == "generated"
+            ]
+            self.assertEqual(result["roundTipMarkingMode"], mode)
+            self.assertEqual(
+                result["roundTipMarkingEnabled"],
+                mode != "none",
+            )
+            return generated
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            short_reports = export_mode(temp_dir, "short")
+            long_reports = export_mode(temp_dir, "long")
+            both_reports = export_mode(temp_dir, "both")
+            none_reports = export_mode(temp_dir, "none")
+
+        self.assertEqual(len(short_reports), 1)
+        self.assertEqual(len(long_reports), 1)
+        self.assertEqual(len(both_reports), 2)
+        self.assertEqual(none_reports, [])
+        self.assertEqual(
+            {report["tipSide"] for report in both_reports},
+            {"short", "long"},
+        )
+
+        short_report = short_reports[0]
+        long_report = long_reports[0]
+        self.assertEqual(short_report["side"], long_report["side"])
+        self.assertEqual(short_report["tipSide"], "short")
+        self.assertEqual(long_report["tipSide"], "long")
+
+        short_z = float(short_report["tipPoint"][2])
+        long_z = float(long_report["tipPoint"][2])
+        if short_report["side"] == "near":
+            self.assertGreater(short_z, long_z)
+        else:
+            self.assertLess(short_z, long_z)
+
+        radius = float(part.profile.outside_diameter) / 2.0
+        short_xy = short_report["tipPoint"][:2]
+        long_xy = long_report["tipPoint"][:2]
+        dot = (
+            float(short_xy[0]) * float(long_xy[0])
+            + float(short_xy[1]) * float(long_xy[1])
+        )
+        self.assertAlmostEqual(dot, -(radius ** 2), places=3)
 
     def test_round_tip_marking_is_not_added_to_square_tubes(self):
         source = APP_ROOT / "Tube with sample text.zzx"
