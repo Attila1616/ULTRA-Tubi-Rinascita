@@ -762,15 +762,15 @@ def _candidate_marking_start_positions_in_range(
     if not valid:
         return []
 
-    preferred_valid = (
-        earliest_start - 1e-8 <= preferred_start <= latest_start + 1e-8
+    # Preserve the marking's local axial position through end-for-end flips:
+    # choose the valid candidate closest to the preferred local-A anchor.
+    return sorted(
+        valid,
+        key=lambda value: (
+            abs(value - preferred_start),
+            value,
+        ),
     )
-    if not preferred_valid:
-        return valid
-
-    later = [value for value in valid if value >= preferred_start - 1e-8]
-    earlier = [value for value in valid if value < preferred_start - 1e-8]
-    return sorted(later) + sorted(earlier, reverse=True)
 
 
 def _shape_xyz_bounds(shape_xml, lite_by_addr):
@@ -1404,8 +1404,17 @@ def _flat_transform(
                     far_xml,
                     lite_by_addr,
                 )
-                preferred_start_z = (
+                marking_anchor_side = (
+                    "far" if reversed_end else "near"
+                )
+                marking_axial_direction = (
+                    -1.0 if reversed_end else 1.0
+                )
+                conservative_near_z = (
                     near_max_z + float(text_marking_offset_mm)
+                )
+                conservative_far_z = (
+                    far_min_z - float(text_marking_offset_mm)
                 )
                 near_plane = _fit_shape_z_plane(
                     near_xml,
@@ -1440,6 +1449,7 @@ def _flat_transform(
                 selected_spatial_position = None
                 selected_local_surface_position = None
                 selected_start_z = None
+                selected_preferred_start_z = None
                 selected_start_limits = None
                 selected_end_clearances = None
 
@@ -1487,6 +1497,7 @@ def _flat_transform(
                                     first_handle=next_marking_handle,
                                     face=spatial_position,
                                     prepared_layout=prepared_layout,
+                                    axial_direction=marking_axial_direction,
                                 )
                             else:
                                 probe = build_round_marking_records(
@@ -1500,6 +1511,7 @@ def _flat_transform(
                                     first_handle=next_marking_handle,
                                     circumferential_center_deg=spatial_position,
                                     prepared_layout=prepared_layout,
+                                    axial_direction=marking_axial_direction,
                                 )
 
                             start_limits = _marking_start_limits(
@@ -1510,6 +1522,16 @@ def _flat_transform(
                                 far_min_z=far_min_z,
                                 near_clearance_mm=text_marking_offset_mm,
                             )
+                            if marking_anchor_side == "near":
+                                preferred_start_z = (
+                                    conservative_near_z
+                                    - start_limits["localMinZ"]
+                                )
+                            else:
+                                preferred_start_z = (
+                                    conservative_far_z
+                                    - start_limits["localMaxZ"]
+                                )
                         except MarkingFitError as exc:
                             message = (
                                 f"layout {layout_index + 1}, "
@@ -1551,6 +1573,7 @@ def _flat_transform(
                                         first_handle=next_marking_handle,
                                         face=spatial_position,
                                         prepared_layout=prepared_layout,
+                                        axial_direction=marking_axial_direction,
                                     )
                                 else:
                                     candidate = build_round_marking_records(
@@ -1564,6 +1587,7 @@ def _flat_transform(
                                         first_handle=next_marking_handle,
                                         circumferential_center_deg=spatial_position,
                                         prepared_layout=prepared_layout,
+                                        axial_direction=marking_axial_direction,
                                     )
                             except MarkingFitError as exc:
                                 message = (
@@ -1621,6 +1645,7 @@ def _flat_transform(
                                 local_surface_position
                             )
                             selected_start_z = candidate_start_z
+                            selected_preferred_start_z = preferred_start_z
                             selected_start_limits = start_limits
                             selected_end_clearances = end_clearances
                             break
@@ -1700,9 +1725,9 @@ def _flat_transform(
                     geometry_bounds = report["geometry_3d_bounds"]
                     tip_region_used = (
                         float(geometry_bounds[0][2])
-                        < preferred_start_z - MARKING_END_EPSILON_MM
+                        < conservative_near_z - MARKING_END_EPSILON_MM
                         or float(geometry_bounds[1][2])
-                        > far_min_z + MARKING_END_EPSILON_MM
+                        > conservative_far_z + MARKING_END_EPSILON_MM
                     )
                     report.update(
                         {
@@ -1718,9 +1743,16 @@ def _flat_transform(
                                 selected_local_surface_position
                             ),
                             "selectedStartZ": selected_start_z,
-                            "preferredStartZ": preferred_start_z,
+                            "preferredStartZ": selected_preferred_start_z,
                             "shiftedAxially": (
-                                abs(selected_start_z - preferred_start_z) > 1e-6
+                                abs(
+                                    selected_start_z
+                                    - selected_preferred_start_z
+                                ) > 1e-6
+                            ),
+                            "markingAnchorEnd": marking_anchor_side,
+                            "textAxialDirection": int(
+                                marking_axial_direction
                             ),
                             "tipRegionUsed": tip_region_used,
                             "surfaceAwareStartRange": [

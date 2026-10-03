@@ -457,11 +457,12 @@ class NestedTextMarkingTests(unittest.TestCase):
         self.assertGreater(spread, 1.0)
 
         length = float(part.overall_length)
-        # Reverse the part so the angled cut is the incoming/near end.
+        # Keep local end A at the near side. The angled B end is therefore
+        # the far end, and a long marking may use its extra tip material.
         original_a = part.ends[0]
         original_b = part.ends[1]
-        near_max = length - float(original_b.sampled_bounds[0][2])
-        far_min = length - float(original_a.sampled_bounds[1][2])
+        near_max = float(original_a.sampled_bounds[1][2])
+        far_min = float(original_b.sampled_bounds[0][2])
         conservative_width = far_min - (near_max + 5.0)
         self.assertGreater(conservative_width, 10.0)
         requested_width = conservative_width + min(5.0, spread / 4.0)
@@ -477,7 +478,7 @@ class NestedTextMarkingTests(unittest.TestCase):
                     "z_start": 0.0,
                     "z_end": length,
                     "axial_rotation_degrees": 0.0,
-                    "reversed_end_for_end": True,
+                    "reversed_end_for_end": False,
                     "common_line_before": False,
                 },
             }
@@ -521,11 +522,14 @@ class NestedTextMarkingTests(unittest.TestCase):
 
         report = result["textMarkings"][0]
         self.assertEqual(report["status"], "generated")
-        self.assertTrue(report["nearEndPlaneAware"])
+        self.assertTrue(report["farEndPlaneAware"])
         self.assertTrue(report["tipRegionUsed"])
-        self.assertLess(
+        self.assertEqual(report["markingAnchorEnd"], "near")
+        self.assertEqual(report["textAxialDirection"], 1)
+        self.assertAlmostEqual(
             report["selectedStartZ"],
             report["preferredStartZ"],
+            places=4,
         )
         self.assertGreaterEqual(report["nearEndClearanceMm"], 5.0 - 1e-4)
         self.assertGreaterEqual(report["farEndClearanceMm"], -1e-4)
@@ -607,6 +611,24 @@ class NestedTextMarkingTests(unittest.TestCase):
         self.assertEqual(reports[1]["selectedLocalSurfacePosition"], 0.0)
         self.assertAlmostEqual(reports[0]["selectedSurfacePosition"], 0.0, places=6)
         self.assertAlmostEqual(reports[1]["selectedSurfacePosition"], 270.0, places=6)
+        self.assertEqual(reports[0]["markingAnchorEnd"], "near")
+        self.assertEqual(reports[0]["textAxialDirection"], 1)
+        self.assertEqual(reports[1]["markingAnchorEnd"], "far")
+        self.assertEqual(reports[1]["textAxialDirection"], -1)
+
+        second_piece_start = length + 50.0
+        second_piece_far = second_piece_start + length
+        second_bounds = reports[1]["geometry_3d_bounds"]
+        self.assertGreater(
+            second_bounds[0][2],
+            second_piece_start + length * 0.75,
+        )
+        self.assertLessEqual(second_bounds[1][2], second_piece_far + 1e-4)
+        self.assertAlmostEqual(
+            second_piece_far - reports[1]["selectedStartZ"],
+            5.0,
+            places=3,
+        )
 
         posed = _posed_round_marking_angles(
             type(

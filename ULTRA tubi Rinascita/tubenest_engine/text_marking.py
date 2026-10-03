@@ -463,6 +463,7 @@ def build_marking_records(
     face_width=None,
     face_y=None,
     prepared_layout=None,
+    axial_direction=1.0,
 ):
     """Build planar channel-4 text on one true flat tube face.
 
@@ -473,6 +474,9 @@ def build_marking_records(
     start_z = float(start_z)
     corner_radius = max(0.0, float(corner_radius or 0.0))
     max_z = float(max_z)
+    axial_direction = float(axial_direction)
+    if axial_direction not in (-1.0, 1.0):
+        raise ValueError("TEXT marking axial_direction must be -1 or +1")
     face = str(face or "+Y").upper()
 
     if outside_width is None:
@@ -503,7 +507,7 @@ def build_marking_records(
             return (
                 float(point[1]),
                 outside_height / 2.0,
-                start_z + float(point[0]),
+                start_z + axial_direction * float(point[0]),
             )
 
     elif face == "+X":
@@ -514,7 +518,7 @@ def build_marking_records(
             return (
                 outside_width / 2.0,
                 -float(point[1]),
-                start_z + float(point[0]),
+                start_z + axial_direction * float(point[0]),
             )
 
     elif face == "-Y":
@@ -525,7 +529,7 @@ def build_marking_records(
             return (
                 -float(point[1]),
                 -outside_height / 2.0,
-                start_z + float(point[0]),
+                start_z + axial_direction * float(point[0]),
             )
 
     elif face == "-X":
@@ -536,7 +540,7 @@ def build_marking_records(
             return (
                 -outside_width / 2.0,
                 float(point[1]),
-                start_z + float(point[0]),
+                start_z + axial_direction * float(point[0]),
             )
 
     else:
@@ -559,10 +563,14 @@ def build_marking_records(
         for x, y, z in path:
             if not all(math.isfinite(value) for value in (x, y, z)):
                 raise ValueError("Nonfinite marking point")
-            if not (start_z - 1e-6 <= z < max_z - 1e-6):
+            if axial_direction > 0.0:
+                axial_ok = start_z - 1e-6 <= z < max_z - 1e-6
+            else:
+                axial_ok = z <= start_z + 1e-6 and z < max_z - 1e-6
+            if not axial_ok:
                 raise MarkingFitError(
-                    "Text layout does not fit between this piece's end cuts "
-                    f"({start_z:.3f} .. {max_z:.3f} mm)."
+                    "Text layout does not fit in the requested axial direction "
+                    f"(origin {start_z:.3f}, limit {max_z:.3f} mm)."
                 )
 
     result = _build_shape_records(
@@ -587,6 +595,7 @@ def build_marking_records(
             ],
             "new_shape_channels": [MARKING_CHANNEL],
             "start_z": start_z,
+            "axial_direction": int(axial_direction),
             "max_z": max_z,
             "outside_width_mm": outside_width,
             "outside_height_mm": outside_height,
@@ -612,20 +621,24 @@ def wrap_strokes_to_cylinder(
     *,
     circumferential_center_deg=0.0,
     curve_tolerance_mm=ROUND_CURVE_TOLERANCE_MM,
+    axial_direction=1.0,
 ):
     """Map 2D marking strokes onto the outside cylinder with bounded chords."""
     radius = float(radius)
     start_z = float(start_z)
     center_deg = float(circumferential_center_deg)
     tolerance = float(curve_tolerance_mm)
+    axial_direction = float(axial_direction)
 
     if not all(
         math.isfinite(value)
-        for value in (radius, start_z, center_deg, tolerance)
+        for value in (radius, start_z, center_deg, tolerance, axial_direction)
     ):
         raise ValueError("Nonfinite round marking parameter")
     if radius <= 0:
         raise ValueError("Round tube outside radius must be positive")
+    if axial_direction not in (-1.0, 1.0):
+        raise ValueError("TEXT marking axial_direction must be -1 or +1")
     if not (0.0 < tolerance < radius):
         raise ValueError("Require 0 < round curve tolerance < outside radius")
 
@@ -657,7 +670,7 @@ def wrap_strokes_to_cylinder(
         return (
             radius * math.sin(theta),
             radius * math.cos(theta),
-            start_z + float(u) - ulo,
+            start_z + axial_direction * (float(u) - ulo),
         )
 
     for stroke in strokes:
@@ -694,6 +707,7 @@ def wrap_strokes_to_cylinder(
     return paths, {
         "outside_radius_mm": radius,
         "start_z_mm": start_z,
+        "axial_direction": int(axial_direction),
         "curve_tolerance_mm": tolerance,
         "theta_min_rad": center + (vlo - vc) / radius,
         "theta_max_rad": center + (vhi - vc) / radius,
@@ -727,6 +741,7 @@ def build_round_marking_records(
     circumferential_center_deg=0.0,
     curve_tolerance_mm=ROUND_CURVE_TOLERANCE_MM,
     prepared_layout=None,
+    axial_direction=1.0,
 ):
     """Build channel-4 marking geometry conformed to a round tube surface."""
     height_mm = float(height_mm)
@@ -750,6 +765,7 @@ def build_round_marking_records(
         start_z,
         circumferential_center_deg=circumferential_center_deg,
         curve_tolerance_mm=curve_tolerance_mm,
+        axial_direction=axial_direction,
     )
 
     if geometry_report["max_z_mm"] >= max_z - 1e-6:
