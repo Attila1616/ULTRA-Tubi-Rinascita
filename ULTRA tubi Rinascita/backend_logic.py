@@ -1592,6 +1592,9 @@ def export_locked_rod_zzx(payload):
         text_marking_enabled = bool(
             config.get("nested_text_marking_enabled", False)
         )
+        round_text_head_motion_enabled = bool(
+            config.get("nested_round_text_head_motion_enabled", True)
+        )
         try:
             text_marking_height_mm = float(
                 config.get("nested_text_marking_height_mm", 5.0)
@@ -1657,6 +1660,7 @@ def export_locked_rod_zzx(payload):
             text_marking_enabled=text_marking_enabled,
             text_marking_height_mm=text_marking_height_mm,
             text_marking_font_path=text_marking_font_path,
+            round_text_head_motion_enabled=round_text_head_motion_enabled,
             round_tip_marking_enabled=round_tip_marking_enabled,
             round_tip_marking_mode=round_tip_marking_mode,
             round_tip_marking_length_mm=round_tip_marking_length_mm,
