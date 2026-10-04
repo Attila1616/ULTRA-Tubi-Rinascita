@@ -275,167 +275,191 @@
             <button id="settings-close" class="close-button">&times;</button>
         </div>
         <div class="modal-body settings-body">
-            <label for="settings-da-fare-path">Cartella lavori DA FARE</label>
-            <div class="settings-path-row">
-                <input id="settings-da-fare-path" type="text" class="search-input" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-da-fare-path" data-picker-type="folder">Sfoglia</button>
+            <div class="settings-tabs" role="tablist" aria-label="Categorie impostazioni">
+                <button type="button" class="settings-tab active" data-settings-category="paths">Percorsi</button>
+                <button type="button" class="settings-tab" data-settings-category="nesting">Nesting e marcatura</button>
+                <button type="button" class="settings-tab" data-settings-category="orders">Ordini</button>
+                <button type="button" class="settings-tab" data-settings-category="inventory">Inventario</button>
+                <button type="button" class="settings-tab" data-settings-category="interface">Interfaccia</button>
             </div>
 
-            <label for="settings-inventory-xlsx-path">File Excel inventario da importare</label>
-            <div class="settings-path-row">
-                <input id="settings-inventory-xlsx-path" type="text" class="search-input" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-inventory-xlsx-path" data-picker-type="excel">Sfoglia</button>
-            </div>
+            <section class="settings-category active" data-settings-panel="paths">
+                <label for="settings-da-fare-path">Cartella lavori DA FARE</label>
+                <div class="settings-path-row">
+                    <input id="settings-da-fare-path" type="text" class="search-input" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-da-fare-path" data-picker-type="folder">Sfoglia</button>
+                </div>
 
-            <h3 class="settings-section-title">Database condivisi</h3>
-            <label for="settings-database-tubi-dir">Cartella Database Tubi</label>
-            <div class="settings-path-row">
-                <input id="settings-database-tubi-dir" type="text" class="search-input" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-database-tubi-dir" data-picker-type="folder">Sfoglia</button>
-            </div>
+                <label for="settings-inventory-xlsx-path">File Excel inventario da importare</label>
+                <div class="settings-path-row">
+                    <input id="settings-inventory-xlsx-path" type="text" class="search-input" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-inventory-xlsx-path" data-picker-type="excel">Sfoglia</button>
+                </div>
 
-            <label for="settings-codici-tubi-path">File catalogo codici JSON</label>
-            <div class="settings-path-row">
-                <input id="settings-codici-tubi-path" type="text" class="search-input" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-codici-tubi-path" data-picker-type="json">Sfoglia</button>
-            </div>
+                <h3 class="settings-section-title">Database condivisi</h3>
+                <label for="settings-database-tubi-dir">Cartella Database Tubi</label>
+                <div class="settings-path-row">
+                    <input id="settings-database-tubi-dir" type="text" class="search-input" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-database-tubi-dir" data-picker-type="folder">Sfoglia</button>
+                </div>
 
-            <h3 class="settings-section-title">Cartelle di esportazione</h3>
+                <label for="settings-codici-tubi-path">File catalogo codici JSON</label>
+                <div class="settings-path-row">
+                    <input id="settings-codici-tubi-path" type="text" class="search-input" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-codici-tubi-path" data-picker-type="json">Sfoglia</button>
+                </div>
 
-            <label for="settings-docx-output-dir">Cartella predefinita</label>
-            <div class="settings-path-row">
-                <input id="settings-docx-output-dir" type="text" class="search-input" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-docx-output-dir" data-picker-type="folder">Sfoglia</button>
-            </div>
+                <h3 class="settings-section-title">Cartelle di esportazione</h3>
+                <label for="settings-docx-output-dir">Cartella predefinita</label>
+                <div class="settings-path-row">
+                    <input id="settings-docx-output-dir" type="text" class="search-input" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-docx-output-dir" data-picker-type="folder">Sfoglia</button>
+                </div>
 
-            <label for="settings-summary-txt-output-dir">Riepilogo TXT</label>
-            <div class="settings-path-row">
-                <input id="settings-summary-txt-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-summary-txt-output-dir" data-picker-type="folder">Sfoglia</button>
-            </div>
+                <label for="settings-summary-txt-output-dir">Riepilogo TXT</label>
+                <div class="settings-path-row">
+                    <input id="settings-summary-txt-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-summary-txt-output-dir" data-picker-type="folder">Sfoglia</button>
+                </div>
 
-            <label for="settings-summary-docx-output-dir">Riepilogo DOCX</label>
-            <div class="settings-path-row">
-                <input id="settings-summary-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-summary-docx-output-dir" data-picker-type="folder">Sfoglia</button>
-            </div>
+                <label for="settings-summary-docx-output-dir">Riepilogo DOCX</label>
+                <div class="settings-path-row">
+                    <input id="settings-summary-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-summary-docx-output-dir" data-picker-type="folder">Sfoglia</button>
+                </div>
 
-            <label for="settings-tt-docx-output-dir">Lista TT DOCX</label>
-            <div class="settings-path-row">
-                <input id="settings-tt-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-tt-docx-output-dir" data-picker-type="folder">Sfoglia</button>
-            </div>
+                <label for="settings-tt-docx-output-dir">Lista TT DOCX</label>
+                <div class="settings-path-row">
+                    <input id="settings-tt-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-tt-docx-output-dir" data-picker-type="folder">Sfoglia</button>
+                </div>
 
-            <label for="settings-adhoc-docx-output-dir">Lista ADHOC DOCX</label>
-            <div class="settings-path-row">
-                <input id="settings-adhoc-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-adhoc-docx-output-dir" data-picker-type="folder">Sfoglia</button>
-            </div>
+                <label for="settings-adhoc-docx-output-dir">Lista ADHOC DOCX</label>
+                <div class="settings-path-row">
+                    <input id="settings-adhoc-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-adhoc-docx-output-dir" data-picker-type="folder">Sfoglia</button>
+                </div>
 
-            <label for="settings-codes-docx-output-dir">Lista Codici DOCX</label>
-            <div class="settings-path-row">
-                <input id="settings-codes-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-codes-docx-output-dir" data-picker-type="folder">Sfoglia</button>
-            </div>
+                <label for="settings-codes-docx-output-dir">Lista Codici DOCX</label>
+                <div class="settings-path-row">
+                    <input id="settings-codes-docx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-codes-docx-output-dir" data-picker-type="folder">Sfoglia</button>
+                </div>
 
-            <label for="settings-inventory-xlsx-output-dir">Inventario Excel</label>
-            <div class="settings-path-row">
-                <input id="settings-inventory-xlsx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-inventory-xlsx-output-dir" data-picker-type="folder">Sfoglia</button>
-            </div>
+                <label for="settings-inventory-xlsx-output-dir">Inventario Excel</label>
+                <div class="settings-path-row">
+                    <input id="settings-inventory-xlsx-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-inventory-xlsx-output-dir" data-picker-type="folder">Sfoglia</button>
+                </div>
 
-            <label for="settings-order-txt-output-dir">Lista Ordine TXT</label>
-            <div class="settings-path-row">
-                <input id="settings-order-txt-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-order-txt-output-dir" data-picker-type="folder">Sfoglia</button>
-            </div>
+                <label for="settings-order-txt-output-dir">Lista Ordine TXT</label>
+                <div class="settings-path-row">
+                    <input id="settings-order-txt-output-dir" type="text" class="search-input" placeholder="Usa cartella predefinita" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-order-txt-output-dir" data-picker-type="folder">Sfoglia</button>
+                </div>
 
-            <label for="settings-nested-zzx-output-dir">ZZX verghe annidate</label>
-            <div class="settings-path-row">
-                <input id="settings-nested-zzx-output-dir" type="text" class="search-input" placeholder="Cartella esportazione ZZX annidati" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-nested-zzx-output-dir" data-picker-type="folder">Sfoglia</button>
-            </div>
+                <label for="settings-nested-zzx-output-dir">ZZX verghe annidate</label>
+                <div class="settings-path-row">
+                    <input id="settings-nested-zzx-output-dir" type="text" class="search-input" placeholder="Cartella esportazione ZZX annidati" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-nested-zzx-output-dir" data-picker-type="folder">Sfoglia</button>
+                </div>
+            </section>
 
-            <h3 class="settings-section-title">Nesting geometrico</h3>
-            <div class="settings-threshold-grid">
-                <label for="settings-nesting-gap-mm">Gap pezzi</label>
-                <input id="settings-nesting-gap-mm" type="number" min="0" step="0.1" value="2" class="search-input search-input-small">
-                <span>mm di distanza minima tra superfici non common-line</span>
-            </div>
-            <label class="settings-checkbox-row">
-                <input id="settings-nesting-debug-enabled" type="checkbox" checked>
-                <span>Mostra pulsanti debug nesting</span>
-            </label>
-            <label class="settings-checkbox-row">
-                <input id="settings-nested-text-marking-enabled" type="checkbox">
-                <span>Aggiungi marcatura TEXT nei ZZX annidati</span>
-            </label>
-            <div class="settings-threshold-grid">
-                <label for="settings-nested-text-marking-height-mm">Altezza testo</label>
-                <input id="settings-nested-text-marking-height-mm" type="number" min="1" max="10" step="0.5" value="5" class="search-input search-input-small">
-                <span>mm, da 1 a 10</span>
-            </div>
-            <div class="settings-threshold-grid">
-                <label for="settings-round-tip-marking-mode">Linea su taglio inclinato</label>
-                <select id="settings-round-tip-marking-mode" class="search-input search-input-small">
-                    <option value="short">Lato corto</option>
-                    <option value="long">Lato lungo</option>
-                    <option value="both">Entrambi</option>
-                    <option value="none">Nessuno</option>
-                </select>
-                <span>posizione della linea di riferimento sui tubi tondi</span>
-            </div>
-            <div class="settings-threshold-grid">
-                <label for="settings-round-tip-marking-length-mm">Lunghezza linea punta</label>
-                <input id="settings-round-tip-marking-length-mm" type="number" min="1" max="100" step="1" value="20" class="search-input search-input-small">
-                <span>mm, solo per tagli planari inclinati su tubi tondi</span>
-            </div>
+            <section class="settings-category" data-settings-panel="nesting">
+                <h3 class="settings-section-title settings-section-title-first">Nesting geometrico</h3>
+                <div class="settings-threshold-grid">
+                    <label for="settings-nesting-gap-mm">Gap pezzi</label>
+                    <input id="settings-nesting-gap-mm" type="number" min="0" step="0.1" value="2" class="search-input search-input-small">
+                    <span>mm di distanza minima tra superfici non common-line</span>
+                </div>
+                <label class="settings-checkbox-row">
+                    <input id="settings-nesting-debug-enabled" type="checkbox" checked>
+                    <span>Mostra pulsanti debug nesting</span>
+                </label>
 
-            <h3 class="settings-section-title">Soglie priorit&agrave; ordini</h3>
-            <div class="settings-threshold-grid">
-                <label for="settings-order-low-quantity">Bassa</label>
-                <input id="settings-order-low-quantity" type="number" min="0" step="1" value="1" class="search-input search-input-small">
-                <span>verghe o meno</span>
-                <label for="settings-order-medium-quantity">Media</label>
-                <input id="settings-order-medium-quantity" type="number" min="0" step="1" value="3" class="search-input search-input-small">
-                <span>verghe o meno</span>
-                <label for="settings-order-high-quantity">Alta</label>
-                <input id="settings-order-high-quantity" type="number" min="0" step="1" value="5" class="search-input search-input-small">
-                <span>verghe o meno</span>
-            </div>
-            <label class="settings-checkbox-row settings-order-low-toggle">
-                <input id="settings-order-include-low-priority" type="checkbox" checked>
-                <span>Includi i tubi a priorit&agrave; bassa nella Lista Ordine TXT</span>
-            </label>
+                <h3 class="settings-section-title">Marcatura TEXT</h3>
+                <label class="settings-checkbox-row">
+                    <input id="settings-nested-text-marking-enabled" type="checkbox">
+                    <span>Aggiungi marcatura TEXT nei ZZX annidati</span>
+                </label>
+                <div class="settings-threshold-grid">
+                    <label for="settings-nested-text-marking-height-mm">Altezza testo</label>
+                    <input id="settings-nested-text-marking-height-mm" type="number" min="1" max="10" step="0.5" value="5" class="search-input search-input-small">
+                    <span>mm, da 1 a 10</span>
+                </div>
+                <label class="settings-checkbox-row">
+                    <input id="settings-round-text-head-motion-enabled" type="checkbox" checked>
+                    <span>Usa movimento testa per la marcatura TEXT sui tubi tondi</span>
+                </label>
+                <div class="settings-threshold-grid">
+                    <label for="settings-round-tip-marking-mode">Linea su taglio inclinato</label>
+                    <select id="settings-round-tip-marking-mode" class="search-input search-input-small">
+                        <option value="short">Lato corto</option>
+                        <option value="long">Lato lungo</option>
+                        <option value="both">Entrambi</option>
+                        <option value="none">Nessuno</option>
+                    </select>
+                    <span>posizione della linea di riferimento sui tubi tondi</span>
+                </div>
+                <div class="settings-threshold-grid">
+                    <label for="settings-round-tip-marking-length-mm">Lunghezza linea punta</label>
+                    <input id="settings-round-tip-marking-length-mm" type="number" min="1" max="100" step="1" value="20" class="search-input search-input-small">
+                    <span>mm, solo per tagli planari inclinati su tubi tondi</span>
+                </div>
+            </section>
 
-            <h3 class="settings-section-title">Richieste inventario dalla rete</h3>
-            <label class="settings-checkbox-row">
-                <input id="settings-inventory-request-enabled" type="checkbox">
-                <span>Attiva controllo cartella condivisa</span>
-            </label>
-            <label for="settings-inventory-request-folder">Cartella condivisa</label>
-            <div class="settings-path-row">
-                <input id="settings-inventory-request-folder" type="text" class="search-input" autocomplete="off">
-                <button class="action-button" data-settings-picker="settings-inventory-request-folder" data-picker-type="folder">Sfoglia</button>
-            </div>
-            <div class="settings-request-note"><strong>1</strong> = pronto, <strong>2</strong> = solo tubi con codice, <strong>3</strong> = inventario completo.</div>
+            <section class="settings-category" data-settings-panel="orders">
+                <h3 class="settings-section-title settings-section-title-first">Soglie priorit&agrave; ordini</h3>
+                <div class="settings-threshold-grid">
+                    <label for="settings-order-low-quantity">Bassa</label>
+                    <input id="settings-order-low-quantity" type="number" min="0" step="1" value="1" class="search-input search-input-small">
+                    <span>verghe o meno</span>
+                    <label for="settings-order-medium-quantity">Media</label>
+                    <input id="settings-order-medium-quantity" type="number" min="0" step="1" value="3" class="search-input search-input-small">
+                    <span>verghe o meno</span>
+                    <label for="settings-order-high-quantity">Alta</label>
+                    <input id="settings-order-high-quantity" type="number" min="0" step="1" value="5" class="search-input search-input-small">
+                    <span>verghe o meno</span>
+                </div>
+                <label class="settings-checkbox-row settings-order-low-toggle">
+                    <input id="settings-order-include-low-priority" type="checkbox" checked>
+                    <span>Includi i tubi a priorit&agrave; bassa nella Lista Ordine TXT</span>
+                </label>
+            </section>
 
-            <h3 class="settings-section-title">Colori pulsanti blocco verghe</h3>
-            <div class="settings-color-row">
-                <label for="settings-lock-unlocked-color">Verga sbloccata</label>
-                <input id="settings-lock-unlocked-color" type="color" value="#dc3545" title="Colore verga sbloccata">
-            </div>
-            <div class="settings-color-row">
-                <label for="settings-lock-locked-color">Verga bloccata</label>
-                <input id="settings-lock-locked-color" type="color" value="#198754" title="Colore verga bloccata">
-            </div>
+            <section class="settings-category" data-settings-panel="inventory">
+                <h3 class="settings-section-title settings-section-title-first">Richieste inventario dalla rete</h3>
+                <label class="settings-checkbox-row">
+                    <input id="settings-inventory-request-enabled" type="checkbox">
+                    <span>Attiva controllo cartella condivisa</span>
+                </label>
+                <label for="settings-inventory-request-folder">Cartella condivisa</label>
+                <div class="settings-path-row">
+                    <input id="settings-inventory-request-folder" type="text" class="search-input" autocomplete="off">
+                    <button class="action-button" data-settings-picker="settings-inventory-request-folder" data-picker-type="folder">Sfoglia</button>
+                </div>
+                <div class="settings-request-note"><strong>1</strong> = pronto, <strong>2</strong> = solo tubi con codice, <strong>3</strong> = inventario completo.</div>
+            </section>
 
-            <label for="settings-ignore-input">Cartelle ignorate</label>
-            <div class="settings-ignore-add">
-                <input id="settings-ignore-input" type="text" class="search-input" placeholder="Nome cartella" autocomplete="off">
-                <button id="settings-ignore-add" class="action-button">Aggiungi</button>
-            </div>
-            <div id="settings-ignore-list" class="settings-ignore-list"></div>
+            <section class="settings-category" data-settings-panel="interface">
+                <h3 class="settings-section-title settings-section-title-first">Colori pulsanti blocco verghe</h3>
+                <div class="settings-color-row">
+                    <label for="settings-lock-unlocked-color">Verga sbloccata</label>
+                    <input id="settings-lock-unlocked-color" type="color" value="#dc3545" title="Colore verga sbloccata">
+                </div>
+                <div class="settings-color-row">
+                    <label for="settings-lock-locked-color">Verga bloccata</label>
+                    <input id="settings-lock-locked-color" type="color" value="#198754" title="Colore verga bloccata">
+                </div>
+                <h3 class="settings-section-title">Cartelle ignorate</h3>
+                <label for="settings-ignore-input">Cartelle ignorate</label>
+                <div class="settings-ignore-add">
+                    <input id="settings-ignore-input" type="text" class="search-input" placeholder="Nome cartella" autocomplete="off">
+                    <button id="settings-ignore-add" class="action-button">Aggiungi</button>
+                </div>
+                <div id="settings-ignore-list" class="settings-ignore-list"></div>
+            </section>
+        </div>
         </div>
         <div class="modal-footer">
             <button id="settings-cancel" class="action-button">Annulla</button>
