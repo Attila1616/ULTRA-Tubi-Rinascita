@@ -699,6 +699,7 @@ class NestedTextMarkingTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "rotated_text.zzx"
             with patch(
                 "tubenest_engine.flat_exporter.validate_romans_font",
                 return_value="test",
@@ -708,11 +709,37 @@ class NestedTextMarkingTests(unittest.TestCase):
             ):
                 result = export_flat_nested_rod(
                     placements,
-                    Path(temp_dir) / "rotated_text.zzx",
+                    output,
                     text_marking_enabled=True,
                     text_marking_height_mm=5.0,
                     text_marking_font_path="dummy.shx",
                 )
+
+            flipped_report = result["textMarkings"][1]
+            archive = Archive.read(output)
+            archive.validate()
+            shape_xml = {
+                element.get("Handle"): element
+                for element in archive.xml("Shapes/content.xml")
+                if element.tag != "MD5"
+            }
+            lite_records = {
+                record.address: record
+                for record in archive.stream("LiteGeos").records
+            }
+            first_flipped_handle = str(
+                flipped_report["new_shape_handles"][0]
+            )
+            first_flipped_shape = shape_xml[first_flipped_handle]
+            first_flipped_geometry = first_flipped_shape.find("Geometry")
+            first_flipped_record = lite_records[
+                int(first_flipped_geometry.get("GeoAddr"))
+            ]
+            first_flipped_curve = next(
+                iter(primitives(first_flipped_record))
+            )
+            flipped_first_stroke_start_z = first_flipped_curve.at(0.0)[2]
+            flipped_first_stroke_end_z = first_flipped_curve.at(1.0)[2]
 
         reports = result["textMarkings"]
         self.assertEqual(len(reports), 2)
@@ -747,6 +774,12 @@ class NestedTextMarkingTests(unittest.TestCase):
             second_piece_far - reports[1]["selectedStartZ"],
             5.0,
             places=3,
+        )
+        self.assertGreater(
+            flipped_first_stroke_end_z,
+            flipped_first_stroke_start_z,
+            "Far-end anchored text must stay readable instead of mirroring "
+            "its glyphs along the tube axis",
         )
 
         posed = _posed_round_marking_angles(
