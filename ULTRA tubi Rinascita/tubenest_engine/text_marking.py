@@ -499,6 +499,25 @@ def build_marking_records(
         strokes, base_report = prepared_layout
     report = dict(base_report)
 
+    axial_values = [
+        float(point[0])
+        for stroke in strokes
+        for point in stroke
+    ]
+    if not axial_values:
+        raise MarkingFitError("TEXT marking layout has no usable points")
+    axial_lo = min(axial_values)
+    axial_hi = max(axial_values)
+
+    def axial_z(value):
+        value = float(value)
+        if axial_direction > 0.0:
+            return start_z + (value - axial_lo)
+        # A flipped part keeps the same readable glyph handedness. The text
+        # remains anchored to the far end, but its full width is shifted inward
+        # rather than reflecting every SHX point across the tube axis.
+        return start_z - (axial_hi - value)
+
     if face == "+Y":
         transverse_limit = outside_width / 2.0 - corner_radius
         normal = (0.0, 1.0, 0.0)
@@ -507,7 +526,7 @@ def build_marking_records(
             return (
                 float(point[1]),
                 outside_height / 2.0,
-                start_z + axial_direction * float(point[0]),
+                axial_z(point[0]),
             )
 
     elif face == "+X":
@@ -518,7 +537,7 @@ def build_marking_records(
             return (
                 outside_width / 2.0,
                 -float(point[1]),
-                start_z + axial_direction * float(point[0]),
+                axial_z(point[0]),
             )
 
     elif face == "-Y":
@@ -529,7 +548,7 @@ def build_marking_records(
             return (
                 -float(point[1]),
                 -outside_height / 2.0,
-                start_z + axial_direction * float(point[0]),
+                axial_z(point[0]),
             )
 
     elif face == "-X":
@@ -540,7 +559,7 @@ def build_marking_records(
             return (
                 -outside_width / 2.0,
                 float(point[1]),
-                start_z + axial_direction * float(point[0]),
+                axial_z(point[0]),
             )
 
     else:
@@ -644,6 +663,7 @@ def wrap_strokes_to_cylinder(
 
     points = [point for stroke in strokes for point in stroke]
     ulo = min(float(point[0]) for point in points)
+    uhi = max(float(point[0]) for point in points)
     vlo = min(float(point[1]) for point in points)
     vhi = max(float(point[1]) for point in points)
     vc = (vlo + vhi) / 2.0
@@ -667,10 +687,17 @@ def wrap_strokes_to_cylinder(
 
     def mapped(u, v):
         theta = center + (float(v) - vc) / radius
+        u = float(u)
+        if axial_direction > 0.0:
+            z = start_z + (u - ulo)
+        else:
+            # Keep the glyph readable on flipped pieces. The physical face is
+            # already transformed separately (for example local X+ -> X-).
+            z = start_z - (uhi - u)
         return (
             radius * math.sin(theta),
             radius * math.cos(theta),
-            start_z + axial_direction * (float(u) - ulo),
+            z,
         )
 
     for stroke in strokes:

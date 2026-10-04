@@ -812,11 +812,11 @@ class NestedTextMarkingTests(unittest.TestCase):
             5.0,
             places=3,
         )
-        self.assertLess(
+        self.assertGreater(
             flipped_first_stroke_end_z,
             flipped_first_stroke_start_z,
-            "End-for-end flipped text should reverse axially together with "
-            "the physical part",
+            "Flipped text must stay readable; only its anchor end and physical "
+            "tube face should move with the end-for-end flip",
         )
 
         posed = _posed_round_marking_angles(
@@ -888,6 +888,7 @@ class NestedTextMarkingTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "same_face.zzx"
             with patch(
                 "tubenest_engine.flat_exporter.validate_romans_font",
                 return_value="test",
@@ -897,11 +898,34 @@ class NestedTextMarkingTests(unittest.TestCase):
             ):
                 result = export_flat_nested_rod(
                     placements,
-                    Path(temp_dir) / "same_face.zzx",
+                    output,
                     text_marking_enabled=True,
                     text_marking_height_mm=5.0,
                     text_marking_font_path="dummy.shx",
                 )
+
+            first, second = result["textMarkings"]
+            archive = Archive.read(output)
+            archive.validate()
+            shape_xml = {
+                element.get("Handle"): element
+                for element in archive.xml("Shapes/content.xml")
+                if element.tag != "MD5"
+            }
+            lite_records = {
+                record.address: record
+                for record in archive.stream("LiteGeos").records
+            }
+            flipped_shape = shape_xml[
+                str(second["new_shape_handles"][0])
+            ]
+            flipped_geometry = flipped_shape.find("Geometry")
+            flipped_record = lite_records[
+                int(flipped_geometry.get("GeoAddr"))
+            ]
+            flipped_curve = next(iter(primitives(flipped_record)))
+            flipped_start_z = flipped_curve.at(0.0)[2]
+            flipped_end_z = flipped_curve.at(1.0)[2]
 
         first, second = result["textMarkings"]
         self.assertEqual(first["selectedLocalSurfacePosition"], 90.0)
@@ -920,6 +944,11 @@ class NestedTextMarkingTests(unittest.TestCase):
         self.assertEqual(second["markingAnchorEnd"], "far")
         self.assertEqual(first["textAxialDirection"], 1)
         self.assertEqual(second["textAxialDirection"], -1)
+        self.assertGreater(
+            flipped_end_z,
+            flipped_start_z,
+            "The flipped copy must be on X- without mirroring the text itself",
+        )
 
         posed = _posed_round_marking_angles(
             type(
@@ -1159,7 +1188,7 @@ class NestedTextMarkingTests(unittest.TestCase):
             {"+Y", "+X", "-Y", "-X"},
         )
         angles = _round_marking_angles()
-        self.assertEqual(angles[:4], [0, 90, 180, 270])
+        self.assertEqual(angles[:4], [90, 0, 180, 270])
         self.assertEqual(set(angles), set(range(0, 360, 15)))
 
     def test_collision_bounds_and_axial_shift_candidates(self):
