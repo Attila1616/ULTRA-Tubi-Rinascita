@@ -553,6 +553,85 @@ class NestedTextMarkingTests(unittest.TestCase):
                         )
 
 
+    def test_round_text_head_motion_mode_can_be_disabled(self):
+        source = APP_ROOT / (
+            "Round tube Ø30 L1215, first cut 0° layer 1, "
+            "second cut 45° layer 4.zzx"
+        )
+        part = read_tube_parts(source)[0]
+        placements = [{
+            "instanceKey": "round-head-off::1",
+            "filePath": str(source),
+            "fileName": source.name,
+            "segmentHandle": part.segment_handle,
+            "markingText": "TEST",
+            "nestPlacement": {
+                "z_start": 0.0,
+                "z_end": float(part.overall_length),
+                "axial_rotation_degrees": 0.0,
+                "reversed_end_for_end": False,
+                "common_line_before": False,
+            },
+        }]
+        fake_strokes = [[(0.0, 0.0), (4.0, 0.0)]]
+        fake_report = {
+            "font_sha256": "test",
+            "font_name": "ROMANS",
+            "cap_height_units": 21,
+            "decoded_characters": list("TEST"),
+            "glyph_advances_mm": [],
+            "validated_shape_numbers": [],
+            "opcodes": ["vector"],
+            "text_bounds_2d_mm": [[0.0, 0.0], [4.0, 0.0]],
+            "glyph_line_primitives": 1,
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "round_head_off.zzx"
+            with patch(
+                "tubenest_engine.flat_exporter.validate_romans_font",
+                return_value="test",
+            ), patch(
+                "tubenest_engine.text_marking.decode_strokes",
+                return_value=(fake_strokes, fake_report),
+            ):
+                result = export_flat_nested_rod(
+                    placements,
+                    output,
+                    text_marking_enabled=True,
+                    text_marking_height_mm=5.0,
+                    text_marking_font_path="dummy.shx",
+                    round_text_head_motion_enabled=False,
+                )
+
+            report = result["textMarkings"][0]
+            self.assertEqual(report["curve_flags"], 0)
+            self.assertFalse(report["head_motion_mode"])
+            self.assertFalse(result["roundTextHeadMotionEnabled"])
+
+            archive = Archive.read(output)
+            archive.validate()
+            shape_xml = {
+                element.get("Handle"): element
+                for element in archive.xml("Shapes/content.xml")
+                if element.tag != "MD5"
+            }
+            shape_records = {
+                record.address: record
+                for record in archive.stream("Shapes").records
+            }
+            element = shape_xml[str(report["new_shape_handles"][0])]
+            record = shape_records[int(element.get("DataAddr"))]
+            curve_block = next(
+                block for block in record.blocks
+                if block.name == "Curve"
+            )
+            self.assertEqual(
+                struct.unpack_from("<I", curve_block.payload, 12)[0],
+                0,
+            )
+
+
     def test_round_default_text_face_is_local_positive_x(self):
         self.assertEqual(_round_marking_angles()[0], 90)
 
