@@ -552,6 +552,39 @@ class NestedTextMarkingTests(unittest.TestCase):
                         )
 
 
+    def test_round_default_text_face_is_local_positive_x(self):
+        self.assertEqual(_round_marking_angles()[0], 90)
+
+        normal = _posed_round_marking_angles(
+            type(
+                "Item",
+                (),
+                {
+                    "placement": {
+                        "axial_rotation_degrees": 0.0,
+                        "reversed_end_for_end": False,
+                    }
+                },
+            )(),
+            0.0,
+        )
+        flipped = _posed_round_marking_angles(
+            type(
+                "Item",
+                (),
+                {
+                    "placement": {
+                        "axial_rotation_degrees": 0.0,
+                        "reversed_end_for_end": True,
+                    }
+                },
+            )(),
+            0.0,
+        )
+        self.assertEqual(normal[0], (90.0, 90.0))
+        self.assertEqual(flipped[0], (90.0, 270.0))
+
+
     def test_round_text_can_use_material_inside_angled_tip_envelope(self):
         source = APP_ROOT / (
             "Round tube Ø30 L1215, first cut 0° layer 1, "
@@ -748,10 +781,10 @@ class NestedTextMarkingTests(unittest.TestCase):
         reports = result["textMarkings"]
         self.assertEqual(len(reports), 2)
         self.assertTrue(all(report["status"] == "generated" for report in reports))
-        self.assertEqual(reports[0]["selectedLocalSurfacePosition"], 0.0)
-        self.assertEqual(reports[1]["selectedLocalSurfacePosition"], 0.0)
-        self.assertAlmostEqual(reports[0]["selectedSurfacePosition"], 0.0, places=6)
-        self.assertAlmostEqual(reports[1]["selectedSurfacePosition"], 270.0, places=6)
+        self.assertEqual(reports[0]["selectedLocalSurfacePosition"], 90.0)
+        self.assertEqual(reports[1]["selectedLocalSurfacePosition"], 90.0)
+        self.assertAlmostEqual(reports[0]["selectedSurfacePosition"], 90.0, places=6)
+        self.assertAlmostEqual(reports[1]["selectedSurfacePosition"], 180.0, places=6)
         self.assertEqual(reports[0]["markingAnchorEnd"], "near")
         self.assertEqual(reports[0]["textAxialDirection"], 1)
         self.assertEqual(reports[1]["markingAnchorEnd"], "far")
@@ -799,7 +832,7 @@ class NestedTextMarkingTests(unittest.TestCase):
             )(),
             0.0,
         )
-        self.assertEqual(posed[0], (0.0, 270.0))
+        self.assertEqual(posed[0], (90.0, 180.0))
 
     def test_flipped_duplicate_keeps_same_source_local_text_face(self):
         source = APP_ROOT / (
@@ -814,7 +847,7 @@ class NestedTextMarkingTests(unittest.TestCase):
                 "filePath": str(source),
                 "fileName": source.name,
                 "segmentHandle": part.segment_handle,
-                "markingText": "TEST",
+                "markingText": "PROD 100 | L1215",
                 "nestPlacement": {
                     "z_start": 0.0,
                     "z_end": length,
@@ -828,7 +861,9 @@ class NestedTextMarkingTests(unittest.TestCase):
                 "filePath": str(source),
                 "fileName": source.name,
                 "segmentHandle": part.segment_handle,
-                "markingText": "TEST",
+                # Deliberately different text: face preference belongs to the
+                # physical source part, not to the exact marking string.
+                "markingText": "PROD 200 | L1215",
                 "nestPlacement": {
                     "z_start": length + 50.0,
                     "z_end": length * 2.0 + 50.0,
@@ -852,20 +887,6 @@ class NestedTextMarkingTests(unittest.TestCase):
             "glyph_line_primitives": 1,
         }
 
-        def selective_round_builder(**kwargs):
-            start_z = float(kwargs["start_z"])
-            center = float(kwargs["circumferential_center_deg"]) % 360.0
-            # Make local/global +Y unusable only on the first piece.
-            # Without the local-face cache the second piece would jump back
-            # to +Y instead of following the first piece's chosen +X face.
-            if (
-                abs(center) <= 1e-6
-                and 1e-6 < start_z < length
-            ):
-                from tubenest_engine.text_marking import MarkingFitError
-                raise MarkingFitError("forced +Y rejection on first piece")
-            return real_build_round_marking_records(**kwargs)
-
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
                 "tubenest_engine.flat_exporter.validate_romans_font",
@@ -873,9 +894,6 @@ class NestedTextMarkingTests(unittest.TestCase):
             ), patch(
                 "tubenest_engine.text_marking.decode_strokes",
                 return_value=(fake_strokes, fake_report),
-            ), patch(
-                "tubenest_engine.flat_exporter.build_round_marking_records",
-                side_effect=selective_round_builder,
             ):
                 result = export_flat_nested_rod(
                     placements,
@@ -888,8 +906,16 @@ class NestedTextMarkingTests(unittest.TestCase):
         first, second = result["textMarkings"]
         self.assertEqual(first["selectedLocalSurfacePosition"], 90.0)
         self.assertEqual(second["selectedLocalSurfacePosition"], 90.0)
-        self.assertAlmostEqual(first["selectedSurfacePosition"], 90.0, places=6)
-        self.assertAlmostEqual(second["selectedSurfacePosition"], 270.0, places=6)
+        self.assertAlmostEqual(
+            first["selectedSurfacePosition"],
+            90.0,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            second["selectedSurfacePosition"],
+            270.0,
+            places=6,
+        )
         self.assertEqual(first["markingAnchorEnd"], "near")
         self.assertEqual(second["markingAnchorEnd"], "far")
         self.assertEqual(first["textAxialDirection"], 1)
@@ -908,6 +934,7 @@ class NestedTextMarkingTests(unittest.TestCase):
             )(),
             0.0,
         )
+        self.assertEqual(posed[0], (90.0, 270.0))
         preferred = _prefer_local_marking_surface(posed, 90.0)
         self.assertEqual(preferred[0], (90.0, 270.0))
 

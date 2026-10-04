@@ -1026,9 +1026,11 @@ def _posed_flat_profile_dimensions(item, base_rotation):
 
 
 def _round_marking_angles():
-    # Try the four principal orientations first, then fill the full circle
-    # at 15-degree increments.
-    preferred = [0, 90, 180, 270]
+    # Preserve the original TEXT convention: source-local +X is the preferred
+    # marking face. Nesting may rotate or end-for-end flip the physical piece,
+    # so _posed_round_marking_angles() carries this +X face with the part.
+    # In particular, a zero-rotation end-for-end flip maps local +X to X-.
+    preferred = [90, 0, 180, 270]
     return preferred + [
         angle
         for angle in range(0, 360, ROUND_MARKING_ANGLE_STEP_DEG)
@@ -1556,8 +1558,10 @@ def _flat_transform(
                     )
 
                 surface_cache_key = (
-                    str(getattr(item.part, "part_fingerprint", "") or item.source_path),
-                    str(item.marking_text or ""),
+                    str(
+                        getattr(item.part, "part_fingerprint", "")
+                        or item.source_path
+                    ),
                     marking_profile_kind,
                 )
                 spatial_positions = _prefer_local_marking_surface(
