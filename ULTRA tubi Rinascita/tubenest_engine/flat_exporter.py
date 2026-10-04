@@ -1283,6 +1283,7 @@ def _flat_transform(
     text_marking_height_mm=5.0,
     text_marking_font_path=None,
     text_marking_offset_mm=5.0,
+    round_text_head_motion_enabled=True,
     round_tip_marking_enabled=False,
     round_tip_marking_mode=None,
     round_tip_marking_length_mm=20.0,
@@ -1607,6 +1608,7 @@ def _flat_transform(
                                     circumferential_center_deg=spatial_position,
                                     prepared_layout=prepared_layout,
                                     axial_direction=marking_axial_direction,
+                                    head_motion_mode=round_text_head_motion_enabled,
                                 )
 
                             required_near_clearance = (
@@ -1694,6 +1696,7 @@ def _flat_transform(
                                         circumferential_center_deg=spatial_position,
                                         prepared_layout=prepared_layout,
                                         axial_direction=marking_axial_direction,
+                                        head_motion_mode=round_text_head_motion_enabled,
                                     )
                             except MarkingFitError as exc:
                                 message = (
@@ -2221,6 +2224,7 @@ def export_flat_nested_rod(
     text_marking_enabled=False,
     text_marking_height_mm=5.0,
     text_marking_font_path=None,
+    round_text_head_motion_enabled=True,
     round_tip_marking_enabled=False,
     round_tip_marking_mode=None,
     round_tip_marking_length_mm=20.0,
@@ -2258,6 +2262,7 @@ def export_flat_nested_rod(
         text_marking_enabled=bool(text_marking_enabled),
         text_marking_height_mm=float(text_marking_height_mm),
         text_marking_font_path=text_marking_font_path,
+        round_text_head_motion_enabled=bool(round_text_head_motion_enabled),
         round_tip_marking_enabled=bool(round_tip_marking_enabled),
         round_tip_marking_mode=round_tip_marking_mode,
         round_tip_marking_length_mm=float(round_tip_marking_length_mm),
@@ -2277,6 +2282,7 @@ def export_flat_nested_rod(
         "placements": audit,
         "textMarkings": marking_reports,
         "textMarkingEnabled": bool(text_marking_enabled),
+        "roundTextHeadMotionEnabled": bool(round_text_head_motion_enabled),
         "roundTipMarkings": round_tip_marking_reports,
         "roundTipMarkingEnabled": (
             str(round_tip_marking_mode).strip().lower() != "none"
@@ -2306,6 +2312,7 @@ def export_flat_nested_rod_to_directory(
     text_marking_enabled=False,
     text_marking_height_mm=5.0,
     text_marking_font_path=None,
+    round_text_head_motion_enabled=True,
     round_tip_marking_enabled=False,
     round_tip_marking_mode=None,
     round_tip_marking_length_mm=20.0,
@@ -2324,6 +2331,7 @@ def export_flat_nested_rod_to_directory(
         text_marking_enabled=text_marking_enabled,
         text_marking_height_mm=text_marking_height_mm,
         text_marking_font_path=text_marking_font_path,
+        round_text_head_motion_enabled=round_text_head_motion_enabled,
         round_tip_marking_enabled=round_tip_marking_enabled,
         round_tip_marking_mode=round_tip_marking_mode,
         round_tip_marking_length_mm=round_tip_marking_length_mm,
