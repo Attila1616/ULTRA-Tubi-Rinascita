@@ -374,19 +374,27 @@ def _order_piece_shape_references_release_safe(
     *,
     near_handle,
     far_handle,
+    text_marking_group_by_handle=None,
 ):
     """Order one physical piece so its releasing cutoff is always last.
 
     Internal machining may still be ordered axially for efficiency, but no
     hole, slot or marking is allowed to follow the far/releasing end cut.
+    Generated TEXT is treated as one atomic machining block: all of its
+    strokes stay contiguous and retain their generated order (therefore line
+    1 completes before line 2, etc.) before axial scanning resumes.
     Display-only geometry is preserved after machining references.
     """
     near_handle = str(near_handle)
     far_handle = str(far_handle)
+    text_marking_group_by_handle = dict(
+        text_marking_group_by_handle or {}
+    )
     near_ref = None
     far_ref = None
     internal = []
     display = []
+    text_groups = {}
 
     for original_index, ref in enumerate(list(shape_refs)):
         handle = str(ref.get("Handle"))
@@ -409,6 +417,19 @@ def _order_piece_shape_references_release_safe(
             display.append((original_index, ref))
             continue
 
+        text_group = text_marking_group_by_handle.get(handle)
+        if text_group is not None:
+            group_id, member_index = text_group
+            text_groups.setdefault(group_id, []).append(
+                (
+                    int(member_index),
+                    original_index,
+                    ref,
+                    shape_xml,
+                )
+            )
+            continue
+
         internal.append(
             (
                 (
@@ -416,7 +437,26 @@ def _order_piece_shape_references_release_safe(
                     1 if _shape_do_not_cut(record) else 0,
                     original_index,
                 ),
-                ref,
+                [ref],
+            )
+        )
+
+    for group_id, members in text_groups.items():
+        members.sort(key=lambda row: (row[0], row[1]))
+        group_refs = [row[2] for row in members]
+        group_start = min(
+            _shape_z_bounds(row[3], lite_by_addr)[0]
+            for row in members
+        )
+        first_original_index = min(row[1] for row in members)
+        internal.append(
+            (
+                (
+                    round(group_start, 6),
+                    0,
+                    first_original_index,
+                ),
+                group_refs,
             )
         )
 
@@ -428,7 +468,8 @@ def _order_piece_shape_references_release_safe(
 
     internal.sort(key=lambda row: row[0])
     ordered = [near_ref]
-    ordered.extend(ref for _key, ref in internal)
+    for _key, refs in internal:
+        ordered.extend(refs)
     ordered.append(far_ref)
     ordered.extend(ref for _index, ref in display)
     return ordered
@@ -1245,6 +1286,8 @@ def _flat_transform(
     marking_reports = []
     round_tip_marking_reports = []
     marking_pending = []
+    text_marking_group_by_handle = {}
+    next_text_marking_group_id = 1
     next_marking_handle = _next_export_handle(archive)
     shared_cut_pairs = []
     release_handles = []
@@ -1705,6 +1748,15 @@ def _flat_transform(
                     )
                 else:
                     next_marking_handle = addition["next_handle"]
+                    text_group_id = next_text_marking_group_id
+                    next_text_marking_group_id += 1
+                    for member_index, (
+                        shape_element,
+                        _geometry_element,
+                    ) in enumerate(addition["shape_elements"]):
+                        text_marking_group_by_handle[
+                            str(shape_element.get("Handle"))
+                        ] = (text_group_id, member_index)
 
                     segment_shapes = segment.find("Shapes")
                     if segment_shapes is None:
@@ -2001,6 +2053,7 @@ def _flat_transform(
             lite_by_addr,
             near_handle=near_handle,
             far_handle=far_handle,
+            text_marking_group_by_handle=text_marking_group_by_handle,
         )
 
     first = segments[0]

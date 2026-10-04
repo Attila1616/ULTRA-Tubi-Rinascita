@@ -2,6 +2,7 @@ import math
 import struct
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ from tubenest_engine.flat_exporter import (
     _bounds_overlap,
     _candidate_marking_start_positions,
     _flat_marking_faces,
+    _order_piece_shape_references_release_safe,
     _posed_round_marking_angles,
     _round_marking_angles,
     export_flat_nested_rod,
@@ -155,10 +157,24 @@ class NestedTextMarkingTests(unittest.TestCase):
                 ordered_handles.index(handle)
                 for handle in new_handles
             ]
+            ordered_marking_handles = [
+                str(value)
+                for value in result["textMarkings"][0]["new_shape_handles"]
+            ]
 
             self.assertTrue(marking_indices)
             self.assertLess(near_index, min(marking_indices))
             self.assertLess(max(marking_indices), far_index)
+            self.assertEqual(
+                [
+                    ordered_handles[index]
+                    for index in range(
+                        min(marking_indices),
+                        max(marking_indices) + 1,
+                    )
+                ],
+                ordered_marking_handles,
+            )
 
             shape_xml = {
                 element.get("Handle"): element
@@ -180,6 +196,100 @@ class NestedTextMarkingTests(unittest.TestCase):
                     "little",
                 )
                 self.assertEqual(channel, 4)
+
+
+    def test_generated_text_is_one_contiguous_machining_block(self):
+        def record(channel=1, do_not_cut=False):
+            payload = bytearray(12)
+            struct.pack_into("<I", payload, 0, int(channel))
+            struct.pack_into(
+                "<I",
+                payload,
+                8,
+                0x2 if do_not_cut else 0,
+            )
+            block = type(
+                "Block",
+                (),
+                {"name": "Shape", "payload": bytes(payload)},
+            )()
+            return type("Record", (), {"blocks": [block]})()
+
+        handles = ["1", "10", "20", "11", "12", "13", "5"]
+        refs = [
+            ET.Element("GeoCurve", Handle=handle)
+            for handle in handles
+        ]
+        shapes = {}
+        records = {}
+        for handle in handles:
+            addr = int(handle) * 10
+            shapes[handle] = ET.Element(
+                "GeoCurve",
+                Handle=handle,
+                DataAddr=str(addr),
+            )
+            records[addr] = record(
+                channel=4 if handle in {"10", "11", "12", "13"} else 1
+            )
+
+        centers = {
+            "1": 0.0,
+            "10": 10.0,
+            "12": 14.0,
+            "20": 20.0,
+            "11": 30.0,
+            "13": 34.0,
+            "5": 100.0,
+        }
+        z_bounds = {
+            "10": (9.0, 11.0),
+            "11": (29.0, 31.0),
+            "12": (13.0, 15.0),
+            "13": (33.0, 35.0),
+        }
+        text_groups = {
+            "10": (1, 0),  # line 1, stroke 1
+            "11": (1, 1),  # line 1, stroke 2
+            "12": (1, 2),  # line 2, stroke 1
+            "13": (1, 3),  # line 2, stroke 2
+        }
+
+        with patch(
+            "tubenest_engine.flat_exporter._shape_axial_center",
+            side_effect=lambda shape, _lite: centers[shape.get("Handle")],
+        ), patch(
+            "tubenest_engine.flat_exporter._shape_z_bounds",
+            side_effect=lambda shape, _lite: z_bounds[shape.get("Handle")],
+        ):
+            ordered = _order_piece_shape_references_release_safe(
+                refs,
+                shapes,
+                records,
+                {},
+                near_handle="1",
+                far_handle="5",
+                text_marking_group_by_handle=text_groups,
+            )
+
+        ordered_handles = [ref.get("Handle") for ref in ordered]
+        self.assertEqual(
+            ordered_handles,
+            ["1", "10", "11", "12", "13", "20", "5"],
+        )
+
+        text_indices = [
+            ordered_handles.index(handle)
+            for handle in ("10", "11", "12", "13")
+        ]
+        self.assertEqual(
+            text_indices,
+            list(range(min(text_indices), max(text_indices) + 1)),
+        )
+        self.assertLess(
+            max(text_indices),
+            ordered_handles.index("20"),
+        )
 
 
     def test_progressive_layout_candidates(self):
