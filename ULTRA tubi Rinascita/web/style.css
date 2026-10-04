@@ -597,13 +597,54 @@ body.modal-scroll-locked {
 
 .settings-body {
     display: grid;
+    gap: 12px;
+}
+
+.settings-tabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #d7dee8;
+}
+
+.settings-tab {
+    padding: 7px 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #f8fafc;
+    color: #475569;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.settings-tab:hover {
+    background: #eef2f7;
+}
+
+.settings-tab.active {
+    border-color: #64748b;
+    background: #e2e8f0;
+    color: #1f2937;
+}
+
+.settings-category {
+    display: none;
     gap: 9px;
 }
 
-.settings-body > label {
+.settings-category.active {
+    display: grid;
+}
+
+.settings-category > label {
     margin-top: 7px;
     color: #334155;
     font-weight: 700;
+}
+
+.settings-section-title-first {
+    margin-top: 0;
 }
 
 .settings-section-title {
