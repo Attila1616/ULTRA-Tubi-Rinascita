@@ -774,12 +774,19 @@ def build_round_marking_records(
     curve_tolerance_mm=ROUND_CURVE_TOLERANCE_MM,
     prepared_layout=None,
     axial_direction=1.0,
+    head_motion_mode=True,
 ):
     """Build channel-4 marking geometry conformed to a round tube surface."""
     height_mm = float(height_mm)
     start_z = float(start_z)
     max_z = float(max_z)
     radius = float(radius)
+    head_motion_mode = bool(head_motion_mode)
+    curve_flags = (
+        ROUND_TEXT_HEAD_MOTION_CURVE_FLAGS
+        if head_motion_mode
+        else ROUND_CURVE_FLAGS
+    )
 
     layout_lines = lines if lines is not None else [text]
     if prepared_layout is None:
@@ -810,7 +817,7 @@ def build_round_marking_records(
         source_shape_record=source_shape_record,
         paths=paths,
         first_handle=first_handle,
-        curve_flags=ROUND_TEXT_HEAD_MOTION_CURVE_FLAGS,
+        curve_flags=curve_flags,
         planar_normal=(0.0, 0.0, 0.0),
     )
     report.update(geometry_report)
@@ -833,8 +840,8 @@ def build_round_marking_records(
             ],
             "new_shape_channels": [MARKING_CHANNEL],
             "max_z": max_z,
-            "curve_flags": ROUND_TEXT_HEAD_MOTION_CURVE_FLAGS,
-            "head_motion_mode": True,
+            "curve_flags": curve_flags,
+            "head_motion_mode": head_motion_mode,
             "planar_normal": [0.0, 0.0, 0.0],
             "representation": (
                 "CompositeCurve3D with subdivided Line3D chords on the "
