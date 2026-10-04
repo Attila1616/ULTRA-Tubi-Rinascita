@@ -51,6 +51,7 @@ class Api:
         self.config.setdefault("nesting_debug_enabled", True)
         self.config.setdefault("nested_text_marking_enabled", False)
         self.config.setdefault("nested_text_marking_height_mm", 5.0)
+        self.config.setdefault("nested_round_text_head_motion_enabled", True)
         round_tip_mode = str(
             self.config.get("nested_round_tip_marking_mode") or ""
         ).strip().lower()
@@ -97,6 +98,12 @@ class Api:
             payload.get(
                 "nested_text_marking_enabled",
                 updated.get("nested_text_marking_enabled", False),
+            )
+        )
+        updated["nested_round_text_head_motion_enabled"] = bool(
+            payload.get(
+                "nested_round_text_head_motion_enabled",
+                updated.get("nested_round_text_head_motion_enabled", True),
             )
         )
         try:
