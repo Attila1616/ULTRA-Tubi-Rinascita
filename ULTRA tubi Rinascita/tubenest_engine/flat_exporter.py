@@ -1054,6 +1054,39 @@ def _posed_round_marking_angles(item, base_rotation):
     return result
 
 
+def _prefer_local_marking_surface(spatial_positions, preferred_local):
+    positions = list(spatial_positions or [])
+    if preferred_local is None:
+        return positions
+
+    def matches(value):
+        if isinstance(value, str) or isinstance(preferred_local, str):
+            return str(value) == str(preferred_local)
+        try:
+            return (
+                abs(
+                    _normalize_marking_angle(float(value))
+                    - _normalize_marking_angle(float(preferred_local))
+                )
+                <= 1e-6
+            )
+        except (TypeError, ValueError):
+            return value == preferred_local
+
+    preferred = [
+        row
+        for row in positions
+        if row and matches(row[0])
+    ]
+    if not preferred:
+        return positions
+    return preferred + [
+        row
+        for row in positions
+        if row not in preferred
+    ]
+
+
 def _posed_part_end(item, side):
     ends = list(item.part.ends or [])
     if len(ends) < 2:
@@ -1287,6 +1320,7 @@ def _flat_transform(
     round_tip_marking_reports = []
     marking_pending = []
     text_marking_group_by_handle = {}
+    preferred_text_surface_by_part = {}
     next_text_marking_group_id = 1
     next_marking_handle = _next_export_handle(archive)
     shared_cut_pairs = []
@@ -1521,6 +1555,16 @@ def _flat_transform(
                         base_rotation,
                     )
 
+                surface_cache_key = (
+                    str(getattr(item.part, "part_fingerprint", "") or item.source_path),
+                    str(item.marking_text or ""),
+                    marking_profile_kind,
+                )
+                spatial_positions = _prefer_local_marking_surface(
+                    spatial_positions,
+                    preferred_text_surface_by_part.get(surface_cache_key),
+                )
+
                 for layout_index, layout_lines in enumerate(layouts):
                     prepared_layout = layout_text_strokes(
                         text_marking_font_path,
@@ -1702,6 +1746,10 @@ def _flat_transform(
                             selected_spatial_position = spatial_position
                             selected_local_surface_position = (
                                 local_surface_position
+                            )
+                            preferred_text_surface_by_part.setdefault(
+                                surface_cache_key,
+                                local_surface_position,
                             )
                             selected_start_z = candidate_start_z
                             selected_preferred_start_z = preferred_start_z

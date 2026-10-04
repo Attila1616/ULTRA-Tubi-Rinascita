@@ -16,11 +16,15 @@ from tubenest_engine.flat_exporter import (
     _flat_marking_faces,
     _order_piece_shape_references_release_safe,
     _posed_round_marking_angles,
+    _prefer_local_marking_surface,
     _round_marking_angles,
     export_flat_nested_rod,
 )
 from tubenest_engine.geometry import primitives
-from tubenest_engine.text_marking import marking_layout_candidates
+from tubenest_engine.text_marking import (
+    build_round_marking_records as real_build_round_marking_records,
+    marking_layout_candidates,
+)
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -775,11 +779,11 @@ class NestedTextMarkingTests(unittest.TestCase):
             5.0,
             places=3,
         )
-        self.assertGreater(
+        self.assertLess(
             flipped_first_stroke_end_z,
             flipped_first_stroke_start_z,
-            "Far-end anchored text must stay readable instead of mirroring "
-            "its glyphs along the tube axis",
+            "End-for-end flipped text should reverse axially together with "
+            "the physical part",
         )
 
         posed = _posed_round_marking_angles(
@@ -796,6 +800,117 @@ class NestedTextMarkingTests(unittest.TestCase):
             0.0,
         )
         self.assertEqual(posed[0], (0.0, 270.0))
+
+    def test_flipped_duplicate_keeps_same_source_local_text_face(self):
+        source = APP_ROOT / (
+            "Round tube Ø30 L1215, first cut 0° layer 1, "
+            "second cut 45° layer 4.zzx"
+        )
+        part = read_tube_parts(source)[0]
+        length = float(part.overall_length)
+        placements = [
+            {
+                "instanceKey": "same-face::1",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "markingText": "TEST",
+                "nestPlacement": {
+                    "z_start": 0.0,
+                    "z_end": length,
+                    "axial_rotation_degrees": 0.0,
+                    "reversed_end_for_end": False,
+                    "common_line_before": False,
+                },
+            },
+            {
+                "instanceKey": "same-face::2",
+                "filePath": str(source),
+                "fileName": source.name,
+                "segmentHandle": part.segment_handle,
+                "markingText": "TEST",
+                "nestPlacement": {
+                    "z_start": length + 50.0,
+                    "z_end": length * 2.0 + 50.0,
+                    "axial_rotation_degrees": 0.0,
+                    "reversed_end_for_end": True,
+                    "common_line_before": False,
+                },
+            },
+        ]
+
+        fake_strokes = [[(0.0, 0.0), (10.0, 0.0)]]
+        fake_report = {
+            "font_sha256": "test",
+            "font_name": "ROMANS",
+            "cap_height_units": 21,
+            "decoded_characters": list("TEST"),
+            "glyph_advances_mm": [],
+            "validated_shape_numbers": [],
+            "opcodes": ["vector"],
+            "text_bounds_2d_mm": [[0.0, 0.0], [10.0, 0.0]],
+            "glyph_line_primitives": 1,
+        }
+
+        def selective_round_builder(**kwargs):
+            start_z = float(kwargs["start_z"])
+            center = float(kwargs["circumferential_center_deg"]) % 360.0
+            # Make local/global +Y unusable only on the first piece.
+            # Without the local-face cache the second piece would jump back
+            # to +Y instead of following the first piece's chosen +X face.
+            if (
+                abs(center) <= 1e-6
+                and 1e-6 < start_z < length
+            ):
+                from tubenest_engine.text_marking import MarkingFitError
+                raise MarkingFitError("forced +Y rejection on first piece")
+            return real_build_round_marking_records(**kwargs)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch(
+                "tubenest_engine.flat_exporter.validate_romans_font",
+                return_value="test",
+            ), patch(
+                "tubenest_engine.text_marking.decode_strokes",
+                return_value=(fake_strokes, fake_report),
+            ), patch(
+                "tubenest_engine.flat_exporter.build_round_marking_records",
+                side_effect=selective_round_builder,
+            ):
+                result = export_flat_nested_rod(
+                    placements,
+                    Path(temp_dir) / "same_face.zzx",
+                    text_marking_enabled=True,
+                    text_marking_height_mm=5.0,
+                    text_marking_font_path="dummy.shx",
+                )
+
+        first, second = result["textMarkings"]
+        self.assertEqual(first["selectedLocalSurfacePosition"], 90.0)
+        self.assertEqual(second["selectedLocalSurfacePosition"], 90.0)
+        self.assertAlmostEqual(first["selectedSurfacePosition"], 90.0, places=6)
+        self.assertAlmostEqual(second["selectedSurfacePosition"], 270.0, places=6)
+        self.assertEqual(first["markingAnchorEnd"], "near")
+        self.assertEqual(second["markingAnchorEnd"], "far")
+        self.assertEqual(first["textAxialDirection"], 1)
+        self.assertEqual(second["textAxialDirection"], -1)
+
+        posed = _posed_round_marking_angles(
+            type(
+                "Item",
+                (),
+                {
+                    "placement": {
+                        "axial_rotation_degrees": 0.0,
+                        "reversed_end_for_end": True,
+                    }
+                },
+            )(),
+            0.0,
+        )
+        preferred = _prefer_local_marking_surface(posed, 90.0)
+        self.assertEqual(preferred[0], (90.0, 270.0))
+
 
     def test_round_angled_planar_tip_gets_axial_centerline_mark(self):
         source = APP_ROOT / (
