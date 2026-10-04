@@ -497,7 +497,8 @@ class NestedTextMarkingTests(unittest.TestCase):
             report = result["textMarkings"][0]
             self.assertEqual(report["status"], "generated")
             self.assertEqual(report["profileKind"], "Circle")
-            self.assertEqual(report["curve_flags"], 0)
+            self.assertEqual(report["curve_flags"], 128)
+            self.assertTrue(report["head_motion_mode"])
             self.assertEqual(report["planar_normal"], [0.0, 0.0, 0.0])
 
             archive = Archive.read(output)
@@ -534,7 +535,7 @@ class NestedTextMarkingTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     struct.unpack_from("<I", curve_block.payload, 12)[0],
-                    0,
+                    128,
                 )
                 self.assertEqual(
                     read_vector(curve_block.payload, 16),

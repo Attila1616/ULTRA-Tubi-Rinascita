@@ -21,6 +21,11 @@ from .geometry import Line, composite
 ROMANS_SHA256 = "b22f4abadf72c9184c6c33dbf159b504cc09185a4c24102223afbe58b400f9bd"
 MARKING_CHANNEL = 4
 PLANAR_ONLY_CURVE_FLAGS = 64
+# Verified from a TubesT 7.1.27.1 round-hole fixture saved with the
+# perpendicular/head-motion option enabled: its machining Curve flag is 0x80.
+# Use the same mode for round TEXT so circumferential strokes are executed by
+# cutting-head motion instead of chuck rotation.
+ROUND_TEXT_HEAD_MOTION_CURVE_FLAGS = 128
 ROUND_CURVE_FLAGS = 0
 ROUND_CURVE_TOLERANCE_MM = 0.02
 MAX_ROUND_WRAP_RADIANS = math.pi / 2.0
@@ -805,7 +810,7 @@ def build_round_marking_records(
         source_shape_record=source_shape_record,
         paths=paths,
         first_handle=first_handle,
-        curve_flags=ROUND_CURVE_FLAGS,
+        curve_flags=ROUND_TEXT_HEAD_MOTION_CURVE_FLAGS,
         planar_normal=(0.0, 0.0, 0.0),
     )
     report.update(geometry_report)
@@ -828,11 +833,13 @@ def build_round_marking_records(
             ],
             "new_shape_channels": [MARKING_CHANNEL],
             "max_z": max_z,
-            "curve_flags": ROUND_CURVE_FLAGS,
+            "curve_flags": ROUND_TEXT_HEAD_MOTION_CURVE_FLAGS,
+            "head_motion_mode": True,
             "planar_normal": [0.0, 0.0, 0.0],
             "representation": (
                 "CompositeCurve3D with subdivided Line3D chords on the "
-                "outside cylinder"
+                "outside cylinder using TubesT Curve flag 0x80 for "
+                "perpendicular/head-motion machining"
             ),
         }
     )
