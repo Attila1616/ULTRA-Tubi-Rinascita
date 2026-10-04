@@ -240,6 +240,9 @@ if (searchModal) searchModal.addEventListener('mousedown', (e) => { if (e.target
         settingsModal.querySelectorAll('[data-settings-picker]').forEach(button => {
             button.addEventListener('click', () => pickSettingsPath(button));
         });
+        settingsModal.querySelectorAll('[data-settings-category]').forEach(button => {
+            button.addEventListener('click', () => setSettingsCategory(button.dataset.settingsCategory));
+        });
     }
     document.getElementById('inventory-export-close')?.addEventListener('click', closeInventoryExportModal);
     document.getElementById('inventory-export-cancel')?.addEventListener('click', closeInventoryExportModal);
@@ -412,6 +415,7 @@ async function openSettingsModal() {
         document.getElementById('settings-nesting-gap-mm').value = Number.isFinite(Number(config.nesting_gap_mm)) ? Number(config.nesting_gap_mm) : 2;
         document.getElementById('settings-nesting-debug-enabled').checked = config.nesting_debug_enabled !== false;
         document.getElementById('settings-nested-text-marking-enabled').checked = !!config.nested_text_marking_enabled;
+        document.getElementById('settings-round-text-head-motion-enabled').checked = config.nested_round_text_head_motion_enabled !== false;
         document.getElementById('settings-nested-text-marking-height-mm').value = Number.isFinite(Number(config.nested_text_marking_height_mm))
             ? Math.min(10, Math.max(1, Number(config.nested_text_marking_height_mm)))
             : 5;
@@ -426,12 +430,24 @@ async function openSettingsModal() {
         settingsIgnoredFolders = Array.isArray(config.ignore_folders) ? [...config.ignore_folders] : [];
         settingsIgnoreInput.value = '';
         renderIgnoredFolders();
+        setSettingsCategory('paths');
         document.body.classList.add('modal-scroll-locked');
         settingsModal.style.display = 'flex';
     } catch (error) {
         console.error(error);
         alert('Impossibile caricare le impostazioni.');
     }
+}
+
+function setSettingsCategory(category) {
+    if (!settingsModal) return;
+    const requested = String(category || 'paths');
+    settingsModal.querySelectorAll('[data-settings-category]').forEach(button => {
+        button.classList.toggle('active', button.dataset.settingsCategory === requested);
+    });
+    settingsModal.querySelectorAll('[data-settings-panel]').forEach(panel => {
+        panel.classList.toggle('active', panel.dataset.settingsPanel === requested);
+    });
 }
 
 function applyLockColors(unlocked, locked) {
@@ -536,6 +552,7 @@ async function saveSettings() {
             nesting_gap_mm: Math.max(0, Number(document.getElementById('settings-nesting-gap-mm').value) || 0),
             nesting_debug_enabled: document.getElementById('settings-nesting-debug-enabled').checked,
             nested_text_marking_enabled: document.getElementById('settings-nested-text-marking-enabled').checked,
+            nested_round_text_head_motion_enabled: document.getElementById('settings-round-text-head-motion-enabled').checked,
             nested_text_marking_height_mm: Math.min(
                 10,
                 Math.max(
