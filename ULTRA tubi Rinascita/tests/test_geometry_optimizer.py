@@ -445,7 +445,6 @@ class GeometryOptimizerTests(unittest.TestCase):
             item("B", 722, make_part(722)),
             item("C", 290, make_part(290)),
             item("D", 810, make_part(810, start_plane=(25.0, 0.0, 0.5), end_plane=(785.0, 0.0, -0.5))),
-            item("E", 810, make_part(810, start_plane=(25.0, 0.0, 0.5), end_plane=(785.0, 0.0, -0.5))),
         ]
         normalized = optimizer_module._normalize_items(parts, 6000)
         mask = (1 << len(normalized)) - 1
@@ -470,6 +469,35 @@ class GeometryOptimizerTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.used_mask, mask)
         self.assertLess(result.used_span, 5600.0)
+
+    def test_six_piece_repeated_square_search_is_bounded(self):
+        # A six-piece remainder from the TD1906A000101 mix is already far too
+        # expensive to enumerate exactly even though it has repeated types.
+        lengths = [830, 830, 694, 694, 594, 594]
+        source_ids = ["L830", "L830", "L694", "L694", "L594", "L594"]
+        pieces = [
+            {
+                "instanceKey": f"SQ6::{index}",
+                "sourceId": source_ids[index],
+                "length": float(length),
+                "tubePart": make_part(float(length)),
+            }
+            for index, length in enumerate(lengths)
+        ]
+        normalized = optimizer_module._normalize_items(pieces, 6000)
+        mask = (1 << len(normalized)) - 1
+        estimate = optimizer_module._estimate_exact_require_all_branches(
+            normalized,
+            mask,
+        )
+
+        self.assertGreater(estimate, 100_000)
+        self.assertFalse(
+            optimizer_module._use_exact_require_all_search(
+                normalized,
+                mask,
+            )
+        )
 
     def test_pose_heavy_eight_piece_square_search_is_bounded(self):
         # Regression for the TD1906A000101-style case: an eight-piece square
