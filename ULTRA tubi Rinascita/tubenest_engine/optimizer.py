@@ -35,7 +35,7 @@ EXACT_REQUIRE_ALL_MAX_PIECES = 8
 # count. Eight square-tube pieces can have 8 legal poses each, so an "exact"
 # refinement can explode into tens of millions/billions of pose/order branches.
 # Keep exact search only when a conservative branch estimate is genuinely small.
-EXACT_REQUIRE_ALL_MAX_ESTIMATED_BRANCHES = 5_000_000
+EXACT_REQUIRE_ALL_MAX_ESTIMATED_BRANCHES = 100_000
 MERGE_PAIR_ATTEMPT_LIMIT = 160
 PARALLEL_MIN_ITEMS = 8
 PARALLEL_MIN_UNIQUE_TYPES = 6
