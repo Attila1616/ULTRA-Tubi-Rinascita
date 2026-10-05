@@ -449,6 +449,12 @@ class GeometryOptimizerTests(unittest.TestCase):
         ]
         normalized = optimizer_module._normalize_items(parts, 6000)
         mask = (1 << len(normalized)) - 1
+        self.assertTrue(
+            optimizer_module._use_exact_require_all_search(
+                normalized,
+                mask,
+            )
+        )
 
         result = optimizer_module._search_single_rod(
             normalized,
@@ -464,6 +470,40 @@ class GeometryOptimizerTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.used_mask, mask)
         self.assertLess(result.used_span, 5600.0)
+
+    def test_pose_heavy_eight_piece_square_search_is_bounded(self):
+        # Regression for the TD1906A000101-style case: an eight-piece square
+        # rod has eight legal poses per piece. The old piece-count-only rule
+        # treated it as exact and could explode during merge/refinement.
+        lengths = [830, 830, 694, 694, 594, 594, 430, 283]
+        source_ids = ["L830", "L830", "L694", "L694", "L594", "L594", "L430", "L283"]
+        pieces = [
+            {
+                "instanceKey": f"SQ::{index}",
+                "sourceId": source_ids[index],
+                "length": float(length),
+                "tubePart": make_part(float(length)),
+            }
+            for index, length in enumerate(lengths)
+        ]
+        normalized = optimizer_module._normalize_items(pieces, 6000)
+        mask = (1 << len(normalized)) - 1
+        estimate = optimizer_module._estimate_exact_require_all_branches(
+            normalized,
+            mask,
+        )
+
+        self.assertGreater(
+            estimate,
+            optimizer_module.EXACT_REQUIRE_ALL_MAX_ESTIMATED_BRANCHES,
+        )
+        self.assertFalse(
+            optimizer_module._use_exact_require_all_search(
+                normalized,
+                mask,
+            )
+        )
+
 
     def test_diagnostic_reports_definite_cross_rod_merge(self):
         a = make_part(1000)
