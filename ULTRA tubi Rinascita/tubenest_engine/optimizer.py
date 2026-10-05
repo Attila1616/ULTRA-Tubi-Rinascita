@@ -31,6 +31,11 @@ DEFAULT_GAP_MM = 2.0
 DEFAULT_BEAM_WIDTH = 120
 DEFAULT_MAX_CANDIDATE_TYPES = 24
 EXACT_REQUIRE_ALL_MAX_PIECES = 8
+# Small require-all searches used to disable beam pruning solely by piece
+# count. Eight square-tube pieces can have 8 legal poses each, so an "exact"
+# refinement can explode into tens of millions/billions of pose/order branches.
+# Keep exact search only when a conservative branch estimate is genuinely small.
+EXACT_REQUIRE_ALL_MAX_ESTIMATED_BRANCHES = 5_000_000
 MERGE_PAIR_ATTEMPT_LIMIT = 160
 PARALLEL_MIN_ITEMS = 8
 PARALLEL_MIN_UNIQUE_TYPES = 6
@@ -458,6 +463,64 @@ def _representative_indices(items, allowed_mask, used_mask, max_types):
     return values[:max_types]
 
 
+def _pose_branch_estimate(item, *, first):
+    if not item.geometry_available:
+        return 1
+    kind = _profile_kind(item)
+    if kind == "Square":
+        return 8
+    if kind == "Rect":
+        return 8 if first else 4
+    if kind == "Circle":
+        return 2
+    return 2
+
+
+def _estimate_exact_require_all_branches(items, target_mask):
+    selected = [
+        item
+        for item in items
+        if int(target_mask) & (1 << item.index)
+    ]
+    piece_count = len(selected)
+    if piece_count <= 1:
+        return 1
+
+    counts = {}
+    representatives = {}
+    for item in selected:
+        counts[item.type_key] = counts.get(item.type_key, 0) + 1
+        representatives.setdefault(item.type_key, item)
+
+    unique_orders = math.factorial(piece_count)
+    for count in counts.values():
+        unique_orders //= math.factorial(count)
+
+    first_pose_branches = max(
+        _pose_branch_estimate(item, first=True)
+        for item in representatives.values()
+    )
+    later_pose_branches = max(
+        _pose_branch_estimate(item, first=False)
+        for item in representatives.values()
+    )
+    return (
+        unique_orders
+        * first_pose_branches
+        * (later_pose_branches ** max(0, piece_count - 1))
+    )
+
+
+def _use_exact_require_all_search(items, target_mask):
+    piece_count = int(target_mask).bit_count()
+    if piece_count > EXACT_REQUIRE_ALL_MAX_PIECES:
+        return False
+    return (
+        _estimate_exact_require_all_branches(items, target_mask)
+        <= EXACT_REQUIRE_ALL_MAX_ESTIMATED_BRANCHES
+    )
+
+
 def _state_dedupe_key(state):
     if not state.placed:
         return (state.used_mask, None, None, None, state.rectangle_family, state.tail_used)
@@ -629,7 +692,7 @@ def _search_single_rod(
     target_mask = int(allowed_mask)
     exact_mode = bool(
         require_all
-        and int(target_mask).bit_count() <= EXACT_REQUIRE_ALL_MAX_PIECES
+        and _use_exact_require_all_search(items, target_mask)
     )
 
     for _depth in range(len(items) + 1):
@@ -1075,7 +1138,7 @@ def _search_single_rod_parallel(
     target_mask = int(allowed_mask)
     exact_mode = bool(
         require_all
-        and target_mask.bit_count() <= EXACT_REQUIRE_ALL_MAX_PIECES
+        and _use_exact_require_all_search(items, target_mask)
     )
 
     initial = RodSearchState()
