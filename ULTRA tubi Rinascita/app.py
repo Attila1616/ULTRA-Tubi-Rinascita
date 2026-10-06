@@ -302,6 +302,21 @@ class Api:
             "path": result["paths"][0],
         }
 
+    def convert_igs_files_to_zzx(self, file_paths, overwrite=False):
+        try:
+            return logic.convert_igs_files_to_zzx(
+                file_paths or [],
+                overwrite=overwrite,
+            )
+        except Exception:
+            print("--- PYTHON ERROR in convert_igs_files_to_zzx ---")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": "Errore durante la conversione batch IGS -> ZZX.",
+                "results": [],
+            }
+
     def convert_igs_file_to_zzx(self, file_path, overwrite=False):
         try:
             return logic.convert_igs_file_to_zzx(
