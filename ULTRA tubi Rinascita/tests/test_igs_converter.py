@@ -1,6 +1,8 @@
 from pathlib import Path
+import struct
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 import numpy as np
@@ -74,6 +76,40 @@ def _sample_model():
                 "z_min": 200.0,
                 "z_max": 200.0,
                 "z_mean": 200.0,
+            },
+        ],
+        "display_operations": [
+            {
+                "outer": np.asarray(
+                    [
+                        [25.0, 25.0, 50.0],
+                        [25.0, 25.0, 200.0],
+                    ],
+                    dtype=float,
+                ),
+                "inner": np.asarray(
+                    [
+                        [23.0, 23.0, 48.0],
+                        [23.0, 23.0, 200.0],
+                    ],
+                    dtype=float,
+                ),
+            },
+            {
+                "outer": np.asarray(
+                    [
+                        [-25.0, -25.0, 0.0],
+                        [-25.0, -25.0, 200.0],
+                    ],
+                    dtype=float,
+                ),
+                "inner": np.asarray(
+                    [
+                        [-23.0, -23.0, 2.0],
+                        [-23.0, -23.0, 200.0],
+                    ],
+                    dtype=float,
+                ),
             },
         ],
     }
@@ -185,9 +221,72 @@ class IgsConverterTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "success")
             self.assertEqual(result["outputPath"], str(output))
+            self.assertEqual(result["displayShapeCount"], 2)
 
             archive = Archive.read(output)
             archive.validate()
+
+            shape_records = archive.stream("Shapes").records
+            channels = []
+            for record in shape_records:
+                shape_block = next(
+                    block
+                    for block in record.blocks
+                    if block.name == "Shape"
+                )
+                channels.append(
+                    struct.unpack_from(
+                        "<I",
+                        shape_block.payload,
+                        0,
+                    )[0]
+                )
+            self.assertEqual(channels, [1, 0, 0, 1])
+
+            shape_root = archive.xml("Shapes/content.xml")
+            shape_elements = [
+                element
+                for element in shape_root
+                if element.tag != "MD5"
+            ]
+            self.assertEqual(
+                [
+                    element.find("Geometry").get("Class")
+                    for element in shape_elements
+                ],
+                [
+                    "CompositeCurve3D",
+                    "Spline3D",
+                    "Spline3D",
+                    "CompositeCurve3D",
+                ],
+            )
+
+            with zipfile.ZipFile(output) as package:
+                infos = {
+                    info.filename: info
+                    for info in package.infolist()
+                }
+                self.assertEqual(
+                    infos["sign"].compress_type,
+                    zipfile.ZIP_STORED,
+                )
+                self.assertEqual(
+                    infos["Shapes/sign"].compress_type,
+                    zipfile.ZIP_STORED,
+                )
+                self.assertEqual(
+                    infos["Shapes/"].compress_type,
+                    zipfile.ZIP_STORED,
+                )
+                self.assertEqual(
+                    infos["sign"].create_system,
+                    0,
+                )
+                self.assertEqual(
+                    infos["Shapes/sign"].create_system,
+                    0,
+                )
 
             parts = read_tube_parts(output)
             self.assertEqual(len(parts), 1)
