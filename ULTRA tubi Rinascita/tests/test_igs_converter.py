@@ -185,6 +185,7 @@ class IgsConverterTests(unittest.TestCase):
             np.array([8.0, 0.0, 0.0]),
         ]
 
+        diagnostic = {}
         with patch(
             "tubenest_engine.igs_converter._chain_edges",
             return_value=[outer_loop, inner_loop],
@@ -196,12 +197,16 @@ class IgsConverterTests(unittest.TestCase):
                 np.array([1.0, 0.0, 0.0]),
                 np.array([0.0, 1.0, 0.0]),
                 api,
+                diagnostic=diagnostic,
             )
 
         self.assertIsNotNone(result)
         _origin, loops, edges = result
         self.assertEqual(len(edges), 2)
         self.assertEqual(len(loops), 2)
+        self.assertEqual(diagnostic["edges"], 2)
+        self.assertEqual(diagnostic["usable_loops"], 2)
+        self.assertEqual(diagnostic["reason"], "ok")
 
     def test_section_chaining_keeps_tiny_connector_edges(self):
         edges = [
@@ -246,6 +251,76 @@ class IgsConverterTests(unittest.TestCase):
                 loops[0][0],
                 loops[0][-1],
             )
+        )
+
+    def test_section_diagnostic_explains_insufficient_edges(self):
+        class FakeSection:
+            def __init__(self, *_args):
+                self._shape = object()
+
+            def Build(self):
+                return None
+
+            def Shape(self):
+                return self._shape
+
+        class FakeExplorer:
+            def __init__(self, _shape, _kind):
+                self.items = ["only-edge"]
+                self.index = 0
+
+            def More(self):
+                return self.index < len(self.items)
+
+            def Current(self):
+                return self.items[self.index]
+
+            def Next(self):
+                self.index += 1
+
+        class FakeTopoDS:
+            @staticmethod
+            def Edge_s(value):
+                return value
+
+        class FakePlane:
+            def __init__(self, *_args):
+                pass
+
+        class FakePoint:
+            def __init__(self, *_args):
+                pass
+
+        class FakeDirection:
+            def __init__(self, *_args):
+                pass
+
+        api = {
+            "gp_Pln": FakePlane,
+            "gp_Pnt": FakePoint,
+            "gp_Dir": FakeDirection,
+            "BRepAlgoAPI_Section": FakeSection,
+            "TopExp_Explorer": FakeExplorer,
+            "TopAbs_EDGE": object(),
+            "TopoDS": FakeTopoDS,
+        }
+        diagnostic = {}
+
+        result = _section_loops(
+            object(),
+            np.array([0.0, 0.0, 1.0]),
+            0.0,
+            np.array([1.0, 0.0, 0.0]),
+            np.array([0.0, 1.0, 0.0]),
+            api,
+            diagnostic=diagnostic,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(diagnostic["edges"], 1)
+        self.assertEqual(
+            diagnostic["reason"],
+            "fewer than 2 section edges",
         )
 
     def test_chain_edges_ignores_microscopic_iges_seams(self):
