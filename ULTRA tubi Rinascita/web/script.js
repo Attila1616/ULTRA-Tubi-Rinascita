@@ -756,59 +756,172 @@ async function convertIgsFileToZzx() {
     const originalText = button.textContent;
     button.disabled = true;
 
+    const fileNameFromPath = filePath => {
+        const normalized = String(filePath || '').replace(/\\/g, '/');
+        return normalized.split('/').pop() || normalized;
+    };
+
+    const convertOne = async (filePath, overwrite, index, total) => {
+        button.textContent = `Conversione ${index}/${total}...`;
+        try {
+            const result = await window.pywebview.api.convert_igs_file_to_zzx(
+                filePath,
+                overwrite
+            );
+            return result || {
+                status: 'error',
+                message: 'Nessuna risposta dal convertitore.'
+            };
+        } catch (error) {
+            console.error('IGS -> ZZX conversion failed:', filePath, error);
+            return {
+                status: 'error',
+                message: error?.message || 'Errore durante la conversione IGS -> ZZX.'
+            };
+        }
+    };
+
     try {
         button.textContent = 'Seleziona IGS...';
-        const picked = await window.pywebview.api.pick_igs_file();
+        const picked = await window.pywebview.api.pick_igs_files();
         if (!picked || picked.status === 'cancelled') return;
-        if (picked.status !== 'success' || !picked.path) {
-            throw new Error(picked?.message || 'Impossibile selezionare il file IGS.');
+
+        const paths = Array.from(new Set(
+            Array.isArray(picked.paths)
+                ? picked.paths.filter(Boolean)
+                : (picked.path ? [picked.path] : [])
+        ));
+
+        if (picked.status !== 'success' || paths.length === 0) {
+            throw new Error(
+                picked?.message || 'Impossibile selezionare i file IGS.'
+            );
         }
 
-        button.textContent = 'Conversione...';
-        let result = await window.pywebview.api.convert_igs_file_to_zzx(
-            picked.path,
-            false
-        );
+        const successful = [];
+        const existing = [];
+        const failed = [];
 
-        if (result?.status === 'exists') {
+        for (let index = 0; index < paths.length; index += 1) {
+            const filePath = paths[index];
+            const result = await convertOne(
+                filePath,
+                false,
+                index + 1,
+                paths.length
+            );
+
+            if (result.status === 'success') {
+                successful.push({
+                    filePath,
+                    result
+                });
+            } else if (result.status === 'exists') {
+                existing.push(filePath);
+            } else {
+                failed.push({
+                    filePath,
+                    message: result.message || 'Conversione non riuscita.'
+                });
+            }
+        }
+
+        let skippedExisting = existing.length;
+
+        if (existing.length > 0) {
             const overwrite = confirm(
-                'Esiste già un file ZZX con lo stesso nome. Sovrascriverlo?'
+                `${existing.length} file ZZX esistono già.\n\n`
+                + 'Vuoi sovrascriverli tutti e riconvertire i relativi IGS?'
             );
-            if (!overwrite) return;
-            result = await window.pywebview.api.convert_igs_file_to_zzx(
-                picked.path,
-                true
-            );
+
+            if (overwrite) {
+                skippedExisting = 0;
+                for (let index = 0; index < existing.length; index += 1) {
+                    const filePath = existing[index];
+                    const result = await convertOne(
+                        filePath,
+                        true,
+                        index + 1,
+                        existing.length
+                    );
+
+                    if (result.status === 'success') {
+                        successful.push({
+                            filePath,
+                            result
+                        });
+                    } else {
+                        failed.push({
+                            filePath,
+                            message: result.message || 'Conversione non riuscita.'
+                        });
+                    }
+                }
+            }
         }
 
-        if (!result || result.status !== 'success') {
-            throw new Error(result?.message || 'Conversione IGS -> ZZX non riuscita.');
+        const summaryLines = [
+            'Conversione IGS completata.',
+            '',
+            `Selezionati: ${paths.length}`,
+            `Convertiti: ${successful.length}`,
+            `Già esistenti non sovrascritti: ${skippedExisting}`,
+            `Errori: ${failed.length}`
+        ];
+
+        if (failed.length > 0) {
+            summaryLines.push('', 'File con problemi:');
+            const shownFailures = failed.slice(0, 30);
+            shownFailures.forEach(item => {
+                summaryLines.push(
+                    `- ${fileNameFromPath(item.filePath)}\n  ${item.message}`
+                );
+            });
+            if (failed.length > shownFailures.length) {
+                summaryLines.push(
+                    `...e altri ${failed.length - shownFailures.length} errori.`
+                );
+            }
+
+            console.group('IGS -> ZZX: file con errori');
+            failed.forEach(item => {
+                console.error(item.filePath, item.message);
+            });
+            console.groupEnd();
         }
 
-        const profile = result.profileKind || '?';
-        const width = Number(result.outsideWidthMm);
-        const height = Number(result.outsideHeightMm);
-        const thickness = Number(result.thicknessMm);
-        const length = Number(result.lengthMm);
-        const dimensions = (
-            Number.isFinite(width) && Number.isFinite(height)
-                ? width.toFixed(2) + ' x ' + height.toFixed(2)
-                : '?'
-        );
+        if (paths.length === 1 && successful.length === 1 && failed.length === 0) {
+            const result = successful[0].result;
+            const profile = result.profileKind || '?';
+            const width = Number(result.outsideWidthMm);
+            const height = Number(result.outsideHeightMm);
+            const thickness = Number(result.thicknessMm);
+            const length = Number(result.lengthMm);
+            const dimensions = (
+                Number.isFinite(width) && Number.isFinite(height)
+                    ? width.toFixed(2) + ' x ' + height.toFixed(2)
+                    : '?'
+            );
 
-        alert(
-            'Conversione completata.\n\n'
-            + 'Profilo: ' + profile + '\n'
-            + 'Dimensioni: ' + dimensions + ' mm\n'
-            + 'Spessore: ' + (Number.isFinite(thickness) ? thickness.toFixed(2) : '?') + ' mm\n'
-            + 'Lunghezza: ' + (Number.isFinite(length) ? length.toFixed(2) : '?') + ' mm\n'
-            + 'Lavorazioni interne: ' + (result.internalOperationCount ?? 0) + '\n\n'
-            + 'ZZX: ' + result.outputPath
-        );
+            alert(
+                'Conversione completata.\n\n'
+                + 'Profilo: ' + profile + '\n'
+                + 'Dimensioni: ' + dimensions + ' mm\n'
+                + 'Spessore: ' + (Number.isFinite(thickness) ? thickness.toFixed(2) : '?') + ' mm\n'
+                + 'Lunghezza: ' + (Number.isFinite(length) ? length.toFixed(2) : '?') + ' mm\n'
+                + 'Lavorazioni interne: ' + (result.internalOperationCount ?? 0) + '\n'
+                + 'Linee visualizzazione tubo: ' + (result.displayShapeCount ?? 0) + '\n\n'
+                + 'ZZX: ' + result.outputPath
+            );
+        } else {
+            alert(summaryLines.join('\n'));
+        }
 
-        await loadTubeData();
+        if (successful.length > 0) {
+            await loadTubeData();
+        }
     } catch (error) {
-        console.error('IGS -> ZZX conversion failed:', error);
+        console.error('IGS -> ZZX batch conversion failed:', error);
         alert(error?.message || 'Errore durante la conversione IGS -> ZZX.');
     } finally {
         button.disabled = false;
