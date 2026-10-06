@@ -28,7 +28,6 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-from scipy.spatial import cKDTree
 
 from .archive import Archive, xml_bytes
 from .bcmp import Block, FormatError, Record, vector
@@ -530,6 +529,72 @@ def _fit_circle(points_2d):
     )
 
 
+def _rounded_rectangle_boundary_error(
+    points,
+    width,
+    height,
+    radius,
+):
+    """Exact transverse distance to a centered rounded-rectangle boundary.
+
+    Using nearest sampled section points is unsafe for IGES: a rounded corner
+    may be represented by only a few section samples, so its longitudinal
+    surface can look many millimetres away and be mistaken for a machining
+    face. The signed-distance expression below evaluates the actual profile
+    analytically and is independent of the source tube's world orientation.
+    """
+    points = np.asarray(points, dtype=float)
+    half_width = float(width) / 2.0
+    half_height = float(height) / 2.0
+    radius = max(
+        0.0,
+        min(
+            float(radius),
+            half_width,
+            half_height,
+        ),
+    )
+    core = np.array(
+        [
+            half_width - radius,
+            half_height - radius,
+        ],
+        dtype=float,
+    )
+    delta = np.abs(points) - core
+    outside = np.maximum(delta, 0.0)
+    signed_distance = (
+        np.linalg.norm(outside, axis=-1)
+        + np.minimum(
+            np.maximum(delta[..., 0], delta[..., 1]),
+            0.0,
+        )
+        - radius
+    )
+    return np.abs(signed_distance)
+
+
+def _usable_boundary_loops(loops):
+    """Drop zero-length seam/degenerated loops emitted by some IGES exports."""
+    result = []
+    for loop in loops or []:
+        points = np.asarray(loop, dtype=float)
+        if len(points) < 4:
+            continue
+        perimeter = float(
+            np.sum(
+                np.linalg.norm(
+                    np.diff(points, axis=0),
+                    axis=1,
+                )
+            )
+        )
+        if perimeter <= 1e-3:
+            continue
+        result.append(loop)
+    return result
+
+
 def _face_mesh_points(face, api):
     location = api["TopLoc_Location"]()
     triangulation = api["BRep_Tool"].Triangulation_s(
@@ -876,16 +941,6 @@ def _analyse_iges(path):
             dtype=float,
         )
 
-    outside_tree = cKDTree(
-        np.asarray(
-            [to_local(point)[:2] for point in outer_loop]
-        )
-    )
-    inside_tree = cKDTree(
-        np.asarray(
-            [to_local(point)[:2] for point in inner_loop]
-        )
-    )
     surface_tolerance = max(
         0.05,
         min(0.30, thickness * 0.12),
@@ -912,8 +967,30 @@ def _analyse_iges(path):
         transverse = np.asarray(
             [to_local(point)[:2] for point in points]
         )
-        outside_distances = outside_tree.query(transverse)[0]
-        inside_distances = inside_tree.query(transverse)[0]
+
+        if profile_kind == "Circle":
+            outside_distances = np.abs(
+                np.linalg.norm(transverse, axis=1)
+                - outside_width / 2.0
+            )
+            inside_distances = np.abs(
+                np.linalg.norm(transverse, axis=1)
+                - inside_width / 2.0
+            )
+        else:
+            outside_distances = _rounded_rectangle_boundary_error(
+                transverse,
+                outside_width,
+                outside_height,
+                corner_radius,
+            )
+            inside_distances = _rounded_rectangle_boundary_error(
+                transverse,
+                inside_width,
+                inside_height,
+                max(0.0, corner_radius - thickness),
+            )
+
         outside_error = float(
             np.percentile(outside_distances, 95)
         )
@@ -1014,13 +1091,17 @@ def _analyse_iges(path):
         if not outer_boundary or not inner_boundary:
             continue
 
-        outer_feature_loops = _chain_edges(
-            list(outer_boundary.values()),
-            api,
+        outer_feature_loops = _usable_boundary_loops(
+            _chain_edges(
+                list(outer_boundary.values()),
+                api,
+            )
         )
-        inner_feature_loops = _chain_edges(
-            list(inner_boundary.values()),
-            api,
+        inner_feature_loops = _usable_boundary_loops(
+            _chain_edges(
+                list(inner_boundary.values()),
+                api,
+            )
         )
 
         boundary_pairs = _pair_feature_boundary_loops(
