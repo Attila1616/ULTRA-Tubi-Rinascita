@@ -60,6 +60,22 @@ _NESTING_CACHE_LOCK = threading.RLock()
 _NESTING_VALIDATION_CACHE = {}
 _NESTING_VALIDATION_CACHE_LIMIT = 4096
 
+def convert_igs_file_to_zzx(file_path, overwrite=False):
+    """Convert one IGS/IGES tube to a sibling ZZX file."""
+    try:
+        return tubenest_engine.convert_igs_to_zzx(
+            file_path,
+            overwrite=bool(overwrite),
+        )
+    except Exception as exc:
+        print("--- PYTHON ERROR in convert_igs_file_to_zzx ---")
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": str(exc),
+        }
+
+
 def _cached_zzx_validation(file_path):
     """Cache disk-backed validation across repeated group expansions."""
     normalized = os.path.normcase(os.path.abspath(str(file_path)))

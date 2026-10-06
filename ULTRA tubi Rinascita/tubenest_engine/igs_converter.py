@@ -633,8 +633,14 @@ def _analyse_iges(path):
         profile_kind = "Circle"
         local_x_axis = provisional_x
         local_y_axis = provisional_y
-        center_x = float(outer_circle_center[0])
-        center_y = float(outer_circle_center[1])
+        center_x = float(
+            np.dot(section_origin, provisional_x)
+            + outer_circle_center[0]
+        )
+        center_y = float(
+            np.dot(section_origin, provisional_y)
+            + outer_circle_center[1]
+        )
         outside_width = 2.0 * outer_radius
         outside_height = outside_width
         inside_width = 2.0 * inner_radius

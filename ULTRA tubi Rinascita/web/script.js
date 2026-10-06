@@ -163,6 +163,7 @@ closeSearchBtn = document.getElementById('close-search-btn');
 
     // Attach all event listeners
     document.getElementById('refresh-button').addEventListener('click', loadTubeData);
+    document.getElementById('igs-to-zzx-btn')?.addEventListener('click', convertIgsFileToZzx);
     document.getElementById('summary-btn').addEventListener('click', openSummaryModal);
     document.getElementById('close-summary-btn').addEventListener('click', closeSummaryModal);
     document.getElementById('settings-btn')?.addEventListener('click', openSettingsModal);
@@ -748,6 +749,73 @@ async function initialize() {
         alert("A critical error occurred on startup. Check the browser console for details.");
     }
 }
+async function convertIgsFileToZzx() {
+    const button = document.getElementById('igs-to-zzx-btn');
+    if (!button || button.disabled) return;
+
+    const originalText = button.textContent;
+    button.disabled = true;
+
+    try {
+        button.textContent = 'Seleziona IGS...';
+        const picked = await window.pywebview.api.pick_igs_file();
+        if (!picked || picked.status === 'cancelled') return;
+        if (picked.status !== 'success' || !picked.path) {
+            throw new Error(picked?.message || 'Impossibile selezionare il file IGS.');
+        }
+
+        button.textContent = 'Conversione...';
+        let result = await window.pywebview.api.convert_igs_file_to_zzx(
+            picked.path,
+            false
+        );
+
+        if (result?.status === 'exists') {
+            const overwrite = confirm(
+                'Esiste già un file ZZX con lo stesso nome. Sovrascriverlo?'
+            );
+            if (!overwrite) return;
+            result = await window.pywebview.api.convert_igs_file_to_zzx(
+                picked.path,
+                true
+            );
+        }
+
+        if (!result || result.status !== 'success') {
+            throw new Error(result?.message || 'Conversione IGS -> ZZX non riuscita.');
+        }
+
+        const profile = result.profileKind || '?';
+        const width = Number(result.outsideWidthMm);
+        const height = Number(result.outsideHeightMm);
+        const thickness = Number(result.thicknessMm);
+        const length = Number(result.lengthMm);
+        const dimensions = (
+            Number.isFinite(width) && Number.isFinite(height)
+                ? width.toFixed(2) + ' x ' + height.toFixed(2)
+                : '?'
+        );
+
+        alert(
+            'Conversione completata.\n\n'
+            + 'Profilo: ' + profile + '\n'
+            + 'Dimensioni: ' + dimensions + ' mm\n'
+            + 'Spessore: ' + (Number.isFinite(thickness) ? thickness.toFixed(2) : '?') + ' mm\n'
+            + 'Lunghezza: ' + (Number.isFinite(length) ? length.toFixed(2) : '?') + ' mm\n'
+            + 'Lavorazioni interne: ' + (result.internalOperationCount ?? 0) + '\n\n'
+            + 'ZZX: ' + result.outputPath
+        );
+
+        await loadTubeData();
+    } catch (error) {
+        console.error('IGS -> ZZX conversion failed:', error);
+        alert(error?.message || 'Errore durante la conversione IGS -> ZZX.');
+    } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+    }
+}
+
 async function loadTubeData() {
     console.log("Requesting fresh tube data from Python...");
     mainContainer.innerHTML = '<p>Loading...</p>';

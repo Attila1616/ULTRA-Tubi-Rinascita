@@ -241,6 +241,39 @@ class Api:
             return {"status": "success", "path": result[0]}
         return {"status": "cancelled"}
 
+    def pick_igs_file(self):
+        try:
+            result = window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=(
+                    "File IGES (*.igs;*.iges)",
+                    "Tutti i file (*.*)",
+                ),
+            )
+        except TypeError:
+            result = window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+            )
+        if result:
+            return {"status": "success", "path": result[0]}
+        return {"status": "cancelled"}
+
+    def convert_igs_file_to_zzx(self, file_path, overwrite=False):
+        try:
+            return logic.convert_igs_file_to_zzx(
+                file_path,
+                overwrite=overwrite,
+            )
+        except Exception:
+            print("--- PYTHON ERROR in convert_igs_file_to_zzx ---")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": "Errore durante la conversione IGS -> ZZX.",
+            }
+
     def get_tubes_state(self):
         try:
             self.config = logic.load_config() or {}

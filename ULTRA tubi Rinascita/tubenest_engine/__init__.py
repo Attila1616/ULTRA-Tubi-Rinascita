@@ -1,9 +1,4 @@
-"""Geometry-aware ZZX reader embedded in ULTRA Tubi Rinascita.
-
-The low-level BCMP/archive/geometry modules are derived from the standalone
-TubeNest project. This package is read-only at this stage: it does not generate
-or modify machine files.
-"""
+"""Geometry-aware ZZX tools embedded in ULTRA Tubi Rinascita."""
 
 from .bcmp import FormatError
 from .domain import (
@@ -33,6 +28,7 @@ from .fit import (
 from .toolpath import curve_start_parameter, point_at_composite_parameter
 from .exporter import export_nested_rod, export_nested_rod_to_directory
 from .flat_exporter import export_flat_nested_rod, export_flat_nested_rod_to_directory
+from .igs_converter import IgsConversionError, convert_igs_to_zzx
 from .reader import (
     clear_cache,
     describe_zzx,
@@ -70,6 +66,8 @@ __all__ = [
     "export_nested_rod_to_directory",
     "export_flat_nested_rod",
     "export_flat_nested_rod_to_directory",
+    "IgsConversionError",
+    "convert_igs_to_zzx",
     "clear_cache",
     "describe_zzx",
     "read_zzx",
