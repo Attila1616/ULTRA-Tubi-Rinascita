@@ -52,6 +52,7 @@ SECTION_DEFLECTION_MM = 0.035
 MESH_DEFLECTION_MM = 0.2
 FEATURE_PLANE_TOLERANCE_MM = 0.04
 END_MATCH_TOLERANCE_MM = 0.08
+DEGENERATE_EDGE_LENGTH_MM = 1e-3
 
 
 class IgsConversionError(ValueError):
@@ -235,17 +236,32 @@ def _point_key(point, tolerance=1e-4):
 
 
 def _chain_edges(edges, api):
-    edge_data = [
-        (
+    edge_data = []
+    for edge in edges:
+        points = _edge_points(
             edge,
-            _edge_points(
-                edge,
-                api,
-                max_points=512,
-            ),
+            api,
+            max_points=512,
         )
-        for edge in edges
-    ]
+        sampled_length = float(
+            np.sum(
+                np.linalg.norm(
+                    np.diff(
+                        np.asarray(points, dtype=float),
+                        axis=0,
+                    ),
+                    axis=1,
+                )
+            )
+        )
+        # Some CAD exporters emit microscopic/degenerated seam edges around
+        # otherwise perfectly valid rounded corners. They create ambiguous
+        # graph branches and can make a closed end contour look open. Ignore
+        # only sub-micron edges; real section connector edges are much longer.
+        if sampled_length <= DEGENERATE_EDGE_LENGTH_MM:
+            continue
+        edge_data.append((edge, points))
+
     adjacency = defaultdict(list)
 
     for index, (_edge, points) in enumerate(edge_data):
@@ -937,6 +953,7 @@ def _analyse_iges(path):
         inside_width = 2.0 * inner_radius
         inside_height = inside_width
         corner_radius = outer_radius
+        inner_corner_radius = inner_radius
         thickness = outer_radius - inner_radius
     else:
         straight_edges = []
@@ -1021,7 +1038,8 @@ def _analyse_iges(path):
             + (outside_height - inside_height)
         ) / 4.0
 
-        radius_estimates = []
+        outer_radius_estimates = []
+        inner_radius_estimates = []
         for edge in section_edges:
             start, finish, _adaptor, length, chord = _edge_info(
                 edge,
@@ -1037,32 +1055,73 @@ def _analyse_iges(path):
             finish_2d = local_2d(finish)
             midpoint = (start_2d + finish_2d) / 2.0
 
-            if (
-                abs(abs(midpoint[1]) - outside_height / 2.0) < 0.05
-                and abs(finish_2d[0] - start_2d[0])
+            horizontal = (
+                abs(finish_2d[0] - start_2d[0])
                 > abs(finish_2d[1] - start_2d[1])
-            ):
-                radius_estimates.append(
-                    (outside_width - length) / 2.0
-                )
-            elif (
-                abs(abs(midpoint[0]) - outside_width / 2.0) < 0.05
-                and abs(finish_2d[1] - start_2d[1])
-                > abs(finish_2d[0] - start_2d[0])
-            ):
-                radius_estimates.append(
-                    (outside_height - length) / 2.0
-                )
+            )
 
-        usable_radii = [
+            if horizontal:
+                if (
+                    abs(
+                        abs(midpoint[1])
+                        - outside_height / 2.0
+                    )
+                    < 0.05
+                ):
+                    outer_radius_estimates.append(
+                        (outside_width - length) / 2.0
+                    )
+                if (
+                    abs(
+                        abs(midpoint[1])
+                        - inside_height / 2.0
+                    )
+                    < 0.05
+                ):
+                    inner_radius_estimates.append(
+                        (inside_width - length) / 2.0
+                    )
+            else:
+                if (
+                    abs(
+                        abs(midpoint[0])
+                        - outside_width / 2.0
+                    )
+                    < 0.05
+                ):
+                    outer_radius_estimates.append(
+                        (outside_height - length) / 2.0
+                    )
+                if (
+                    abs(
+                        abs(midpoint[0])
+                        - inside_width / 2.0
+                    )
+                    < 0.05
+                ):
+                    inner_radius_estimates.append(
+                        (inside_height - length) / 2.0
+                    )
+
+        usable_outer_radii = [
             value
-            for value in radius_estimates
+            for value in outer_radius_estimates
+            if value >= 0.0
+        ]
+        usable_inner_radii = [
+            value
+            for value in inner_radius_estimates
             if value >= 0.0
         ]
         corner_radius = (
-            float(np.median(usable_radii))
-            if usable_radii
+            float(np.median(usable_outer_radii))
+            if usable_outer_radii
             else max(0.0, thickness)
+        )
+        inner_corner_radius = (
+            float(np.median(usable_inner_radii))
+            if usable_inner_radii
+            else max(0.0, corner_radius - thickness)
         )
 
         profile_kind = (
@@ -1142,7 +1201,7 @@ def _analyse_iges(path):
                 transverse,
                 inside_width,
                 inside_height,
-                max(0.0, corner_radius - thickness),
+                inner_corner_radius,
             )
 
         outside_error = float(
