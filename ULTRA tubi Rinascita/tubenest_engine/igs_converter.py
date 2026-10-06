@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 import struct
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -57,6 +58,37 @@ DEGENERATE_EDGE_LENGTH_MM = 1e-3
 
 class IgsConversionError(ValueError):
     pass
+
+
+def _igs_log(path, message):
+    name = Path(path).name if path is not None else "?"
+    print(
+        f"[IGS pid={os.getpid()}] [{name}] {message}",
+        flush=True,
+    )
+
+
+def _format_section_probe(probe):
+    fraction = probe.get("fraction")
+    fraction_text = (
+        f"{float(fraction) * 100.0:.1f}%"
+        if fraction is not None
+        else "?"
+    )
+    areas = probe.get("areas") or []
+    area_text = (
+        "[" + ", ".join(f"{float(value):.3f}" for value in areas) + "]"
+        if areas
+        else "[]"
+    )
+    return (
+        f"section {fraction_text}: "
+        f"edges={probe.get('edges', '?')} "
+        f"raw_loops={probe.get('raw_loops', '?')} "
+        f"usable_loops={probe.get('usable_loops', '?')} "
+        f"areas={area_text} "
+        f"reason={probe.get('reason', '?')}"
+    )
 
 
 def _ocp():
@@ -470,6 +502,8 @@ def _section_loops(
     basis_x,
     basis_y,
     api,
+    *,
+    diagnostic=None,
 ):
     origin = axis * float(axial_coordinate)
     plane = api["gp_Pln"](
@@ -492,16 +526,31 @@ def _section_loops(
         edges.append(api["TopoDS"].Edge_s(explorer.Current()))
         explorer.Next()
 
+    if diagnostic is not None:
+        diagnostic["edges"] = len(edges)
+
     # A valid hollow round tube can intersect the section plane as exactly
-    # two closed edges: one outer circle and one inner circle. Requiring four
-    # edges incorrectly rejects the very common IGES representation where
-    # each full circumference is stored as a single closed curve.
+    # two closed edges: one outer circle and one inner circle.
     if len(edges) < 2:
+        if diagnostic is not None:
+            diagnostic.update(
+                raw_loops=0,
+                usable_loops=0,
+                areas=[],
+                reason="fewer than 2 section edges",
+            )
         return None
 
     try:
         loops = _chain_edges(edges, api)
-    except IgsConversionError:
+    except IgsConversionError as exc:
+        if diagnostic is not None:
+            diagnostic.update(
+                raw_loops=0,
+                usable_loops=0,
+                areas=[],
+                reason=f"edge chaining failed: {exc}",
+            )
         return None
 
     def project(point):
@@ -514,18 +563,38 @@ def _section_loops(
             dtype=float,
         )
 
+    raw_loop_count = len(loops)
+    areas = [
+        float(_polygon_area(loop, project))
+        for loop in loops
+    ]
     loops = [
         loop
-        for loop in loops
-        if _polygon_area(loop, project) > 1.0
+        for loop, area in zip(loops, areas)
+        if area > 1.0
     ]
+
+    if diagnostic is not None:
+        diagnostic.update(
+            raw_loops=raw_loop_count,
+            usable_loops=len(loops),
+            areas=areas,
+        )
+
     if len(loops) != 2:
+        if diagnostic is not None:
+            diagnostic["reason"] = (
+                "expected exactly 2 closed profile loops "
+                "after area filtering"
+            )
         return None
 
     loops.sort(
         key=lambda loop: _polygon_area(loop, project),
         reverse=True,
     )
+    if diagnostic is not None:
+        diagnostic["reason"] = "ok"
     return origin, loops, edges
 
 
@@ -781,6 +850,8 @@ def _face_mesh_points(face, api):
 
 
 def _analyse_iges(path):
+    started = time.perf_counter()
+    _igs_log(path, "START analysis")
     api = _ocp()
     reader = api["IGESControl_Reader"]()
     status = reader.ReadFile(str(path))
@@ -790,12 +861,21 @@ def _analyse_iges(path):
         )
 
     reader.TransferRoots()
+    _igs_log(
+        path,
+        f"IGES read OK in {time.perf_counter() - started:.3f}s",
+    )
 
     sewing = api["BRepBuilderAPI_Sewing"](SEW_TOLERANCE_MM)
     sewing.Add(reader.OneShape())
     sewing.Perform()
+    free_edges = int(sewing.NbFreeEdges())
+    _igs_log(
+        path,
+        f"sewing complete: free_edges={free_edges}",
+    )
 
-    if sewing.NbFreeEdges() != 0:
+    if free_edges != 0:
         raise IgsConversionError(
             "Il modello IGS non forma un tubo chiuso: "
             f"{sewing.NbFreeEdges()} bordi liberi rilevati."
@@ -813,6 +893,8 @@ def _analyse_iges(path):
             api["TopoDS"].Shell_s(explorer.Current())
         )
         explorer.Next()
+
+    _igs_log(path, f"shells={len(shells)}")
 
     if len(shells) != 1:
         raise IgsConversionError(
@@ -854,6 +936,16 @@ def _analyse_iges(path):
     axial_max = max(axial_values)
     overall_length = axial_max - axial_min
 
+    _igs_log(
+        path,
+        "axis=("
+        + ", ".join(f"{float(value):.6f}" for value in axis)
+        + f") vertices={len(vertices)} "
+        + f"axial_min={axial_min:.3f} "
+        + f"axial_max={axial_max:.3f} "
+        + f"length={overall_length:.3f}",
+    )
+
     if overall_length <= 1.0:
         raise IgsConversionError(
             "Lunghezza tubo non valida nel modello IGS."
@@ -887,7 +979,10 @@ def _analyse_iges(path):
         0.15, 0.85,
         0.10, 0.90,
     )
+    section_diagnostics = []
+    selected_fraction = None
     for fraction in section_fractions:
+        probe = {"fraction": float(fraction)}
         section_data = _section_loops(
             solid,
             axis,
@@ -895,14 +990,30 @@ def _analyse_iges(path):
             provisional_x,
             provisional_y,
             api,
+            diagnostic=probe,
         )
+        section_diagnostics.append(probe)
         if section_data is not None:
+            selected_fraction = float(fraction)
             break
 
     if section_data is None:
-        raise IgsConversionError(
-            "Non trovo una sezione trasversale integra del tubo."
+        _igs_log(
+            path,
+            "SECTION DETECTION FAILED; probe diagnostics follow:",
         )
+        for probe in section_diagnostics:
+            _igs_log(path, "  " + _format_section_probe(probe))
+        raise IgsConversionError(
+            "Non trovo una sezione trasversale integra del tubo. "
+            "Vedi il CMD per il dettaglio di ogni sezione provata."
+        )
+
+    _igs_log(
+        path,
+        "selected "
+        + _format_section_probe(section_diagnostics[-1]),
+    )
 
     section_origin, section_loops, section_edges = section_data
     outer_loop, inner_loop = section_loops
@@ -1142,6 +1253,16 @@ def _analyse_iges(path):
             else "Rect"
         )
 
+    _igs_log(
+        path,
+        f"profile={profile_kind} "
+        f"outside={outside_width:.3f}x{outside_height:.3f} "
+        f"inside={inside_width:.3f}x{inside_height:.3f} "
+        f"thickness={thickness:.3f} "
+        f"outer_radius={corner_radius:.3f} "
+        f"inner_radius={inner_corner_radius:.3f}",
+    )
+
     if (
         not math.isfinite(thickness)
         or thickness <= 0.0
@@ -1228,6 +1349,24 @@ def _analyse_iges(path):
 
         faces.append((face, face_kind))
         explorer.Next()
+
+    face_counts = {
+        kind: sum(
+            1
+            for _face, face_kind in faces
+            if face_kind == kind
+        )
+        for kind in ("outer", "inner", "cut")
+    }
+    _igs_log(
+        path,
+        "faces="
+        + ", ".join(
+            f"{kind}:{face_counts[kind]}"
+            for kind in ("outer", "inner", "cut")
+        )
+        + f" tolerance={surface_tolerance:.4f}mm",
+    )
 
     edge_faces = defaultdict(list)
     edge_objects = {}
@@ -1339,6 +1478,15 @@ def _analyse_iges(path):
             )
         )
 
+        _igs_log(
+            path,
+            f"cut_component faces={len(component)} "
+            f"outer_boundary_edges={len(outer_boundary)} "
+            f"inner_boundary_edges={len(inner_boundary)} "
+            f"outer_loops={len(outer_feature_loops)} "
+            f"inner_loops={len(inner_feature_loops)}",
+        )
+
         boundary_pairs = _pair_feature_boundary_loops(
             outer_feature_loops,
             inner_feature_loops,
@@ -1380,6 +1528,14 @@ def _analyse_iges(path):
         >= overall_length - END_MATCH_TOLERANCE_MM
     ]
 
+    _igs_log(
+        path,
+        f"operations={len(operations)} "
+        f"near_candidates={len(near_operations)} "
+        f"far_candidates={len(far_operations)} "
+        f"display_shapes={len(display_operations)}",
+    )
+
     if len(near_operations) != 1 or len(far_operations) != 1:
         raise IgsConversionError(
             "Non riesco a identificare in modo univoco i due tagli "
@@ -1408,6 +1564,11 @@ def _analyse_iges(path):
         [near_operation]
         + internal_operations
         + [far_operation]
+    )
+
+    _igs_log(
+        path,
+        f"ANALYSIS OK in {time.perf_counter() - started:.3f}s",
     )
 
     return {
@@ -2181,11 +2342,20 @@ def convert_igs_to_zzx(
             ),
         }
 
+    _igs_log(
+        source_path,
+        f"CONVERT -> {destination}",
+    )
     model = _analyse_iges(source_path)
     _write_zzx(
         model,
         source_path,
         destination,
+    )
+
+    _igs_log(
+        source_path,
+        f"WRITE OK -> {destination}",
     )
 
     return {
