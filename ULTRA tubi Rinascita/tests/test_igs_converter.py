@@ -10,6 +10,7 @@ import numpy as np
 from tubenest_engine import convert_igs_to_zzx, read_tube_parts
 from tubenest_engine.archive import Archive
 from tubenest_engine.igs_converter import (
+    _chain_edges,
     _pair_feature_boundary_loops,
     _rounded_rectangle_boundary_error,
     _section_loops,
@@ -201,6 +202,91 @@ class IgsConverterTests(unittest.TestCase):
         _origin, loops, edges = result
         self.assertEqual(len(edges), 2)
         self.assertEqual(len(loops), 2)
+
+    def test_chain_edges_ignores_microscopic_iges_seams(self):
+        edges = ["bottom", "right", "top", "left", "micro"]
+        edge_points = {
+            "bottom": [
+                np.array([-1.0, -1.0, 0.0]),
+                np.array([1.0, -1.0, 0.0]),
+            ],
+            "right": [
+                np.array([1.0, -1.0, 0.0]),
+                np.array([1.0, 1.0, 0.0]),
+            ],
+            "top": [
+                np.array([1.0, 1.0, 0.0]),
+                np.array([-1.0, 1.0, 0.0]),
+            ],
+            "left": [
+                np.array([-1.0, 1.0, 0.0]),
+                np.array([-1.0, -1.0, 0.0]),
+            ],
+            # Real IGES files can contain seam edges only a few ten-
+            # thousandths of a millimetre long at rounded corners.
+            "micro": [
+                np.array([1.0, -1.0, 0.0]),
+                np.array([1.00004, -1.0, 0.0]),
+            ],
+        }
+
+        with patch(
+            "tubenest_engine.igs_converter._edge_points",
+            side_effect=lambda edge, _api, **_kwargs: edge_points[edge],
+        ):
+            loops = _chain_edges(edges, {})
+
+        self.assertEqual(len(loops), 1)
+        self.assertTrue(
+            np.allclose(
+                loops[0][0],
+                loops[0][-1],
+            )
+        )
+
+    def test_inner_round_corner_uses_its_own_radius(self):
+        # 30x30x2 production IGES examples use R3.2 outside but R2.0
+        # inside. Assuming inner R = outer R - thickness (R1.2) makes
+        # the real inner corner look like a cut face.
+        radius = 2.0
+        width = 26.0
+        height = 26.0
+        center = np.array(
+            [width / 2.0 - radius, height / 2.0 - radius],
+            dtype=float,
+        )
+        points = np.asarray(
+            [
+                center
+                + radius * np.array(
+                    [np.cos(angle), np.sin(angle)]
+                )
+                for angle in np.linspace(
+                    0.0,
+                    np.pi / 2.0,
+                    17,
+                )
+            ]
+        )
+
+        correct = _rounded_rectangle_boundary_error(
+            points,
+            width,
+            height,
+            radius,
+        )
+        old_assumption = _rounded_rectangle_boundary_error(
+            points,
+            width,
+            height,
+            1.2,
+        )
+
+        self.assertLess(float(np.max(correct)), 1e-8)
+        self.assertGreater(
+            float(np.percentile(old_assumption, 95)),
+            0.5,
+        )
 
     def test_rounded_rectangle_surface_distance_keeps_corner_faces_as_stock(self):
         # 150x50 with R5.99 mirrors the problematic rectangular IGES. Points
