@@ -468,7 +468,11 @@ def _section_loops(
         edges.append(api["TopoDS"].Edge_s(explorer.Current()))
         explorer.Next()
 
-    if len(edges) < 4:
+    # A valid hollow round tube can intersect the section plane as exactly
+    # two closed edges: one outer circle and one inner circle. Requiring four
+    # edges incorrectly rejects the very common IGES representation where
+    # each full circumference is stored as a single closed curve.
+    if len(edges) < 2:
         return None
 
     try:
@@ -844,7 +848,22 @@ def _analyse_iges(path):
     )
 
     section_data = None
-    for fraction in (0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8):
+    # Probe the middle first, then fan outward. A hole, notch or unusual cut
+    # can intersect any one candidate plane, so use a denser set than the old
+    # seven fixed positions. This remains cheap compared with IGES sewing and
+    # makes profile detection much more tolerant of real production parts.
+    section_fractions = (
+        0.50,
+        0.45, 0.55,
+        0.40, 0.60,
+        0.35, 0.65,
+        0.30, 0.70,
+        0.25, 0.75,
+        0.20, 0.80,
+        0.15, 0.85,
+        0.10, 0.90,
+    )
+    for fraction in section_fractions:
         section_data = _section_loops(
             solid,
             axis,
