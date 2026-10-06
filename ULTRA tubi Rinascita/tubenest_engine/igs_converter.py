@@ -273,7 +273,7 @@ def _cluster_edge_endpoints(
     the edge endpoints is cheap here and preserves the actual contour topology.
     """
     endpoints = []
-    for _edge, points, _sampled_length in edge_data:
+    for _edge, points in edge_data:
         endpoints.append(np.asarray(points[0], dtype=float))
         endpoints.append(np.asarray(points[-1], dtype=float))
 
