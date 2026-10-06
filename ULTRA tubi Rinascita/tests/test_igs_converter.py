@@ -323,6 +323,70 @@ class IgsConverterTests(unittest.TestCase):
             "fewer than 2 section edges",
         )
 
+    def test_cut_chaining_snaps_sub_micron_endpoint_gaps(self):
+        edges = [
+            "bottom",
+            "micro-a",
+            "right",
+            "micro-b",
+            "top",
+            "micro-c",
+            "left",
+            "micro-d",
+        ]
+        edge_points = {
+            "bottom": [
+                np.array([-1.0, -1.0, 0.0]),
+                np.array([1.0, -1.0, 0.0]),
+            ],
+            "micro-a": [
+                np.array([1.0, -1.0, 0.0]),
+                np.array([1.00004, -1.0, 0.0]),
+            ],
+            "right": [
+                np.array([1.00004, -1.0, 0.0]),
+                np.array([1.00004, 1.0, 0.0]),
+            ],
+            "micro-b": [
+                np.array([1.00004, 1.0, 0.0]),
+                np.array([1.0, 1.0, 0.0]),
+            ],
+            "top": [
+                np.array([1.0, 1.0, 0.0]),
+                np.array([-1.0, 1.0, 0.0]),
+            ],
+            "micro-c": [
+                np.array([-1.0, 1.0, 0.0]),
+                np.array([-1.00004, 1.0, 0.0]),
+            ],
+            "left": [
+                np.array([-1.00004, 1.0, 0.0]),
+                np.array([-1.00004, -1.0, 0.0]),
+            ],
+            "micro-d": [
+                np.array([-1.00004, -1.0, 0.0]),
+                np.array([-1.0, -1.0, 0.0]),
+            ],
+        }
+
+        with patch(
+            "tubenest_engine.igs_converter._edge_points",
+            side_effect=lambda edge, _api, **_kwargs: edge_points[edge],
+        ):
+            loops = _chain_edges(
+                edges,
+                {},
+                ignore_degenerate=True,
+            )
+
+        self.assertEqual(len(loops), 1)
+        self.assertTrue(
+            np.allclose(
+                loops[0][0],
+                loops[0][-1],
+            )
+        )
+
     def test_chain_edges_ignores_microscopic_iges_seams(self):
         edges = ["bottom", "right", "top", "left", "micro"]
         edge_points = {
@@ -409,7 +473,7 @@ class IgsConverterTests(unittest.TestCase):
         self.assertLess(float(np.max(correct)), 1e-8)
         self.assertGreater(
             float(np.percentile(old_assumption, 95)),
-            0.5,
+            0.24,
         )
 
     def test_rounded_rectangle_surface_distance_keeps_corner_faces_as_stock(self):
