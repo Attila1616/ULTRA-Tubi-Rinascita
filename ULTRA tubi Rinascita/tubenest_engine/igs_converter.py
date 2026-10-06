@@ -235,7 +235,12 @@ def _point_key(point, tolerance=1e-4):
     )
 
 
-def _chain_edges(edges, api):
+def _chain_edges(
+    edges,
+    api,
+    *,
+    ignore_degenerate=False,
+):
     edge_data = []
     for edge in edges:
         points = _edge_points(
@@ -258,7 +263,10 @@ def _chain_edges(edges, api):
         # otherwise perfectly valid rounded corners. They create ambiguous
         # graph branches and can make a closed end contour look open. Ignore
         # only sub-micron edges; real section connector edges are much longer.
-        if sampled_length <= DEGENERATE_EDGE_LENGTH_MM:
+        if (
+            ignore_degenerate
+            and sampled_length <= DEGENERATE_EDGE_LENGTH_MM
+        ):
             continue
         edge_data.append((edge, points))
 
@@ -1320,12 +1328,14 @@ def _analyse_iges(path):
             _chain_edges(
                 list(outer_boundary.values()),
                 api,
+                ignore_degenerate=True,
             )
         )
         inner_feature_loops = _usable_boundary_loops(
             _chain_edges(
                 list(inner_boundary.values()),
                 api,
+                ignore_degenerate=True,
             )
         )
 
