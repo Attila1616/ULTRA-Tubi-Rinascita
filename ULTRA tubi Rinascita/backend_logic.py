@@ -65,6 +65,12 @@ def _convert_igs_worker(payload):
     """Process-pool worker for one independent IGS conversion."""
     file_path, overwrite = payload
     started = time.perf_counter()
+    file_name = os.path.basename(str(file_path))
+    pid = os.getpid()
+    print(
+        f"[IGS WORKER pid={pid}] START {file_name}",
+        flush=True,
+    )
     try:
         result = tubenest_engine.convert_igs_to_zzx(
             file_path,
@@ -72,14 +78,26 @@ def _convert_igs_worker(payload):
         )
         result = dict(result or {})
     except Exception as exc:
+        trace = traceback.format_exc()
+        print(
+            f"[IGS WORKER pid={pid}] ERROR {file_name}: "
+            f"{type(exc).__name__}: {exc}\n{trace}",
+            flush=True,
+        )
         result = {
             "status": "error",
             "message": str(exc),
+            "errorType": type(exc).__name__,
+            "traceback": trace,
             "sourcePath": str(file_path),
         }
-    result["elapsedSeconds"] = round(
-        time.perf_counter() - started,
-        3,
+
+    elapsed = time.perf_counter() - started
+    result["elapsedSeconds"] = round(elapsed, 3)
+    print(
+        f"[IGS WORKER pid={pid}] END {file_name} "
+        f"status={result.get('status')} elapsed={elapsed:.3f}s",
+        flush=True,
     )
     return result
 
@@ -128,6 +146,11 @@ def convert_igs_files_to_zzx(file_paths, overwrite=False):
 
     started = time.perf_counter()
     workers = _igs_batch_worker_count(len(paths))
+    print(
+        f"[IGS BATCH] START files={len(paths)} "
+        f"workers={workers} overwrite={bool(overwrite)}",
+        flush=True,
+    )
     payloads = [
         (path, bool(overwrite))
         for path in paths
@@ -177,6 +200,49 @@ def convert_igs_files_to_zzx(file_paths, overwrite=False):
             ]
 
     elapsed = time.perf_counter() - started
+    failures = [
+        result
+        for result in results
+        if isinstance(result, dict)
+        and result.get("status") == "error"
+    ]
+    successes = [
+        result
+        for result in results
+        if isinstance(result, dict)
+        and result.get("status") == "success"
+    ]
+    existing = [
+        result
+        for result in results
+        if isinstance(result, dict)
+        and result.get("status") == "exists"
+    ]
+
+    print(
+        f"[IGS BATCH] END files={len(paths)} "
+        f"success={len(successes)} "
+        f"exists={len(existing)} "
+        f"errors={len(failures)} "
+        f"workers={workers} elapsed={elapsed:.3f}s",
+        flush=True,
+    )
+    if failures:
+        print(
+            "[IGS BATCH] FAILED FILES:",
+            flush=True,
+        )
+        for result in failures:
+            print(
+                "  - "
+                + str(result.get("sourcePath") or "?")
+                + " | "
+                + str(result.get("errorType") or "Error")
+                + ": "
+                + str(result.get("message") or "unknown error"),
+                flush=True,
+            )
+
     return {
         "status": "success",
         "results": results,
