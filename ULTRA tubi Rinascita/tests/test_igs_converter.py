@@ -7,6 +7,7 @@ import numpy as np
 
 from tubenest_engine import convert_igs_to_zzx, read_tube_parts
 from tubenest_engine.archive import Archive
+from tubenest_engine.igs_converter import _pair_feature_boundary_loops
 
 
 def _closed_square(half_size, z_function):
@@ -75,6 +76,42 @@ def _sample_model():
 
 
 class IgsConverterTests(unittest.TestCase):
+    def test_multi_opening_cut_face_is_split_into_nearest_wall_pairs(self):
+        def loop(center):
+            x, y, z = center
+            return [
+                np.array([x - 1.0, y - 1.0, z]),
+                np.array([x + 1.0, y - 1.0, z]),
+                np.array([x + 1.0, y + 1.0, z]),
+                np.array([x - 1.0, y + 1.0, z]),
+                np.array([x - 1.0, y - 1.0, z]),
+            ]
+
+        outer = [
+            loop((-25.0, 0.0, 80.0)),
+            loop((25.0, 0.0, 80.0)),
+        ]
+        inner = [
+            loop((23.0, 0.0, 80.0)),
+            loop((-23.0, 0.0, 80.0)),
+        ]
+
+        pairs = _pair_feature_boundary_loops(
+            outer,
+            inner,
+        )
+
+        self.assertEqual(len(pairs), 2)
+        for outside, inside in pairs:
+            outside_center = np.asarray(outside).mean(axis=0)
+            inside_center = np.asarray(inside).mean(axis=0)
+            self.assertLess(
+                np.linalg.norm(
+                    outside_center - inside_center
+                ),
+                5.0,
+            )
+
     def test_writer_creates_geometry_aware_square_zzx(self):
         model = _sample_model()
 
