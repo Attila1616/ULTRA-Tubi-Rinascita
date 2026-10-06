@@ -7,7 +7,11 @@ import numpy as np
 
 from tubenest_engine import convert_igs_to_zzx, read_tube_parts
 from tubenest_engine.archive import Archive
-from tubenest_engine.igs_converter import _pair_feature_boundary_loops
+from tubenest_engine.igs_converter import (
+    _pair_feature_boundary_loops,
+    _rounded_rectangle_boundary_error,
+    _usable_boundary_loops,
+)
 
 
 def _closed_square(half_size, z_function):
@@ -76,6 +80,56 @@ def _sample_model():
 
 
 class IgsConverterTests(unittest.TestCase):
+    def test_rounded_rectangle_surface_distance_keeps_corner_faces_as_stock(self):
+        # 150x50 with R5.99 mirrors the problematic rectangular IGES. Points
+        # sampled along the actual rounded corner must lie on the stock
+        # boundary even if the source section curve itself is sparsely sampled.
+        radius = 5.99
+        width = 150.0
+        height = 50.0
+        center = np.array(
+            [width / 2.0 - radius, height / 2.0 - radius],
+            dtype=float,
+        )
+        angles = np.linspace(0.0, np.pi / 2.0, 17)
+        points = np.asarray(
+            [
+                center
+                + radius * np.array(
+                    [np.cos(angle), np.sin(angle)]
+                )
+                for angle in angles
+            ]
+        )
+
+        errors = _rounded_rectangle_boundary_error(
+            points,
+            width,
+            height,
+            radius,
+        )
+
+        self.assertLess(float(np.max(errors)), 1e-8)
+
+    def test_degenerate_iges_seam_loops_are_ignored(self):
+        real_loop = [
+            np.array([-75.0, -25.0, 0.0]),
+            np.array([75.0, -25.0, 0.0]),
+            np.array([75.0, 25.0, 0.0]),
+            np.array([-75.0, 25.0, 0.0]),
+            np.array([-75.0, -25.0, 0.0]),
+        ]
+        seam_loop = [
+            np.array([69.01, -25.0, 0.0]),
+            np.array([69.01, -25.0, 0.0]),
+        ]
+
+        filtered = _usable_boundary_loops(
+            [real_loop, seam_loop]
+        )
+
+        self.assertEqual(filtered, [real_loop])
+
     def test_multi_opening_cut_face_is_split_into_nearest_wall_pairs(self):
         def loop(center):
             x, y, z = center
