@@ -1611,7 +1611,16 @@ def convert_igs_to_zzx(
     *,
     overwrite=False,
 ):
-    source_path = Path(igs_path).expanduser().resolve()
+    # Keep the path spelling returned by the native Windows file dialog.
+    # Path.resolve() expands Windows 8.3 aliases (RUNNER~1, etc.) and can make
+    # the API report a different-looking path even though it is the same file.
+    source_path = Path(
+        os.path.abspath(
+            os.path.expanduser(
+                os.fspath(igs_path)
+            )
+        )
+    )
 
     if source_path.suffix.lower() not in {".igs", ".iges"}:
         raise IgsConversionError(
@@ -1623,7 +1632,13 @@ def convert_igs_to_zzx(
     if output_path is None:
         destination = source_path.with_suffix(".zzx")
     else:
-        destination = Path(output_path).expanduser().resolve()
+        destination = Path(
+            os.path.abspath(
+                os.path.expanduser(
+                    os.fspath(output_path)
+                )
+            )
+        )
 
     if destination.exists() and not overwrite:
         return {
