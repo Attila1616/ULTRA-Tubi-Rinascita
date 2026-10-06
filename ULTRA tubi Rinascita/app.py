@@ -723,4 +723,4 @@ if __name__ == '__main__':
         height=800
     )
     window.events.closed += api.shutdown
-    webview.start(debug=True)
+    webview.start(debug=False)
