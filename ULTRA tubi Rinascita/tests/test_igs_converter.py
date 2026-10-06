@@ -203,6 +203,51 @@ class IgsConverterTests(unittest.TestCase):
         self.assertEqual(len(edges), 2)
         self.assertEqual(len(loops), 2)
 
+    def test_section_chaining_keeps_tiny_connector_edges(self):
+        edges = [
+            "bottom",
+            "micro",
+            "right",
+            "top",
+            "left",
+        ]
+        edge_points = {
+            "bottom": [
+                np.array([-1.0, -1.0, 0.0]),
+                np.array([1.0, -1.0, 0.0]),
+            ],
+            "micro": [
+                np.array([1.0, -1.0, 0.0]),
+                np.array([1.00004, -1.0, 0.0]),
+            ],
+            "right": [
+                np.array([1.00004, -1.0, 0.0]),
+                np.array([1.00004, 1.0, 0.0]),
+            ],
+            "top": [
+                np.array([1.00004, 1.0, 0.0]),
+                np.array([-1.0, 1.0, 0.0]),
+            ],
+            "left": [
+                np.array([-1.0, 1.0, 0.0]),
+                np.array([-1.0, -1.0, 0.0]),
+            ],
+        }
+
+        with patch(
+            "tubenest_engine.igs_converter._edge_points",
+            side_effect=lambda edge, _api, **_kwargs: edge_points[edge],
+        ):
+            loops = _chain_edges(edges, {})
+
+        self.assertEqual(len(loops), 1)
+        self.assertTrue(
+            np.allclose(
+                loops[0][0],
+                loops[0][-1],
+            )
+        )
+
     def test_chain_edges_ignores_microscopic_iges_seams(self):
         edges = ["bottom", "right", "top", "left", "micro"]
         edge_points = {
@@ -234,7 +279,11 @@ class IgsConverterTests(unittest.TestCase):
             "tubenest_engine.igs_converter._edge_points",
             side_effect=lambda edge, _api, **_kwargs: edge_points[edge],
         ):
-            loops = _chain_edges(edges, {})
+            loops = _chain_edges(
+                edges,
+                {},
+                ignore_degenerate=True,
+            )
 
         self.assertEqual(len(loops), 1)
         self.assertTrue(
