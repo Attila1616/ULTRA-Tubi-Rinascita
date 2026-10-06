@@ -27,6 +27,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 from scipy.spatial import cKDTree
 
 from .archive import Archive, xml_bytes
@@ -298,6 +299,77 @@ def _polygon_area(points_3d, project):
             )
         )
     )
+
+
+def _pair_feature_boundary_loops(
+    outer_loops,
+    inner_loops,
+):
+    """Pair disconnected outer/inner openings belonging to one cut surface.
+
+    A single CAD face can legitimately contain multiple disconnected wall
+    regions. The common example is a through-hole crossing both walls of a
+    hollow tube: OpenCascade may expose one cylindrical cut face whose outer
+    boundary contains two loops and whose inner boundary also contains two
+    loops. ZZX needs those as two independent machining contours.
+
+    Pair each outside opening with the spatially nearest inside opening using a
+    globally optimal assignment. Keeping this independent of world orientation
+    also makes the rule valid for diagonally oriented source tubes.
+    """
+    outer_loops = list(outer_loops or [])
+    inner_loops = list(inner_loops or [])
+
+    if not outer_loops or not inner_loops:
+        raise IgsConversionError(
+            "Una lavorazione IGS non ha un contorno esterno/interno completo."
+        )
+
+    if len(outer_loops) != len(inner_loops):
+        raise IgsConversionError(
+            "Una lavorazione IGS contiene un numero diverso di aperture "
+            "esterne e interne e non può ancora essere convertita in modo "
+            "sicuro."
+        )
+
+    if len(outer_loops) == 1:
+        return [(outer_loops[0], inner_loops[0])]
+
+    outer_centers = np.asarray(
+        [
+            np.asarray(loop, dtype=float).mean(axis=0)
+            for loop in outer_loops
+        ]
+    )
+    inner_centers = np.asarray(
+        [
+            np.asarray(loop, dtype=float).mean(axis=0)
+            for loop in inner_loops
+        ]
+    )
+    costs = np.linalg.norm(
+        outer_centers[:, None, :]
+        - inner_centers[None, :, :],
+        axis=2,
+    )
+    outer_indices, inner_indices = linear_sum_assignment(costs)
+
+    pairs = [
+        (
+            outer_loops[int(outer_index)],
+            inner_loops[int(inner_index)],
+        )
+        for outer_index, inner_index in zip(
+            outer_indices,
+            inner_indices,
+        )
+    ]
+    pairs.sort(
+        key=lambda pair: tuple(
+            np.asarray(pair[0], dtype=float).mean(axis=0)
+        )
+    )
+    return pairs
 
 
 def _dominant_axis(shape, api):
@@ -951,37 +1023,34 @@ def _analyse_iges(path):
             api,
         )
 
-        if (
-            len(outer_feature_loops) != 1
-            or len(inner_feature_loops) != 1
-        ):
-            raise IgsConversionError(
-                "Una lavorazione IGS produce più contorni esterni/interni "
-                "e non può ancora essere convertita in modo sicuro."
+        boundary_pairs = _pair_feature_boundary_loops(
+            outer_feature_loops,
+            inner_feature_loops,
+        )
+
+        for outer_loop, inner_loop in boundary_pairs:
+            outer_points = np.asarray(
+                [
+                    to_local(point)
+                    for point in outer_loop
+                ]
+            )
+            inner_points = np.asarray(
+                [
+                    to_local(point)
+                    for point in inner_loop
+                ]
             )
 
-        outer_points = np.asarray(
-            [
-                to_local(point)
-                for point in outer_feature_loops[0]
-            ]
-        )
-        inner_points = np.asarray(
-            [
-                to_local(point)
-                for point in inner_feature_loops[0]
-            ]
-        )
-
-        operations.append(
-            {
-                "outer": outer_points,
-                "inner": inner_points,
-                "z_min": float(outer_points[:, 2].min()),
-                "z_max": float(outer_points[:, 2].max()),
-                "z_mean": float(outer_points[:, 2].mean()),
-            }
-        )
+            operations.append(
+                {
+                    "outer": outer_points,
+                    "inner": inner_points,
+                    "z_min": float(outer_points[:, 2].min()),
+                    "z_max": float(outer_points[:, 2].max()),
+                    "z_mean": float(outer_points[:, 2].mean()),
+                }
+            )
 
     near_operations = [
         operation
