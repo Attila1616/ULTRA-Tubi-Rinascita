@@ -31,7 +31,14 @@ from scipy.optimize import linear_sum_assignment
 
 from .archive import Archive, xml_bytes
 from .bcmp import Block, FormatError, Record, vector
-from .geometry import Arc2D, Line, circle_quarters, composite, rounded_rectangle
+from .geometry import (
+    Arc2D,
+    Line,
+    Spline,
+    circle_quarters,
+    composite,
+    rounded_rectangle,
+)
 
 
 TEMPLATE_PATH = (
@@ -595,6 +602,134 @@ def _usable_boundary_loops(loops):
     return result
 
 
+def _extract_display_seams(
+    edge_faces,
+    edge_objects,
+    faces,
+    to_local,
+    overall_length,
+    api,
+):
+    """Recover the stock-surface seam lines TubesT stores as channel-0 shapes.
+
+    TubesT uses these non-machining curves to draw the white longitudinal tube
+    edges in TubePro/TubesT. IGES exports often split the outside skin into more
+    faces than the inside skin, especially where a conical end trim crosses a
+    rounded corner. Therefore the inside seams are used as stable anchors and
+    each one is matched to the nearest outside seam in transverse XY.
+    """
+
+    def collect(kind):
+        seams = []
+        minimum_span = max(1.0, float(overall_length) * 0.25)
+
+        for edge_key, adjacent_faces in edge_faces.items():
+            if len(adjacent_faces) < 2:
+                continue
+
+            adjacent_kinds = [
+                faces[index][1]
+                for index in adjacent_faces
+            ]
+            if not adjacent_kinds or any(
+                value != kind
+                for value in adjacent_kinds
+            ):
+                continue
+
+            edge = edge_objects.get(edge_key)
+            if edge is None:
+                continue
+
+            points = np.asarray(
+                [
+                    to_local(point)
+                    for point in _edge_points(
+                        edge,
+                        api,
+                        max_points=128,
+                    )
+                ],
+                dtype=float,
+            )
+            if len(points) < 2:
+                continue
+
+            axial_span = float(np.ptp(points[:, 2]))
+            if axial_span < minimum_span:
+                continue
+
+            if points[0, 2] > points[-1, 2]:
+                points = points[::-1].copy()
+
+            seams.append(points)
+
+        return seams
+
+    outer_seams = collect("outer")
+    inner_seams = collect("inner")
+
+    if not outer_seams or not inner_seams:
+        return []
+
+    outer_centers = np.asarray(
+        [
+            seam[:, :2].mean(axis=0)
+            for seam in outer_seams
+        ]
+    )
+    inner_centers = np.asarray(
+        [
+            seam[:, :2].mean(axis=0)
+            for seam in inner_seams
+        ]
+    )
+
+    costs = np.linalg.norm(
+        inner_centers[:, None, :]
+        - outer_centers[None, :, :],
+        axis=2,
+    )
+
+    inner_indices, outer_indices = linear_sum_assignment(costs)
+    display = []
+
+    for inner_index, outer_index in zip(
+        inner_indices,
+        outer_indices,
+    ):
+        transverse_distance = float(
+            costs[
+                int(inner_index),
+                int(outer_index),
+            ]
+        )
+        # The paired inner/outer seams should be approximately one wall
+        # thickness apart. Keep a generous cap for rounded-corner geometry,
+        # but never pair seams from opposite sides of the tube.
+        if transverse_distance > max(20.0, min(
+            float(overall_length) * 0.02,
+            50.0,
+        )):
+            continue
+
+        display.append(
+            {
+                "outer": outer_seams[int(outer_index)],
+                "inner": inner_seams[int(inner_index)],
+                "transverse_distance": transverse_distance,
+            }
+        )
+
+    display.sort(
+        key=lambda item: math.atan2(
+            float(item["inner"][:, 1].mean()),
+            float(item["inner"][:, 0].mean()),
+        )
+    )
+    return display
+
+
 def _face_mesh_points(face, api):
     location = api["TopLoc_Location"]()
     triangulation = api["BRep_Tool"].Triangulation_s(
@@ -1009,6 +1144,7 @@ def _analyse_iges(path):
         explorer.Next()
 
     edge_faces = defaultdict(list)
+    edge_objects = {}
     face_edges = []
 
     for face_index, (face, _kind) in enumerate(faces):
@@ -1021,10 +1157,21 @@ def _analyse_iges(path):
             edge = api["TopoDS"].Edge_s(
                 edge_explorer.Current()
             )
-            edge_faces[hash(edge)].append(face_index)
+            edge_key = hash(edge)
+            edge_faces[edge_key].append(face_index)
+            edge_objects[edge_key] = edge
             edges.append(edge)
             edge_explorer.Next()
         face_edges.append(edges)
+
+    display_operations = _extract_display_seams(
+        edge_faces,
+        edge_objects,
+        faces,
+        to_local,
+        overall_length,
+        api,
+    )
 
     cut_face_indices = {
         index
@@ -1192,6 +1339,7 @@ def _analyse_iges(path):
             for value in local_y_axis
         ],
         "operations": ordered_operations,
+        "display_operations": display_operations,
     }
 
 
@@ -1303,6 +1451,7 @@ def _shape_record_from_prototype(
     handle,
     curve_flags,
     normal,
+    channel=1,
 ):
     record = deepcopy(prototype)
 
@@ -1328,7 +1477,7 @@ def _shape_record_from_prototype(
         "<III",
         shape_payload,
         0,
-        1,
+        int(channel),
         0,
         0,
     )
@@ -1357,6 +1506,84 @@ def _shape_record_from_prototype(
     curve_block.payload = bytes(curve_payload)
 
     return record
+
+
+def _display_curve_record(points):
+    """Encode a stock seam like TubesT: degree-1 Spline3D when straight."""
+
+    points = np.asarray(points, dtype=float)
+    if len(points) < 2:
+        raise IgsConversionError(
+            "Linea di visualizzazione tubo troppo corta."
+        )
+
+    start = points[0]
+    finish = points[-1]
+    direction = finish - start
+    length = float(np.linalg.norm(direction))
+    if length <= 1e-7:
+        raise IgsConversionError(
+            "Linea di visualizzazione tubo nulla."
+        )
+
+    if len(points) == 2:
+        maximum_deviation = 0.0
+    else:
+        cross = np.cross(
+            points - start,
+            direction,
+        )
+        maximum_deviation = float(
+            np.max(
+                np.linalg.norm(cross, axis=1)
+                / length
+            )
+        )
+
+    if maximum_deviation <= 0.02:
+        native_span = max(
+            1e-9,
+            length / 1000.0,
+        )
+        spline = Spline(
+            1,
+            [
+                0.0,
+                0.0,
+                native_span,
+                native_span,
+            ],
+            [
+                tuple(map(float, start)),
+                tuple(map(float, finish)),
+            ],
+            [1.0, 1.0],
+        )
+        return Record(
+            "TGeSpline3D",
+            [
+                Block("Spline3D"),
+                Block("Curve3D", payload=bytes(4)),
+                Block("Spline3D", payload=spline.payload()),
+            ],
+        )
+
+    curves = []
+    for first, second in zip(points, points[1:]):
+        delta = second - first
+        if np.linalg.norm(delta) <= 1e-7:
+            continue
+        curves.append(
+            Line(
+                tuple(map(float, first)),
+                tuple(map(float, delta)),
+            )
+        )
+    if not curves:
+        raise IgsConversionError(
+            "Linea di visualizzazione tubo vuota."
+        )
+    return composite(curves, dimension=3)
 
 
 def _polyline_record(points):
@@ -1525,48 +1752,34 @@ def _write_zzx(model, source_path, output_path):
     )
 
     handles = []
+    machining_handles = []
     next_handle = 1100
     geometry_pairs = []
 
-    operations = model["operations"]
+    operations = list(model["operations"])
+    display_operations = list(
+        model.get("display_operations") or []
+    )
 
-    for operation_index, operation in enumerate(operations):
-        outer_points = _simplify_closed_polyline(
-            operation["outer"]
-        )
-        inner_points = _simplify_closed_polyline(
-            operation["inner"]
-        )
-
-        plane_normal, plane_residual = _plane_fit(
-            outer_points
-        )
-        is_end_cut = (
-            operation_index == 0
-            or operation_index == len(operations) - 1
-        )
-
-        if is_end_cut:
-            curve_flags = 34
-            normal = (0.0, 0.0, 0.0)
-        elif plane_residual <= FEATURE_PLANE_TOLERANCE_MM:
-            curve_flags = 64
-            normal = tuple(
-                map(float, plane_normal)
-            )
-        else:
-            curve_flags = 0
-            normal = (0.0, 0.0, 0.0)
+    def append_shape(
+        outer_geometry,
+        inner_geometry,
+        *,
+        channel,
+        curve_flags,
+        normal,
+        geometry_class,
+        is_machining,
+    ):
+        nonlocal next_handle
 
         shape_record = _shape_record_from_prototype(
             shape_prototype,
             handle=next_handle,
             curve_flags=curve_flags,
             normal=normal,
+            channel=channel,
         )
-        outer_geometry = _polyline_record(outer_points)
-        inner_geometry = _polyline_record(inner_points)
-
         shapes_stream.records.append(shape_record)
         lite_stream.records.extend(
             [
@@ -1592,13 +1805,13 @@ def _write_zzx(model, source_path, output_path):
         ET.SubElement(
             shape_element,
             "Geometry",
-            Class="CompositeCurve3D",
+            Class=geometry_class,
             GeoAddr="0",
         )
         ET.SubElement(
             shape_element,
             "InnerGeometry",
-            Class="CompositeCurve3D",
+            Class=geometry_class,
             GeoAddr="0",
         )
         ET.SubElement(
@@ -1608,7 +1821,87 @@ def _write_zzx(model, source_path, output_path):
         )
 
         handles.append(next_handle)
+        if is_machining:
+            machining_handles.append(next_handle)
         next_handle += 1
+
+    def append_machining_operation(
+        operation,
+        *,
+        is_end_cut,
+    ):
+        outer_points = _simplify_closed_polyline(
+            operation["outer"]
+        )
+        inner_points = _simplify_closed_polyline(
+            operation["inner"]
+        )
+
+        plane_normal, plane_residual = _plane_fit(
+            outer_points
+        )
+
+        if is_end_cut:
+            curve_flags = 34
+            normal = (0.0, 0.0, 0.0)
+        elif plane_residual <= FEATURE_PLANE_TOLERANCE_MM:
+            curve_flags = 64
+            normal = tuple(
+                map(float, plane_normal)
+            )
+        else:
+            curve_flags = 0
+            normal = (0.0, 0.0, 0.0)
+
+        append_shape(
+            _polyline_record(outer_points),
+            _polyline_record(inner_points),
+            channel=1,
+            curve_flags=curve_flags,
+            normal=normal,
+            geometry_class="CompositeCurve3D",
+            is_machining=True,
+        )
+
+    if not operations:
+        raise IgsConversionError(
+            "Nessuna lavorazione rilevata nel file IGS."
+        )
+
+    # TubesT orders imported stock as: first cutoff, channel-0 stock seams,
+    # internal machining, final cutoff. The channel-0 seams are what TubePro
+    # renders as the white longitudinal tube wireframe.
+    append_machining_operation(
+        operations[0],
+        is_end_cut=True,
+    )
+
+    for display_operation in display_operations:
+        append_shape(
+            _display_curve_record(
+                display_operation["outer"]
+            ),
+            _display_curve_record(
+                display_operation["inner"]
+            ),
+            channel=0,
+            curve_flags=0,
+            normal=(0.0, 0.0, 0.0),
+            geometry_class="Spline3D",
+            is_machining=False,
+        )
+
+    for operation in operations[1:-1]:
+        append_machining_operation(
+            operation,
+            is_end_cut=False,
+        )
+
+    if len(operations) > 1:
+        append_machining_operation(
+            operations[-1],
+            is_end_cut=True,
+        )
 
     segment.set(
         "Name",
@@ -1616,11 +1909,11 @@ def _write_zzx(model, source_path, output_path):
     )
     segment.set(
         "CutOffA",
-        str(handles[0]),
+        str(machining_handles[0]),
     )
     segment.set(
         "CutOffB",
-        str(handles[-1]),
+        str(machining_handles[-1]),
     )
 
     archive.entries["Curves/data.bin"] = curves_stream.encode()
@@ -1824,5 +2117,8 @@ def convert_igs_to_zzx(
         "internalOperationCount": max(
             0,
             len(model["operations"]) - 2,
+        ),
+        "displayShapeCount": len(
+            model.get("display_operations") or []
         ),
     }
