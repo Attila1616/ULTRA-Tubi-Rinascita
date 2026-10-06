@@ -241,11 +241,11 @@ class Api:
             return {"status": "success", "path": result[0]}
         return {"status": "cancelled"}
 
-    def pick_igs_file(self):
+    def pick_igs_files(self):
         try:
             result = window.create_file_dialog(
                 webview.OPEN_DIALOG,
-                allow_multiple=False,
+                allow_multiple=True,
                 file_types=(
                     "File IGES (*.igs;*.iges)",
                     "Tutti i file (*.*)",
@@ -254,11 +254,53 @@ class Api:
         except TypeError:
             result = window.create_file_dialog(
                 webview.OPEN_DIALOG,
-                allow_multiple=False,
+                allow_multiple=True,
             )
-        if result:
-            return {"status": "success", "path": result[0]}
-        return {"status": "cancelled"}
+
+        if not result:
+            return {
+                "status": "cancelled",
+                "paths": [],
+            }
+
+        if isinstance(result, str):
+            paths = [result]
+        else:
+            paths = [
+                str(path)
+                for path in result
+                if path
+            ]
+
+        paths = [
+            path
+            for path in paths
+            if os.path.splitext(path)[1].lower()
+            in {".igs", ".iges"}
+        ]
+
+        if not paths:
+            return {
+                "status": "error",
+                "paths": [],
+                "message": "Nessun file IGS/IGES valido selezionato.",
+            }
+
+        return {
+            "status": "success",
+            "paths": paths,
+            # Keep the old single-path field for compatibility.
+            "path": paths[0],
+        }
+
+    def pick_igs_file(self):
+        result = self.pick_igs_files()
+        if result.get("status") != "success":
+            return result
+        return {
+            "status": "success",
+            "path": result["paths"][0],
+        }
 
     def convert_igs_file_to_zzx(self, file_path, overwrite=False):
         try:
