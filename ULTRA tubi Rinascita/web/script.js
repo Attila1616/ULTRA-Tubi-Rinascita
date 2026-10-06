@@ -761,22 +761,28 @@ async function convertIgsFileToZzx() {
         return normalized.split('/').pop() || normalized;
     };
 
-    const convertOne = async (filePath, overwrite, index, total) => {
-        button.textContent = `Conversione ${index}/${total}...`;
+    const runBatch = async (paths, overwrite) => {
+        button.textContent = paths.length === 1
+            ? 'Conversione...'
+            : `Conversione ${paths.length} IGS...`;
+
         try {
-            const result = await window.pywebview.api.convert_igs_file_to_zzx(
-                filePath,
+            const response = await window.pywebview.api.convert_igs_files_to_zzx(
+                paths,
                 overwrite
             );
-            return result || {
-                status: 'error',
-                message: 'Nessuna risposta dal convertitore.'
-            };
+            if (!response || response.status !== 'success') {
+                throw new Error(
+                    response?.message || 'Conversione batch IGS -> ZZX non riuscita.'
+                );
+            }
+            return response;
         } catch (error) {
-            console.error('IGS -> ZZX conversion failed:', filePath, error);
+            console.error('IGS -> ZZX batch conversion failed:', error);
             return {
                 status: 'error',
-                message: error?.message || 'Errore durante la conversione IGS -> ZZX.'
+                message: error?.message || 'Errore durante la conversione IGS -> ZZX.',
+                results: []
             };
         }
     };
@@ -801,21 +807,34 @@ async function convertIgsFileToZzx() {
         const successful = [];
         const existing = [];
         const failed = [];
+        let totalElapsedSeconds = 0;
+        let workersUsed = 0;
 
-        for (let index = 0; index < paths.length; index += 1) {
-            const filePath = paths[index];
-            const result = await convertOne(
-                filePath,
-                false,
-                index + 1,
-                paths.length
+        const firstBatch = await runBatch(paths, false);
+        if (firstBatch.status !== 'success') {
+            throw new Error(
+                firstBatch.message || 'Conversione batch IGS -> ZZX non riuscita.'
             );
+        }
+
+        totalElapsedSeconds += Number(firstBatch.elapsedSeconds) || 0;
+        workersUsed = Math.max(
+            workersUsed,
+            Number(firstBatch.workersUsed) || 0
+        );
+
+        const firstResults = Array.isArray(firstBatch.results)
+            ? firstBatch.results
+            : [];
+
+        paths.forEach((filePath, index) => {
+            const result = firstResults[index] || {
+                status: 'error',
+                message: 'Nessun risultato restituito dal convertitore.'
+            };
 
             if (result.status === 'success') {
-                successful.push({
-                    filePath,
-                    result
-                });
+                successful.push({ filePath, result });
             } else if (result.status === 'exists') {
                 existing.push(filePath);
             } else {
@@ -824,7 +843,7 @@ async function convertIgsFileToZzx() {
                     message: result.message || 'Conversione non riuscita.'
                 });
             }
-        }
+        });
 
         let skippedExisting = existing.length;
 
@@ -836,27 +855,39 @@ async function convertIgsFileToZzx() {
 
             if (overwrite) {
                 skippedExisting = 0;
-                for (let index = 0; index < existing.length; index += 1) {
-                    const filePath = existing[index];
-                    const result = await convertOne(
-                        filePath,
-                        true,
-                        index + 1,
-                        existing.length
+                const overwriteBatch = await runBatch(existing, true);
+                if (overwriteBatch.status !== 'success') {
+                    throw new Error(
+                        overwriteBatch.message
+                        || 'Riconversione batch IGS -> ZZX non riuscita.'
                     );
+                }
+
+                totalElapsedSeconds += Number(overwriteBatch.elapsedSeconds) || 0;
+                workersUsed = Math.max(
+                    workersUsed,
+                    Number(overwriteBatch.workersUsed) || 0
+                );
+
+                const overwriteResults = Array.isArray(overwriteBatch.results)
+                    ? overwriteBatch.results
+                    : [];
+
+                existing.forEach((filePath, index) => {
+                    const result = overwriteResults[index] || {
+                        status: 'error',
+                        message: 'Nessun risultato restituito dal convertitore.'
+                    };
 
                     if (result.status === 'success') {
-                        successful.push({
-                            filePath,
-                            result
-                        });
+                        successful.push({ filePath, result });
                     } else {
                         failed.push({
                             filePath,
                             message: result.message || 'Conversione non riuscita.'
                         });
                     }
-                }
+                });
             }
         }
 
@@ -868,6 +899,18 @@ async function convertIgsFileToZzx() {
             `Già esistenti non sovrascritti: ${skippedExisting}`,
             `Errori: ${failed.length}`
         ];
+
+        if (workersUsed > 1) {
+            summaryLines.push(
+                `Conversione parallela: ${workersUsed} processi`
+            );
+        }
+
+        if (totalElapsedSeconds > 0) {
+            summaryLines.push(
+                `Tempo totale: ${totalElapsedSeconds.toFixed(1)} s`
+            );
+        }
 
         if (failed.length > 0) {
             summaryLines.push('', 'File con problemi:');
@@ -890,7 +933,11 @@ async function convertIgsFileToZzx() {
             console.groupEnd();
         }
 
-        if (paths.length === 1 && successful.length === 1 && failed.length === 0) {
+        if (
+            paths.length === 1
+            && successful.length === 1
+            && failed.length === 0
+        ) {
             const result = successful[0].result;
             const profile = result.profileKind || '?';
             const width = Number(result.outsideWidthMm);
@@ -910,7 +957,8 @@ async function convertIgsFileToZzx() {
                 + 'Spessore: ' + (Number.isFinite(thickness) ? thickness.toFixed(2) : '?') + ' mm\n'
                 + 'Lunghezza: ' + (Number.isFinite(length) ? length.toFixed(2) : '?') + ' mm\n'
                 + 'Lavorazioni interne: ' + (result.internalOperationCount ?? 0) + '\n'
-                + 'Linee visualizzazione tubo: ' + (result.displayShapeCount ?? 0) + '\n\n'
+                + 'Linee visualizzazione tubo: ' + (result.displayShapeCount ?? 0) + '\n'
+                + 'Tempo: ' + ((Number(result.elapsedSeconds) || totalElapsedSeconds || 0).toFixed(1)) + ' s\n\n'
                 + 'ZZX: ' + result.outputPath
             );
         } else {
