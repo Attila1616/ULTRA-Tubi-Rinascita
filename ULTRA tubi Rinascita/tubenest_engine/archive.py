@@ -1,7 +1,9 @@
 """ZIP packaging, checksum regeneration, validation and lossless repacking."""
 from pathlib import Path, PurePosixPath
 import hashlib
+import time
 import zipfile
+import zlib
 import xml.etree.ElementTree as ET
 from .bcmp import Stream, FormatError
 
@@ -180,13 +182,47 @@ class Archive:
         if element is None or int(element.get(attribute,'-1')) not in records.get(section,{}):
             raise FormatError(f'Invalid {section} {attribute} reference')
 
+    @staticmethod
+    def _vendor_zip_compression(name, data):
+        """Mirror the ZIP choices made by TubesT.
+
+        TubesT stores directory entries and binary signature files verbatim.
+        Other entries are deflated only when doing so actually makes them
+        smaller. Python's ZipFile defaults differ here (it deflates every
+        entry and writes Unix permission attributes), and real TubesT builds
+        reject those otherwise checksum-correct packages as "Signature
+        Mismatch".
+        """
+        if name.endswith('/') or name == 'sign' or name.endswith('/sign'):
+            return zipfile.ZIP_STORED
+        if not data:
+            return zipfile.ZIP_STORED
+        compressor=zlib.compressobj(level=6,wbits=-15)
+        compressed=compressor.compress(data)+compressor.flush()
+        return (
+            zipfile.ZIP_DEFLATED
+            if len(compressed) < len(data)
+            else zipfile.ZIP_STORED
+        )
+
     def write(self,path):
         path=Path(path)
         if path.exists(): raise FileExistsError(f'Refusing to overwrite {path}')
         path.parent.mkdir(parents=True,exist_ok=True)
-        with zipfile.ZipFile(path,'x',compression=zipfile.ZIP_DEFLATED) as z:
+        timestamp=time.localtime()[:6]
+        with zipfile.ZipFile(path,'x') as z:
             for name,data in self.entries.items():
-                z.writestr(name,data)
+                info=zipfile.ZipInfo(name, date_time=timestamp)
+                # TubesT writes DOS/Windows ZIP entries without Unix mode bits.
+                info.create_system=0
+                info.external_attr=0
+                compression=self._vendor_zip_compression(name,data)
+                z.writestr(
+                    info,
+                    data,
+                    compress_type=compression,
+                    compresslevel=6 if compression==zipfile.ZIP_DEFLATED else None,
+                )
 
     def extract(self,directory):
         directory=Path(directory).resolve()
