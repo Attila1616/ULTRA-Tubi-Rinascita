@@ -12,6 +12,7 @@ from tubenest_engine.archive import Archive
 from tubenest_engine.igs_converter import (
     _pair_feature_boundary_loops,
     _rounded_rectangle_boundary_error,
+    _section_loops,
     _usable_boundary_loops,
 )
 
@@ -116,6 +117,91 @@ def _sample_model():
 
 
 class IgsConverterTests(unittest.TestCase):
+    def test_round_section_accepts_two_closed_edges(self):
+        class FakeSection:
+            def __init__(self, *_args):
+                self._shape = object()
+
+            def Build(self):
+                return None
+
+            def Shape(self):
+                return self._shape
+
+        class FakeExplorer:
+            def __init__(self, _shape, _kind):
+                self.items = ["outer-circle", "inner-circle"]
+                self.index = 0
+
+            def More(self):
+                return self.index < len(self.items)
+
+            def Current(self):
+                return self.items[self.index]
+
+            def Next(self):
+                self.index += 1
+
+        class FakeTopoDS:
+            @staticmethod
+            def Edge_s(value):
+                return value
+
+        class FakePlane:
+            def __init__(self, *_args):
+                pass
+
+        class FakePoint:
+            def __init__(self, *_args):
+                pass
+
+        class FakeDirection:
+            def __init__(self, *_args):
+                pass
+
+        api = {
+            "gp_Pln": FakePlane,
+            "gp_Pnt": FakePoint,
+            "gp_Dir": FakeDirection,
+            "BRepAlgoAPI_Section": FakeSection,
+            "TopExp_Explorer": FakeExplorer,
+            "TopAbs_EDGE": object(),
+            "TopoDS": FakeTopoDS,
+        }
+
+        outer_loop = [
+            np.array([10.0, 0.0, 0.0]),
+            np.array([0.0, 10.0, 0.0]),
+            np.array([-10.0, 0.0, 0.0]),
+            np.array([0.0, -10.0, 0.0]),
+            np.array([10.0, 0.0, 0.0]),
+        ]
+        inner_loop = [
+            np.array([8.0, 0.0, 0.0]),
+            np.array([0.0, 8.0, 0.0]),
+            np.array([-8.0, 0.0, 0.0]),
+            np.array([0.0, -8.0, 0.0]),
+            np.array([8.0, 0.0, 0.0]),
+        ]
+
+        with patch(
+            "tubenest_engine.igs_converter._chain_edges",
+            return_value=[outer_loop, inner_loop],
+        ):
+            result = _section_loops(
+                object(),
+                np.array([0.0, 0.0, 1.0]),
+                0.0,
+                np.array([1.0, 0.0, 0.0]),
+                np.array([0.0, 1.0, 0.0]),
+                api,
+            )
+
+        self.assertIsNotNone(result)
+        _origin, loops, edges = result
+        self.assertEqual(len(edges), 2)
+        self.assertEqual(len(loops), 2)
+
     def test_rounded_rectangle_surface_distance_keeps_corner_faces_as_stock(self):
         # 150x50 with R5.99 mirrors the problematic rectangular IGES. Points
         # sampled along the actual rounded corner must lie on the stock
