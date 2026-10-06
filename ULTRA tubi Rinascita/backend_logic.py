@@ -12,6 +12,7 @@ import hashlib
 import math
 import time
 import threading
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import openpyxl
 import importlib.util
 import tube_database
@@ -59,6 +60,130 @@ _NESTING_GROUP_CACHE_LOADED = False
 _NESTING_CACHE_LOCK = threading.RLock()
 _NESTING_VALIDATION_CACHE = {}
 _NESTING_VALIDATION_CACHE_LIMIT = 4096
+
+def _convert_igs_worker(payload):
+    """Process-pool worker for one independent IGS conversion."""
+    file_path, overwrite = payload
+    started = time.perf_counter()
+    try:
+        result = tubenest_engine.convert_igs_to_zzx(
+            file_path,
+            overwrite=bool(overwrite),
+        )
+        result = dict(result or {})
+    except Exception as exc:
+        result = {
+            "status": "error",
+            "message": str(exc),
+            "sourcePath": str(file_path),
+        }
+    result["elapsedSeconds"] = round(
+        time.perf_counter() - started,
+        3,
+    )
+    return result
+
+
+def _igs_batch_worker_count(file_count):
+    file_count = max(0, int(file_count or 0))
+    if file_count <= 1:
+        return 1
+
+    logical_cpus = max(1, int(os.cpu_count() or 1))
+
+    # IGES/OpenCascade conversion is CPU-heavy and each worker also carries a
+    # complete CAD model in memory. Use roughly physical-core scale, leaving
+    # resources for ULTRA/Windows, and cap the batch so large selections do not
+    # create excessive RAM pressure.
+    cpu_budget = max(2, logical_cpus // 2)
+    return max(
+        1,
+        min(
+            file_count,
+            8,
+            cpu_budget,
+        ),
+    )
+
+
+def convert_igs_files_to_zzx(file_paths, overwrite=False):
+    """Convert independent IGS files in parallel processes.
+
+    OpenCascade work dominates conversion time. Running separate files in
+    separate processes bypasses the Python GIL and isolates OCP state between
+    conversions. Results preserve the original selection order.
+    """
+    paths = [
+        str(path)
+        for path in (file_paths or [])
+        if str(path).strip()
+    ]
+    if not paths:
+        return {
+            "status": "success",
+            "results": [],
+            "workersUsed": 0,
+            "elapsedSeconds": 0.0,
+        }
+
+    started = time.perf_counter()
+    workers = _igs_batch_worker_count(len(paths))
+    payloads = [
+        (path, bool(overwrite))
+        for path in paths
+    ]
+
+    if workers <= 1:
+        results = [
+            _convert_igs_worker(payload)
+            for payload in payloads
+        ]
+    else:
+        indexed_results = [None] * len(payloads)
+        try:
+            with ProcessPoolExecutor(
+                max_workers=workers,
+            ) as executor:
+                future_to_index = {
+                    executor.submit(
+                        _convert_igs_worker,
+                        payload,
+                    ): index
+                    for index, payload in enumerate(payloads)
+                }
+                for future in as_completed(future_to_index):
+                    index = future_to_index[future]
+                    try:
+                        indexed_results[index] = future.result()
+                    except Exception as exc:
+                        indexed_results[index] = {
+                            "status": "error",
+                            "message": str(exc),
+                            "sourcePath": paths[index],
+                        }
+            results = indexed_results
+        except Exception as exc:
+            # Some packaged/frozen Windows environments can restrict process
+            # spawning. Fall back to serial conversion instead of losing the
+            # whole batch.
+            print(
+                "[IGS BATCH] Process pool unavailable; "
+                f"falling back to serial conversion: {exc}"
+            )
+            workers = 1
+            results = [
+                _convert_igs_worker(payload)
+                for payload in payloads
+            ]
+
+    elapsed = time.perf_counter() - started
+    return {
+        "status": "success",
+        "results": results,
+        "workersUsed": workers,
+        "elapsedSeconds": round(elapsed, 3),
+    }
+
 
 def convert_igs_file_to_zzx(file_path, overwrite=False):
     """Convert one IGS/IGES tube to a sibling ZZX file."""
