@@ -54,6 +54,7 @@ MESH_DEFLECTION_MM = 0.2
 FEATURE_PLANE_TOLERANCE_MM = 0.04
 END_MATCH_TOLERANCE_MM = 0.08
 DEGENERATE_EDGE_LENGTH_MM = 1e-3
+CHAIN_ENDPOINT_SNAP_MM = 1e-3
 
 
 class IgsConversionError(ValueError):
@@ -259,12 +260,62 @@ def _edge_points(
     return result
 
 
-def _point_key(point, tolerance=1e-4):
-    return tuple(
-        np.round(
-            np.asarray(point, dtype=float) / float(tolerance)
-        ).astype(np.int64)
-    )
+def _cluster_edge_endpoints(
+    edge_data,
+    *,
+    tolerance=CHAIN_ENDPOINT_SNAP_MM,
+):
+    """Assign topological node ids using true Euclidean proximity.
+
+    IGES sewing can leave endpoints differing by only a few 1e-5 mm. Rounding
+    coordinates into fixed bins is not reliable because two almost-identical
+    points can land on opposite sides of a bin boundary. A tiny union-find over
+    the edge endpoints is cheap here and preserves the actual contour topology.
+    """
+    endpoints = []
+    for _edge, points, _sampled_length in edge_data:
+        endpoints.append(np.asarray(points[0], dtype=float))
+        endpoints.append(np.asarray(points[-1], dtype=float))
+
+    parent = list(range(len(endpoints)))
+
+    def find(index):
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left, right):
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    tolerance = float(tolerance)
+    for left in range(len(endpoints)):
+        for right in range(left + 1, len(endpoints)):
+            if (
+                np.linalg.norm(
+                    endpoints[left] - endpoints[right]
+                )
+                <= tolerance
+            ):
+                union(left, right)
+
+    node_ids = {}
+    next_node = 0
+    edge_nodes = []
+    for edge_index in range(len(edge_data)):
+        pair = []
+        for endpoint_index in (2 * edge_index, 2 * edge_index + 1):
+            root = find(endpoint_index)
+            if root not in node_ids:
+                node_ids[root] = next_node
+                next_node += 1
+            pair.append(node_ids[root])
+        edge_nodes.append(tuple(pair))
+
+    return edge_nodes
 
 
 def _chain_edges(
@@ -302,11 +353,15 @@ def _chain_edges(
             continue
         edge_data.append((edge, points))
 
+    if not edge_data:
+        return []
+
+    edge_nodes = _cluster_edge_endpoints(edge_data)
     adjacency = defaultdict(list)
 
-    for index, (_edge, points) in enumerate(edge_data):
-        adjacency[_point_key(points[0])].append((index, 0))
-        adjacency[_point_key(points[-1])].append((index, 1))
+    for index, (start_node, end_node) in enumerate(edge_nodes):
+        adjacency[start_node].append((index, 0))
+        adjacency[end_node].append((index, 1))
 
     used = set()
     loops = []
@@ -317,15 +372,14 @@ def _chain_edges(
 
         used.add(first_index)
         chain = list(edge_data[first_index][1])
-        start_key = _point_key(chain[0])
-        current_key = _point_key(chain[-1])
+        start_node, current_node = edge_nodes[first_index]
 
         guard = 0
-        while current_key != start_key and guard <= len(edge_data) + 2:
+        while current_node != start_node and guard <= len(edge_data) + 2:
             guard += 1
             candidates = [
                 item
-                for item in adjacency[current_key]
+                for item in adjacency[current_node]
                 if item[0] not in used
             ]
             if not candidates:
@@ -334,15 +388,29 @@ def _chain_edges(
             next_index, endpoint_index = candidates[0]
             used.add(next_index)
             points = edge_data[next_index][1]
+            next_start_node, next_end_node = edge_nodes[next_index]
+
             if endpoint_index == 0:
                 chain.extend(points[1:])
+                current_node = next_end_node
             else:
                 chain.extend(reversed(points[:-1]))
-            current_key = _point_key(chain[-1])
+                current_node = next_start_node
 
-        if np.linalg.norm(chain[-1] - chain[0]) > 2e-3:
+        closure_gap = float(
+            np.linalg.norm(chain[-1] - chain[0])
+        )
+        if (
+            current_node != start_node
+            or closure_gap > max(
+                2e-3,
+                CHAIN_ENDPOINT_SNAP_MM * 2.0,
+            )
+        ):
             raise IgsConversionError(
-                "Il modello IGS contiene un contorno di taglio aperto."
+                "Il modello IGS contiene un contorno di taglio aperto "
+                f"(gap finale {closure_gap:.6f} mm, "
+                f"bordi usati {len(used)}/{len(edge_data)})."
             )
 
         chain[-1] = chain[0].copy()
