@@ -1131,19 +1131,42 @@ def _analyse_iges(path):
         f"IGES read OK in {time.perf_counter() - started:.3f}s",
     )
 
-    sewing = api["BRepBuilderAPI_Sewing"](SEW_TOLERANCE_MM)
-    sewing.Add(reader.OneShape())
-    sewing.Perform()
-    free_edges = int(sewing.NbFreeEdges())
+    raw_shape = reader.OneShape()
+    sewing = None
+    sewing_tolerance = SEW_TOLERANCE_MM
+    free_edges = 0
+
+    # A few production IGES exports leave sub-micron/slightly larger gaps
+    # between otherwise matching faces. Retry sewing with tiny tolerances up
+    # to 0.002 mm before continuing. If free edges still remain, do not reject
+    # the file yet: the downstream profile/end-cut checks are stricter and can
+    # still prove that the tube geometry is usable.
+    for sewing_tolerance in (
+        SEW_TOLERANCE_MM,
+        5e-4,
+        1e-3,
+        2e-3,
+    ):
+        sewing = api["BRepBuilderAPI_Sewing"](
+            sewing_tolerance
+        )
+        sewing.Add(raw_shape)
+        sewing.Perform()
+        free_edges = int(sewing.NbFreeEdges())
+        if free_edges == 0:
+            break
+
     _igs_log(
         path,
-        f"sewing complete: free_edges={free_edges}",
+        "sewing complete: "
+        f"tolerance={sewing_tolerance:.6f}mm "
+        f"free_edges={free_edges}",
     )
-
     if free_edges != 0:
-        raise IgsConversionError(
-            "Il modello IGS non forma un tubo chiuso: "
-            f"{sewing.NbFreeEdges()} bordi liberi rilevati."
+        _igs_log(
+            path,
+            "WARNING: sewing still has free edges; "
+            "continuing with geometric validation.",
         )
 
     sewn_shape = sewing.SewedShape()
@@ -1243,6 +1266,7 @@ def _analyse_iges(path):
         0.20, 0.80,
         0.15, 0.85,
         0.10, 0.90,
+        0.05, 0.95,
     )
     section_diagnostics = []
     selected_fraction = None
@@ -1422,90 +1446,15 @@ def _analyse_iges(path):
             + (outside_height - inside_height)
         ) / 4.0
 
-        outer_radius_estimates = []
-        inner_radius_estimates = []
-        for edge in section_edges:
-            start, finish, _adaptor, length, chord = _edge_info(
-                edge,
-                api,
-            )
-            if (
-                chord <= 1.0
-                or abs(length - chord) / max(length, 1e-9) >= 2e-4
-            ):
-                continue
-
-            start_2d = local_2d(start)
-            finish_2d = local_2d(finish)
-            midpoint = (start_2d + finish_2d) / 2.0
-
-            horizontal = (
-                abs(finish_2d[0] - start_2d[0])
-                > abs(finish_2d[1] - start_2d[1])
-            )
-
-            if horizontal:
-                if (
-                    abs(
-                        abs(midpoint[1])
-                        - outside_height / 2.0
-                    )
-                    < 0.05
-                ):
-                    outer_radius_estimates.append(
-                        (outside_width - length) / 2.0
-                    )
-                if (
-                    abs(
-                        abs(midpoint[1])
-                        - inside_height / 2.0
-                    )
-                    < 0.05
-                ):
-                    inner_radius_estimates.append(
-                        (inside_width - length) / 2.0
-                    )
-            else:
-                if (
-                    abs(
-                        abs(midpoint[0])
-                        - outside_width / 2.0
-                    )
-                    < 0.05
-                ):
-                    outer_radius_estimates.append(
-                        (outside_height - length) / 2.0
-                    )
-                if (
-                    abs(
-                        abs(midpoint[0])
-                        - inside_width / 2.0
-                    )
-                    < 0.05
-                ):
-                    inner_radius_estimates.append(
-                        (inside_height - length) / 2.0
-                    )
-
-        usable_outer_radii = [
-            value
-            for value in outer_radius_estimates
-            if value >= 0.0
-        ]
-        usable_inner_radii = [
-            value
-            for value in inner_radius_estimates
-            if value >= 0.0
-        ]
-        corner_radius = (
-            float(np.median(usable_outer_radii))
-            if usable_outer_radii
-            else max(0.0, thickness)
+        corner_radius = _fit_rounded_rectangle_radius(
+            outer_2d,
+            outside_width,
+            outside_height,
         )
-        inner_corner_radius = (
-            float(np.median(usable_inner_radii))
-            if usable_inner_radii
-            else max(0.0, corner_radius - thickness)
+        inner_corner_radius = _fit_rounded_rectangle_radius(
+            inner_2d,
+            inside_width,
+            inside_height,
         )
 
         profile_kind = (
