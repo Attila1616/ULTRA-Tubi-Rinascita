@@ -53,8 +53,12 @@ SECTION_DEFLECTION_MM = 0.035
 MESH_DEFLECTION_MM = 0.2
 FEATURE_PLANE_TOLERANCE_MM = 0.04
 END_MATCH_TOLERANCE_MM = 0.08
-DEGENERATE_EDGE_LENGTH_MM = 1e-3
-CHAIN_ENDPOINT_SNAP_MM = 1e-3
+# IGES exporters can leave tiny connector/sliver edges around rounded
+# corners. Twenty microns is still far below any real tube feature, while
+# being large enough to absorb the 0.005-0.01 mm fragments seen in production
+# files.
+DEGENERATE_EDGE_LENGTH_MM = 0.02
+CHAIN_ENDPOINT_SNAP_MM = 0.02
 
 
 class IgsConversionError(ValueError):
@@ -431,6 +435,118 @@ def _polygon_area(points_3d, project):
     )
 
 
+def _polygon_centroid_2d(points):
+    points = np.asarray(points, dtype=float)
+    if len(points) < 3:
+        return points.mean(axis=0)
+
+    if np.linalg.norm(points[0] - points[-1]) > 1e-9:
+        points = np.vstack([points, points[0]])
+
+    x = points[:, 0]
+    y = points[:, 1]
+    cross = (
+        x[:-1] * y[1:]
+        - x[1:] * y[:-1]
+    )
+    area_twice = float(np.sum(cross))
+    if abs(area_twice) <= 1e-12:
+        return points[:-1].mean(axis=0)
+
+    return np.array(
+        [
+            float(
+                np.sum(
+                    (x[:-1] + x[1:]) * cross
+                )
+                / (3.0 * area_twice)
+            ),
+            float(
+                np.sum(
+                    (y[:-1] + y[1:]) * cross
+                )
+                / (3.0 * area_twice)
+            ),
+        ],
+        dtype=float,
+    )
+
+
+def _section_profile_plausibility(
+    outer_points_2d,
+    inner_points_2d,
+):
+    """Reject section planes that cross holes/notches instead of clean stock.
+
+    A valid supported tube section is a concentric parallel offset: the inner
+    loop is smaller in both transverse directions, the apparent wall reduction
+    is nearly the same on both axes, and both polygon centroids coincide.
+    """
+    outer = np.asarray(outer_points_2d, dtype=float)
+    inner = np.asarray(inner_points_2d, dtype=float)
+
+    if len(outer) < 3 or len(inner) < 3:
+        return False, {
+            "reason": "section loop has too few points",
+        }
+
+    outside_width = float(np.ptp(outer[:, 0]))
+    outside_height = float(np.ptp(outer[:, 1]))
+    inside_width = float(np.ptp(inner[:, 0]))
+    inside_height = float(np.ptp(inner[:, 1]))
+
+    wall_x = (outside_width - inside_width) / 2.0
+    wall_y = (outside_height - inside_height) / 2.0
+    wall_average = (wall_x + wall_y) / 2.0
+    minimum_outer = max(
+        1e-9,
+        min(outside_width, outside_height),
+    )
+
+    center_gap = float(
+        np.linalg.norm(
+            _polygon_centroid_2d(outer)
+            - _polygon_centroid_2d(inner)
+        )
+    )
+
+    plausible = (
+        inside_width > 0.0
+        and inside_height > 0.0
+        and wall_x > 0.02
+        and wall_y > 0.02
+        and max(wall_x, wall_y)
+        < minimum_outer * 0.35
+        and center_gap <= 0.02
+        and abs(wall_x - wall_y)
+        <= max(
+            0.20,
+            0.25 * max(wall_average, 1e-9),
+        )
+    )
+
+    return plausible, {
+        "outside_bbox": (
+            outside_width,
+            outside_height,
+        ),
+        "inside_bbox": (
+            inside_width,
+            inside_height,
+        ),
+        "wall_bbox": (
+            wall_x,
+            wall_y,
+        ),
+        "center_gap": center_gap,
+        "reason": (
+            "ok"
+            if plausible
+            else "section loops are not a plausible concentric hollow-tube profile"
+        ),
+    }
+
+
 def _pair_feature_boundary_loops(
     outer_loops,
     inner_loops,
@@ -661,6 +777,26 @@ def _section_loops(
         key=lambda loop: _polygon_area(loop, project),
         reverse=True,
     )
+
+    outer_2d = np.asarray(
+        [project(point) for point in loops[0]],
+        dtype=float,
+    )
+    inner_2d = np.asarray(
+        [project(point) for point in loops[1]],
+        dtype=float,
+    )
+    plausible, plausibility = _section_profile_plausibility(
+        outer_2d,
+        inner_2d,
+    )
+
+    if diagnostic is not None:
+        diagnostic.update(plausibility)
+
+    if not plausible:
+        return None
+
     if diagnostic is not None:
         diagnostic["reason"] = "ok"
     return origin, loops, edges
@@ -744,6 +880,67 @@ def _rounded_rectangle_boundary_error(
         - radius
     )
     return np.abs(signed_distance)
+
+
+def _fit_rounded_rectangle_radius(
+    points,
+    width,
+    height,
+):
+    """Fit a rounded-rectangle radius from the whole section contour.
+
+    Inferring radius from one nominally straight edge is brittle with IGES:
+    exporters can split/tessellate tangency regions, shortening that edge by
+    several tenths of a millimetre. Fit against the complete contour instead.
+    """
+    points = np.asarray(points, dtype=float)
+    maximum_radius = max(
+        0.0,
+        min(float(width), float(height)) / 2.0,
+    )
+    if maximum_radius <= 1e-9:
+        return 0.0
+
+    def score(radius):
+        errors = _rounded_rectangle_boundary_error(
+            points,
+            width,
+            height,
+            radius,
+        )
+        return float(np.percentile(errors, 95))
+
+    coarse_radii = np.linspace(
+        0.0,
+        maximum_radius,
+        81,
+    )
+    coarse_scores = [
+        score(radius)
+        for radius in coarse_radii
+    ]
+    best_index = int(np.argmin(coarse_scores))
+    best_radius = float(coarse_radii[best_index])
+
+    coarse_step = maximum_radius / 80.0
+    lower = max(0.0, best_radius - coarse_step)
+    upper = min(
+        maximum_radius,
+        best_radius + coarse_step,
+    )
+
+    fine_radii = np.linspace(
+        lower,
+        upper,
+        81,
+    )
+    fine_scores = [
+        score(radius)
+        for radius in fine_radii
+    ]
+    return float(
+        fine_radii[int(np.argmin(fine_scores))]
+    )
 
 
 def _usable_boundary_loops(loops):
