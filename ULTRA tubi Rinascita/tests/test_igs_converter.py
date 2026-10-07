@@ -11,9 +11,11 @@ from tubenest_engine import convert_igs_to_zzx, read_tube_parts
 from tubenest_engine.archive import Archive
 from tubenest_engine.igs_converter import (
     _chain_edges,
+    _fit_rounded_rectangle_radius,
     _pair_feature_boundary_loops,
     _rounded_rectangle_boundary_error,
     _section_loops,
+    _section_profile_plausibility,
     _usable_boundary_loops,
 )
 
@@ -207,6 +209,141 @@ class IgsConverterTests(unittest.TestCase):
         self.assertEqual(diagnostic["edges"], 2)
         self.assertEqual(diagnostic["usable_loops"], 2)
         self.assertEqual(diagnostic["reason"], "ok")
+
+    def test_section_plausibility_rejects_midsection_cut(self):
+        outer = np.asarray(
+            [
+                [-30.0, -30.0],
+                [30.0, -30.0],
+                [30.0, 30.0],
+                [-30.0, 30.0],
+                [-30.0, -30.0],
+            ],
+            dtype=float,
+        )
+        # This mimics a probe plane crossing a notch/hole: there are still
+        # exactly two closed loops, but the second one is not the concentric
+        # inside wall of the tube.
+        false_inner = np.asarray(
+            [
+                [-2.0, -9.75],
+                [1.0, -9.75],
+                [1.0, 9.75],
+                [-2.0, 9.75],
+                [-2.0, -9.75],
+            ],
+            dtype=float,
+        )
+
+        plausible, details = _section_profile_plausibility(
+            outer,
+            false_inner,
+        )
+
+        self.assertFalse(plausible)
+        self.assertGreater(
+            details["center_gap"],
+            0.02,
+        )
+
+    def test_rounded_rectangle_radius_is_fitted_from_full_contour(self):
+        width = 100.0
+        height = 100.0
+        radius = 5.55
+        cx = width / 2.0 - radius
+        cy = height / 2.0 - radius
+
+        points = []
+        corners = [
+            (cx, cy, 0.0, np.pi / 2.0),
+            (-cx, cy, np.pi / 2.0, np.pi),
+            (-cx, -cy, np.pi, 3.0 * np.pi / 2.0),
+            (cx, -cy, 3.0 * np.pi / 2.0, 2.0 * np.pi),
+        ]
+        for center_x, center_y, start, finish in corners:
+            for angle in np.linspace(start, finish, 25):
+                points.append(
+                    [
+                        center_x + radius * np.cos(angle),
+                        center_y + radius * np.sin(angle),
+                    ]
+                )
+
+        fitted = _fit_rounded_rectangle_radius(
+            np.asarray(points, dtype=float),
+            width,
+            height,
+        )
+
+        self.assertAlmostEqual(
+            fitted,
+            radius,
+            delta=0.03,
+        )
+
+    def test_cut_chaining_snaps_ten_micron_sliver_gaps(self):
+        edges = [
+            "bottom",
+            "sliver-a",
+            "right",
+            "sliver-b",
+            "top",
+            "sliver-c",
+            "left",
+            "sliver-d",
+        ]
+        edge_points = {
+            "bottom": [
+                np.array([-1.0, -1.0, 0.0]),
+                np.array([1.0, -1.0, 0.0]),
+            ],
+            "sliver-a": [
+                np.array([1.0, -1.0, 0.0]),
+                np.array([1.01, -1.0, 0.0]),
+            ],
+            "right": [
+                np.array([1.01, -1.0, 0.0]),
+                np.array([1.01, 1.0, 0.0]),
+            ],
+            "sliver-b": [
+                np.array([1.01, 1.0, 0.0]),
+                np.array([1.0, 1.0, 0.0]),
+            ],
+            "top": [
+                np.array([1.0, 1.0, 0.0]),
+                np.array([-1.0, 1.0, 0.0]),
+            ],
+            "sliver-c": [
+                np.array([-1.0, 1.0, 0.0]),
+                np.array([-1.01, 1.0, 0.0]),
+            ],
+            "left": [
+                np.array([-1.01, 1.0, 0.0]),
+                np.array([-1.01, -1.0, 0.0]),
+            ],
+            "sliver-d": [
+                np.array([-1.01, -1.0, 0.0]),
+                np.array([-1.0, -1.0, 0.0]),
+            ],
+        }
+
+        with patch(
+            "tubenest_engine.igs_converter._edge_points",
+            side_effect=lambda edge, _api, **_kwargs: edge_points[edge],
+        ):
+            loops = _chain_edges(
+                edges,
+                {},
+                ignore_degenerate=True,
+            )
+
+        self.assertEqual(len(loops), 1)
+        self.assertTrue(
+            np.allclose(
+                loops[0][0],
+                loops[0][-1],
+            )
+        )
 
     def test_section_chaining_keeps_tiny_connector_edges(self):
         edges = [
