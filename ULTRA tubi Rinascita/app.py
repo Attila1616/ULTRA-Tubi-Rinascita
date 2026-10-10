@@ -331,6 +331,53 @@ class Api:
                 "message": "Errore durante la conversione IGS -> ZZX.",
             }
 
+    def pick_step_file(self):
+        try:
+            result = window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=(
+                    "File STEP (*.stp;*.step)",
+                    "Tutti i file (*.*)",
+                ),
+            )
+        except TypeError:
+            result = window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+            )
+
+        if not result:
+            return {
+                "status": "cancelled",
+            }
+
+        path = result if isinstance(result, str) else result[0]
+        if os.path.splitext(str(path))[1].lower() not in {".stp", ".step"}:
+            return {
+                "status": "error",
+                "message": "Seleziona un file STP/STEP valido.",
+            }
+
+        return {
+            "status": "success",
+            "path": str(path),
+        }
+
+    def convert_step_file_to_zzx(self, file_path, overwrite=False):
+        try:
+            return logic.convert_step_file_to_zzx(
+                file_path,
+                overwrite=overwrite,
+            )
+        except Exception:
+            print("--- PYTHON ERROR in convert_step_file_to_zzx ---")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": "Errore durante la conversione STP -> ZZX.",
+            }
+
     def get_tubes_state(self):
         try:
             self.config = logic.load_config() or {}
