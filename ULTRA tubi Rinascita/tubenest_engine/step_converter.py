@@ -17,9 +17,12 @@ import re
 import tempfile
 import time
 
+import numpy as np
+
 from .igs_converter import (
     IgsConversionError,
     _analyse_iges,
+    _simplify_closed_polyline,
     _write_zzx,
 )
 
@@ -126,6 +129,209 @@ def _tube_filename(component_name, model, quantity):
         f"{component_name} {profile} "
         f"L{_format_mm(length)} {int(quantity)}pz.zzx"
     )
+
+
+GEOMETRY_SIGNATURE_QUANTUM_MM = 0.02
+
+
+def _quantize_geometry_value(value):
+    return int(
+        round(
+            float(value)
+            / GEOMETRY_SIGNATURE_QUANTUM_MM
+        )
+    )
+
+
+def _canonical_point_cloud(points, transform):
+    points = _simplify_closed_polyline(
+        np.asarray(points, dtype=float)
+    )
+    points = np.asarray(points[:-1], dtype=float)
+    if not len(points):
+        return ()
+
+    transformed = np.asarray(
+        [transform(point) for point in points],
+        dtype=float,
+    )
+    quantized = np.rint(
+        transformed / GEOMETRY_SIGNATURE_QUANTUM_MM
+    ).astype(np.int64)
+
+    # The same CAD contour can start at a different vertex or run in the
+    # opposite direction. The ZZX geometry is unchanged, so compare its
+    # quantized point set rather than its traversal order.
+    unique_points = sorted(
+        {
+            tuple(int(value) for value in row)
+            for row in quantized
+        }
+    )
+    return tuple(unique_points)
+
+
+def _transverse_rotation(point, quarter_turns):
+    x, y, z = map(float, point)
+    turns = int(quarter_turns) % 4
+    if turns == 0:
+        return np.array([x, y, z], dtype=float)
+    if turns == 1:
+        return np.array([-y, x, z], dtype=float)
+    if turns == 2:
+        return np.array([-x, -y, z], dtype=float)
+    return np.array([y, -x, z], dtype=float)
+
+
+def _geometry_transforms(model):
+    kind = str(model.get("profile_kind") or "")
+    width = float(model.get("outside_width") or 0.0)
+    height = float(model.get("outside_height") or 0.0)
+    length = float(model.get("overall_length") or 0.0)
+
+    if kind == "Square" or abs(width - height) <= 0.05:
+        quarter_turns = (0, 1, 2, 3)
+    elif kind == "Rect":
+        # The analyser normally aligns the local axes consistently for a
+        # rectangle. Only the true 0/180-degree rectangle symmetries are
+        # equivalent once long/short faces are established.
+        quarter_turns = (0, 2)
+    elif kind == "Circle":
+        # STEP component definitions exported by the same CAD assembly retain
+        # a stable local angular datum. 90-degree candidates also cover common
+        # CAD re-orientations without collapsing genuinely different hole
+        # patterns.
+        quarter_turns = (0, 1, 2, 3)
+    else:
+        quarter_turns = (0,)
+
+    transforms = []
+    for turns in quarter_turns:
+        def forward(point, turns=turns):
+            return _transverse_rotation(point, turns)
+
+        transforms.append(forward)
+
+        # A duplicate STEP definition can be modelled from the opposite end.
+        # Reverse Z with a 180-degree proper rotation about local X, then apply
+        # the normal transverse symmetry. This treats the same physical tube
+        # as identical without mirroring its machining geometry.
+        def reversed_axis(point, turns=turns, length=length):
+            x, y, z = map(float, point)
+            reversed_point = np.array(
+                [x, -y, length - z],
+                dtype=float,
+            )
+            return _transverse_rotation(
+                reversed_point,
+                turns,
+            )
+
+        transforms.append(reversed_axis)
+
+    return transforms
+
+
+def _model_geometry_signature(model):
+    """Canonical machining signature for merging duplicate STEP tubes.
+
+    Length alone is deliberately insufficient. Every end cut and internal
+    machining contour contributes its full 3D geometry, so two Lxxxx tubes
+    with holes at different positions remain separate.
+    """
+    kind = str(model.get("profile_kind") or "")
+    dimensions = sorted(
+        [
+            _quantize_geometry_value(
+                model.get("outside_width") or 0.0
+            ),
+            _quantize_geometry_value(
+                model.get("outside_height") or 0.0
+            ),
+        ]
+    )
+    profile_signature = (
+        kind,
+        tuple(dimensions),
+        _quantize_geometry_value(
+            model.get("thickness") or 0.0
+        ),
+        _quantize_geometry_value(
+            model.get("corner_radius") or 0.0
+        ),
+        _quantize_geometry_value(
+            model.get("overall_length") or 0.0
+        ),
+    )
+
+    operations = list(model.get("operations") or [])
+    candidates = []
+
+    for transform in _geometry_transforms(model):
+        operation_signatures = []
+        for operation in operations:
+            outer = _canonical_point_cloud(
+                operation["outer"],
+                transform,
+            )
+            inner = _canonical_point_cloud(
+                operation["inner"],
+                transform,
+            )
+            operation_signatures.append(
+                (outer, inner)
+            )
+
+        candidates.append(
+            tuple(sorted(operation_signatures))
+        )
+
+    return (
+        profile_signature,
+        min(candidates) if candidates else (),
+    )
+
+
+def _merged_component_name(names):
+    unique_names = []
+    seen = set()
+    for value in names:
+        name = _sanitize_component_name(value)
+        folded = name.casefold()
+        if folded not in seen:
+            seen.add(folded)
+            unique_names.append(name)
+
+    if not unique_names:
+        return "componente"
+    if len(unique_names) == 1:
+        return unique_names[0]
+
+    # Inventor/STEP exports in the supplied assembly use names such as
+    # TA9900A00080_oa_0, ..._oa_1 for separate definitions of an identical
+    # physical tube. If geometry proves they are identical, use the shared
+    # production code rather than an arbitrary occurrence suffix.
+    bases = []
+    for name in unique_names:
+        match = re.match(
+            r"^(.*?)[_ -]oa[_ -]?\d+$",
+            name,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return unique_names[0]
+        bases.append(match.group(1).rstrip("_ -"))
+
+    if (
+        bases
+        and all(
+            base.casefold() == bases[0].casefold()
+            for base in bases
+        )
+    ):
+        return bases[0]
+
+    return unique_names[0]
 
 
 def _collect_step_definitions(source_path, api):
@@ -307,6 +513,7 @@ def convert_step_to_zzx(
     converted = 0
     existing = 0
     detected_tubes = 0
+    analysed_tubes = []
 
     with tempfile.TemporaryDirectory(
         prefix="ultra_step_"
@@ -366,14 +573,60 @@ def convert_step_to_zzx(
                 continue
 
             detected_tubes += 1
+            analysed_tubes.append(
+                {
+                    "name": name,
+                    "quantity": quantity,
+                    "model": model,
+                }
+            )
+
+        geometry_groups = OrderedDict()
+        for item in analysed_tubes:
+            signature = _model_geometry_signature(
+                item["model"]
+            )
+            group = geometry_groups.get(signature)
+            if group is None:
+                geometry_groups[signature] = {
+                    "model": item["model"],
+                    "names": [item["name"]],
+                    "quantity": int(item["quantity"]),
+                    "definition_count": 1,
+                }
+            else:
+                group["names"].append(item["name"])
+                group["quantity"] += int(item["quantity"])
+                group["definition_count"] += 1
+
+        for group_index, group in enumerate(
+            geometry_groups.values(),
+            start=1,
+        ):
+            model = group["model"]
+            quantity = int(group["quantity"])
+            merged_names = list(group["names"])
+            name = _merged_component_name(
+                merged_names
+            )
+
+            if group["definition_count"] > 1:
+                _step_log(
+                    source_path,
+                    "MERGE identical tube geometry: "
+                    f"{group['definition_count']} definitions -> "
+                    f"{quantity}pz | "
+                    + ", ".join(merged_names),
+                )
+
             output_name = _tube_filename(
                 name,
                 model,
                 quantity,
             )
 
-            # Avoid overwriting another distinct STEP definition if two product
-            # labels happen to share the same visible name and dimensions.
+            # Avoid overwriting another distinct geometry if two groups happen
+            # to resolve to the same visible production name.
             base_output_name = output_name
             collision_index = 2
             while output_name.lower() in used_output_names:
@@ -391,6 +644,10 @@ def convert_step_to_zzx(
 
             result = {
                 "componentName": name,
+                "componentNames": merged_names,
+                "mergedDefinitionCount": int(
+                    group["definition_count"]
+                ),
                 "occurrenceCount": quantity,
                 "outputPath": str(destination),
                 "profileKind": model["profile_kind"],
@@ -458,6 +715,7 @@ def convert_step_to_zzx(
         source_path,
         f"END definitions={len(definitions)} "
         f"tube_definitions={detected_tubes} "
+        f"unique_geometries={len(geometry_groups)} "
         f"converted={converted} existing={existing} "
         f"skipped={len(skipped)} errors={len(errors)} "
         f"elapsed={elapsed:.3f}s",
@@ -472,6 +730,11 @@ def convert_step_to_zzx(
             assembly["occurrence_count"]
         ),
         "tubeDefinitionCount": detected_tubes,
+        "uniqueTubeCount": len(geometry_groups),
+        "mergedDefinitionCount": max(
+            0,
+            detected_tubes - len(geometry_groups),
+        ),
         "convertedCount": converted,
         "existingCount": existing,
         "skippedCount": len(skipped),
