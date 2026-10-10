@@ -29,6 +29,7 @@ from .toolpath import curve_start_parameter, point_at_composite_parameter
 from .exporter import export_nested_rod, export_nested_rod_to_directory
 from .flat_exporter import export_flat_nested_rod, export_flat_nested_rod_to_directory
 from .igs_converter import IgsConversionError, convert_igs_to_zzx
+from .step_converter import StepConversionError, convert_step_to_zzx
 from .reader import (
     clear_cache,
     describe_zzx,
@@ -68,6 +69,8 @@ __all__ = [
     "export_flat_nested_rod_to_directory",
     "IgsConversionError",
     "convert_igs_to_zzx",
+    "StepConversionError",
+    "convert_step_to_zzx",
     "clear_cache",
     "describe_zzx",
     "read_zzx",
