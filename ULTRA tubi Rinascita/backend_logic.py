@@ -267,6 +267,48 @@ def convert_igs_file_to_zzx(file_path, overwrite=False):
         }
 
 
+def convert_step_file_to_zzx(file_path, overwrite=False):
+    """Extract supported tube definitions from one STEP assembly."""
+    started = time.perf_counter()
+    file_name = os.path.basename(str(file_path))
+    print(
+        f"[STP BACKEND] START {file_name} overwrite={bool(overwrite)}",
+        flush=True,
+    )
+    try:
+        result = tubenest_engine.convert_step_to_zzx(
+            file_path,
+            overwrite=bool(overwrite),
+        )
+        result = dict(result or {})
+    except Exception as exc:
+        trace = traceback.format_exc()
+        print(
+            f"[STP BACKEND] ERROR {file_name}: "
+            f"{type(exc).__name__}: {exc}\n{trace}",
+            flush=True,
+        )
+        return {
+            "status": "error",
+            "message": str(exc),
+            "errorType": type(exc).__name__,
+            "traceback": trace,
+            "sourcePath": str(file_path),
+        }
+
+    elapsed = time.perf_counter() - started
+    result.setdefault("elapsedSeconds", round(elapsed, 3))
+    print(
+        f"[STP BACKEND] END {file_name} "
+        f"status={result.get('status')} "
+        f"tubes={result.get('tubeDefinitionCount', 0)} "
+        f"converted={result.get('convertedCount', 0)} "
+        f"elapsed={elapsed:.3f}s",
+        flush=True,
+    )
+    return result
+
+
 def _cached_zzx_validation(file_path):
     """Cache disk-backed validation across repeated group expansions."""
     normalized = os.path.normcase(os.path.abspath(str(file_path)))
