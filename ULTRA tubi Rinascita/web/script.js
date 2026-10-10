@@ -164,6 +164,7 @@ closeSearchBtn = document.getElementById('close-search-btn');
     // Attach all event listeners
     document.getElementById('refresh-button').addEventListener('click', loadTubeData);
     document.getElementById('igs-to-zzx-btn')?.addEventListener('click', convertIgsFileToZzx);
+    document.getElementById('step-to-zzx-btn')?.addEventListener('click', convertStepFileToZzx);
     document.getElementById('summary-btn').addEventListener('click', openSummaryModal);
     document.getElementById('close-summary-btn').addEventListener('click', closeSummaryModal);
     document.getElementById('settings-btn')?.addEventListener('click', openSettingsModal);
@@ -971,6 +972,115 @@ async function convertIgsFileToZzx() {
     } catch (error) {
         console.error('IGS -> ZZX batch conversion failed:', error);
         alert(error?.message || 'Errore durante la conversione IGS -> ZZX.');
+    } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+    }
+}
+
+async function convertStepFileToZzx() {
+    const button = document.getElementById('step-to-zzx-btn');
+    if (!button || button.disabled) return;
+
+    const originalText = button.textContent;
+    button.disabled = true;
+
+    const runConversion = async (filePath, overwrite) => {
+        button.textContent = overwrite
+            ? 'Riconversione STP...'
+            : 'Analisi STP...';
+
+        const response = await window.pywebview.api.convert_step_file_to_zzx(
+            filePath,
+            overwrite
+        );
+        if (!response || response.status !== 'success') {
+            throw new Error(
+                response?.message || 'Conversione STP -> ZZX non riuscita.'
+            );
+        }
+        return response;
+    };
+
+    try {
+        button.textContent = 'Seleziona STP...';
+        const picked = await window.pywebview.api.pick_step_file();
+        if (!picked || picked.status === 'cancelled') return;
+        if (picked.status !== 'success' || !picked.path) {
+            throw new Error(
+                picked?.message || 'Impossibile selezionare il file STP.'
+            );
+        }
+
+        let result = await runConversion(picked.path, false);
+
+        if (Number(result.existingCount) > 0) {
+            const overwrite = confirm(
+                String(result.existingCount)
+                + ' file ZZX estratti dallo STEP esistono già.\n\n'
+                + 'Vuoi sovrascrivere tutti i ZZX dei tubi rilevati?'
+            );
+            if (overwrite) {
+                result = await runConversion(picked.path, true);
+            }
+        }
+
+        const lines = [
+            'Conversione STP completata.',
+            '',
+            'Definizioni componenti: ' + String(result.componentDefinitionCount ?? 0),
+            'Occorrenze componenti: ' + String(result.componentOccurrenceCount ?? 0),
+            'Tubi rilevati: ' + String(result.tubeDefinitionCount ?? 0),
+            'ZZX creati: ' + String(result.convertedCount ?? 0),
+            'ZZX già esistenti: ' + String(result.existingCount ?? 0),
+            'Componenti non tubo/non supportati: ' + String(result.skippedCount ?? 0),
+            'Errori reali: ' + String(result.errorCount ?? 0),
+            'Tempo: ' + (Number(result.elapsedSeconds) || 0).toFixed(1) + ' s',
+            '',
+            'Cartella output: ' + String(result.outputDirectory || '?')
+        ];
+
+        const errors = Array.isArray(result.errors)
+            ? result.errors
+            : [];
+        if (errors.length > 0) {
+            lines.push('', 'Componenti con errore:');
+            errors.slice(0, 20).forEach(item => {
+                lines.push(
+                    '- ' + String(item.componentName || '?')
+                    + ': ' + String(item.message || 'errore sconosciuto')
+                );
+            });
+            if (errors.length > 20) {
+                lines.push(
+                    '...e altri ' + String(errors.length - 20) + ' errori.'
+                );
+            }
+        }
+
+        console.group('STP -> ZZX');
+        console.log('Risultato:', result);
+        if (Array.isArray(result.skipped) && result.skipped.length > 0) {
+            console.group('Componenti ignorati/non supportati');
+            result.skipped.forEach(item => {
+                console.log(
+                    item.componentName,
+                    'x' + String(item.occurrenceCount || 1),
+                    item.reason
+                );
+            });
+            console.groupEnd();
+        }
+        console.groupEnd();
+
+        alert(lines.join('\n'));
+
+        if (Number(result.convertedCount) > 0) {
+            await loadTubeData();
+        }
+    } catch (error) {
+        console.error('STP -> ZZX conversion failed:', error);
+        alert(error?.message || 'Errore durante la conversione STP -> ZZX.');
     } finally {
         button.disabled = false;
         button.textContent = originalText;
