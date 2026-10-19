@@ -14,6 +14,7 @@ from .optimizer import (
     get_parallel_stats,
     optimize_items,
     optimize_items_dict,
+    optimize_locked_sequence_dict,
 )
 from .fit import (
     AdjacencyFit,
@@ -50,6 +51,7 @@ __all__ = [
     "nest_items_dict",
     "optimize_items",
     "optimize_items_dict",
+    "optimize_locked_sequence_dict",
     "diagnose_items_dict",
     "get_parallel_stats",
     "AdjacencyFit",
