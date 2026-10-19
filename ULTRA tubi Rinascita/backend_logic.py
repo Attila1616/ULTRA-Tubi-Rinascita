@@ -55,7 +55,7 @@ NESTING_CACHE_FILE = runtime_paths.NESTING_CACHE_FILE
 
 _NESTING_GROUP_CACHE = {}
 _NESTING_GROUP_CACHE_LIMIT = 128
-_NESTING_CACHE_VERSION = 2
+_NESTING_CACHE_VERSION = 3
 _NESTING_GROUP_CACHE_LOADED = False
 _NESTING_CACHE_LOCK = threading.RLock()
 _NESTING_VALIDATION_CACHE = {}
@@ -1608,6 +1608,12 @@ def nest_piece_groups(groups, rod_length=6000):
             if cached:
                 rods = _NESTING_GROUP_CACHE[signature]
             else:
+                print(
+                    f"[TubeNest START] {tube_type}: pieces={len(pieces)}, "
+                    f"sources={len(unique_sources)}, "
+                    f"algorithm={nesting_algorithm}",
+                    flush=True,
+                )
                 optimizer_started = time.perf_counter()
                 rods = tubenest_engine.optimize_items_dict(
                     pieces,
