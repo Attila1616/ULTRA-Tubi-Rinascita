@@ -280,6 +280,11 @@ header h1 {
 }
 .segment-done-button.ctrl-active {
     display: flex;
+    z-index: 20;
+    pointer-events: auto;
+}
+.rod-segment:has(.segment-done-button.ctrl-active) {
+    z-index: 12;
 }
 .rod-entry {
     display: flex;
@@ -515,7 +520,7 @@ header h1 {
     color: #666;
 }
 .history-rod-bar {
-    /* Re-use rod-bar style but with a different name to avoid conflicts if needed */
+    /* Historical pieces are flow items, not absolute-positioned nesting pieces. */
     display: flex;
     height: 30px;
     width: 100%;
@@ -1470,4 +1475,23 @@ body.modal-scroll-locked {
 }
 .locked-rod-renest-button:hover:not(:disabled) {
     background: #ffd955 !important;
+}
+
+/* History bars use proportional flex widths; override the absolute rod segment layout. */
+.history-rod-bar > .rod-segment {
+    position: relative;
+    top: auto;
+    left: auto;
+    height: 100%;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    min-width: 0;
+    border-right: 1px solid rgba(0,0,0,0.16);
+    box-sizing: border-box;
+}
+.history-rod-entry > div {
+    min-width: 0;
 }
