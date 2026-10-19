@@ -213,6 +213,40 @@ header h1 {
 .rod-cut-angle-right {
     right: 3px;
 }
+
+.rod-rotation-selected {
+    position: absolute;
+    left: 50%;
+    bottom: 1px;
+    transform: translateX(-50%);
+    z-index: 8;
+    padding: 0 2px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.78);
+    color: rgba(0,0,0,0.78);
+    font-size: 7px;
+    line-height: 10px;
+    font-weight: 700;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.rod-rotation-trace {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    margin: -4px 0 8px 0;
+    padding: 4px 6px;
+    border-left: 2px solid rgba(70, 90, 120, 0.35);
+    background: rgba(70, 90, 120, 0.05);
+    color: #4b5563;
+    font-size: 10px;
+    line-height: 1.35;
+}
+
+.rod-rotation-trace-item {
+    white-space: nowrap;
+}
 .rod-segment:hover {
     filter: brightness(1.1);
     cursor: pointer;
