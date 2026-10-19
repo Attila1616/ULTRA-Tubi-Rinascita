@@ -373,6 +373,14 @@
                     <input id="settings-nesting-gap-mm" type="number" min="0" step="0.1" value="2" class="search-input search-input-small">
                     <span>mm di distanza minima tra superfici non common-line</span>
                 </div>
+                <div class="settings-threshold-grid">
+                    <label for="settings-nesting-algorithm">Algoritmo</label>
+                    <select id="settings-nesting-algorithm" class="search-input">
+                        <option value="current">Attuale (veloce)</option>
+                        <option value="global_compaction">Compattazione globale (meno scarto)</option>
+                    </select>
+                    <span>La compattazione globale prova anche a spostare pezzi tra verghe e a riordinare i tagli per sfruttare meglio l'ultima zona utile.</span>
+                </div>
                 <label class="settings-checkbox-row">
                     <input id="settings-nesting-debug-enabled" type="checkbox" checked>
                     <span>Mostra pulsanti debug nesting</span>
