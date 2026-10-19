@@ -376,11 +376,15 @@
                 <div class="settings-threshold-grid">
                     <label for="settings-nesting-algorithm">Algoritmo</label>
                     <select id="settings-nesting-algorithm" class="search-input">
-                        <option value="current">Attuale (veloce)</option>
-                        <option value="global_compaction">Compattazione globale (meno scarto)</option>
+                        <option value="current">Attuale (ricerca geometrica)</option>
+                        <option value="best_fit">Best-fit rapido (meno scarto)</option>
                     </select>
-                    <span>La compattazione globale prova anche a spostare pezzi tra verghe e a riordinare i tagli per sfruttare meglio l'ultima zona utile.</span>
+                    <span>Il best-fit prova inserimenti in più punti della verga e può mettere pezzi piccoli prima dell'ultimo pezzo per sfruttare legalmente la zona rossa, senza la ricerca combinatoria lenta.</span>
                 </div>
+                <label class="settings-checkbox-row">
+                    <input id="settings-nesting-rotation-visualization-enabled" type="checkbox">
+                    <span>Mostra rotazioni provate e rotazione scelta sulle verghe</span>
+                </label>
                 <label class="settings-checkbox-row">
                     <input id="settings-nesting-debug-enabled" type="checkbox" checked>
                     <span>Mostra pulsanti debug nesting</span>
