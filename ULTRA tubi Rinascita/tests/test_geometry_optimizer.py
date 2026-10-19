@@ -307,161 +307,40 @@ class GeometryOptimizerTests(unittest.TestCase):
 
         self.assertEqual(len(rods), 1)
 
-    def test_fast_best_fit_does_not_split_existing_common_line_chain(self):
-        first = make_part(
-            1000,
-            start_plane=(0.0, 0.0, 0.0),
-            end_plane=(950.0, 0.0, 1.0),
-        )
-        second = make_part(
-            980,
-            start_plane=(50.0, 0.0, 1.0),
-            end_plane=(980.0, 0.0, 0.0),
-        )
-        first["ends"][1]["boundary_signature"] = "shared-45"
-        second["ends"][0]["boundary_signature"] = "shared-45"
-        small = make_part(380)
-
+    def test_locked_rod_preserves_manual_piece_order(self):
+        lengths = [1050, 1290, 107, 1170]
         pieces = [
-            item("A", 1000, first),
-            item("B", 980, second),
-            item("SMALL", 380, small),
+            item(f"LOCK-{index}", length, make_part(length))
+            for index, length in enumerate(lengths)
         ]
-        normalized = optimizer_module._normalize_items(
-            pieces,
-            6000.0,
-        )
-        chain = optimizer_module._optimize_fixed_item_sequence(
-            normalized,
-            [0, 1],
-            rod_length=6000.0,
+        rod = optimizer_module.optimize_locked_sequence_dict(
+            pieces, rod_length=6000.0, gap_mm=2.0,
             dead_zone_mm=400.0,
-            gap_mm=2.0,
-        )
-        self.assertIsNotNone(chain)
-        self.assertTrue(chain.placed[1].common_line_before)
-
-        inserted = optimizer_module._best_insert_item_fixed_order(
-            normalized,
-            chain,
-            2,
-            rod_length=6000.0,
-            dead_zone_mm=400.0,
-            gap_mm=2.0,
-        )
-        self.assertIsNotNone(inserted)
-
-        order = [placed.item_index for placed in inserted.placed]
-        self.assertIn(order, ([2, 0, 1], [0, 1, 2]))
-        pair_position = order.index(1)
-        self.assertGreater(pair_position, 0)
-        self.assertEqual(order[pair_position - 1], 0)
-        self.assertTrue(
-            inserted.placed[pair_position].common_line_before
-        )
-
-    def test_fast_best_fit_inserts_small_parts_before_tail_piece(self):
-        pieces = [
-            item("LONG", 5400, make_part(5400)),
-            item("SMALL-A", 250, make_part(250)),
-            item("SMALL-B", 250, make_part(250)),
-        ]
-
-        rods = optimize_items_dict(
-            pieces,
-            rod_length=6000.0,
-            gap_mm=2.0,
-            dead_zone_mm=400.0,
-            algorithm="best_fit",
-        )
-
-        self.assertEqual(len(rods), 1)
-        self.assertEqual(len(rods[0]["placements"]), 3)
-        self.assertGreater(rods[0]["used"], 5600.0)
-        self.assertLessEqual(rods[0]["used"], 6000.0)
-        self.assertTrue(rods[0]["usesTailFlip"])
-        self.assertTrue(
-            rods[0]["placements"][-1]["requires_tail_flip"]
         )
         self.assertEqual(
-            rods[0]["placements"][-1]["source_id"],
-            "LONG",
+            [placement["instance_key"] for placement in rod["placements"]],
+            [piece["instanceKey"] for piece in pieces],
         )
+        self.assertEqual(len(rod["placements"]), len(pieces))
+        self.assertLessEqual(rod["used"], 6000.0)
 
-    def test_best_fit_handles_small_production_mix_in_two_rods(self):
-        # Regression for the 80x80x2 job reported at work:
-        # 2x1000, 4x300, 2x380, 1x820, 2x980 = 6740 mm nominal.
-        lengths = [
-            1000, 1000,
-            300, 300, 300, 300,
-            380, 380,
-            820,
-            980, 980,
-        ]
+    def test_locked_rod_rejects_unfittable_sequence(self):
         pieces = [
-            item(
-                f"P{index}",
-                length,
-                make_part(length),
+            item(f"LOCK-{index}", 4000, make_part(4000))
+            for index in range(2)
+        ]
+        with self.assertRaisesRegex(ValueError, "non entrano"):
+            optimizer_module.optimize_locked_sequence_dict(
+                pieces, rod_length=6000.0, gap_mm=2.0,
+                dead_zone_mm=400.0,
             )
-            for index, length in enumerate(lengths)
-        ]
 
-        rods = optimize_items_dict(
-            pieces,
-            rod_length=6000.0,
-            gap_mm=2.0,
-            dead_zone_mm=400.0,
-            algorithm="best_fit",
-        )
-
-        self.assertEqual(len(rods), 2)
-        self.assertEqual(
-            sum(len(rod["placements"]) for rod in rods),
-            len(lengths),
-        )
-        stats = optimizer_module.get_parallel_stats()
-        self.assertEqual(
-            stats["strategy"],
-            "time_bounded_best_fit",
-        )
-        self.assertEqual(
-            optimizer_module.FAST_BEST_FIT_MAX_INSERTION_POSITIONS,
-            4,
-        )
-        self.assertLessEqual(
-            optimizer_module.FAST_BEST_FIT_DONOR_ATTEMPTS,
-            48,
-        )
-
-    def test_best_fit_deadline_fallback_still_packs_existing_rods(self):
-        # Regression: exhausting the search budget used to create one new
-        # rod for every subsequent item without attempting any placement.
-        lengths = [1290] * 8 + [1170] * 4 + [1150] * 4 + [1070] * 6 + [1050] * 4 + [107] * 8 + [80] * 4
-        pieces = [
-            item(f"TIMEOUT-{index}", length, make_part(length))
-            for index, length in enumerate(lengths)
-        ]
-        normalized = optimizer_module._normalize_items(pieces, 6000.0)
-        order = sorted(
-            range(len(normalized)),
-            key=lambda index: -normalized[index].physical_length,
-        )
-        rods = optimizer_module._fast_best_fit_build(
-            normalized,
-            rod_length=6000.0,
-            dead_zone_mm=400.0,
-            gap_mm=2.0,
-            order=order,
-            deadline=0.0,
-        )
-        self.assertLess(len(rods), 15)
-        self.assertEqual(
-            sum(len(rod.placed) for rod in rods),
-            len(lengths),
-        )
-        for rod in rods:
-            self.assertLessEqual(rod.used_span, 6000.0)
+    def test_removed_secondary_mode_uses_original_optimizer(self):
+        pieces = [item("ONLY", 500, make_part(500))]
+        with patch.object(optimizer_module, "_fast_best_fit_optimize") as old:
+            rods = optimize_items_dict(pieces, algorithm="best_fit")
+            old.assert_not_called()
+        self.assertEqual(len(rods), 1)
 
     def test_rotation_metadata_lists_tried_and_selected_poses(self):
         square = make_part(1000)
@@ -473,7 +352,7 @@ class GeometryOptimizerTests(unittest.TestCase):
             rod_length=6000.0,
             gap_mm=2.0,
             dead_zone_mm=400.0,
-            algorithm="best_fit",
+            algorithm="current",
         )
 
         placement = rods[0]["placements"][0]
