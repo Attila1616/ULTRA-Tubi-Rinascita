@@ -335,6 +335,52 @@ class GeometryOptimizerTests(unittest.TestCase):
             "LONG",
         )
 
+    def test_best_fit_handles_small_production_mix_in_two_rods(self):
+        # Regression for the 80x80x2 job reported at work:
+        # 2x1000, 4x300, 2x380, 1x820, 2x980 = 6740 mm nominal.
+        lengths = [
+            1000, 1000,
+            300, 300, 300, 300,
+            380, 380,
+            820,
+            980, 980,
+        ]
+        pieces = [
+            item(
+                f"P{index}",
+                length,
+                make_part(length),
+            )
+            for index, length in enumerate(lengths)
+        ]
+
+        rods = optimize_items_dict(
+            pieces,
+            rod_length=6000.0,
+            gap_mm=2.0,
+            dead_zone_mm=400.0,
+            algorithm="best_fit",
+        )
+
+        self.assertEqual(len(rods), 2)
+        self.assertEqual(
+            sum(len(rod["placements"]) for rod in rods),
+            len(lengths),
+        )
+        stats = optimizer_module.get_parallel_stats()
+        self.assertEqual(
+            stats["strategy"],
+            "time_bounded_best_fit",
+        )
+        self.assertEqual(
+            optimizer_module.FAST_BEST_FIT_MAX_INSERTION_POSITIONS,
+            4,
+        )
+        self.assertLessEqual(
+            optimizer_module.FAST_BEST_FIT_DONOR_ATTEMPTS,
+            48,
+        )
+
     def test_rotation_metadata_lists_tried_and_selected_poses(self):
         square = make_part(1000)
         rods = optimize_items_dict(
