@@ -1802,6 +1802,46 @@ def _build_nested_marking_text(segment, config):
     return f"{prod}  | L{length}"
 
 
+def nest_locked_rod_sequence(payload):
+    """Fit the existing locked-rod order; do not move pieces across rods."""
+    try:
+        raw = (payload or {}).get("segments") or []
+        if not raw:
+            return {"status": "error", "message": "Verga bloccata vuota."}
+        group = {
+            "tubeType": str((payload or {}).get("tubeType") or ""),
+            "sources": (payload or {}).get("sources") or {},
+            "pieces": raw,
+        }
+        pieces, _ = _hydrate_group_sources(group)
+        if any(not isinstance(piece.get("tubePart"), dict) for piece in pieces):
+            return {
+                "status": "error",
+                "message": "Geometria ZZX mancante per uno o più pezzi. Impossibile validare il nesting.",
+            }
+        for piece in pieces:
+            file_name = str(piece.get("fileName") or piece.get("filePath") or "ZZX")
+            problems = validate_tube_part_data(file_name, piece["tubePart"])
+            if problems:
+                return {
+                    "status": "error",
+                    "message": f"Geometria non valida per {file_name}: {problems}",
+                }
+        config = load_config(silent=True) or {}
+        gap = max(0.0, float(config.get("nesting_gap_mm", 2.0)))
+        rod = tubenest_engine.optimize_locked_sequence_dict(
+            pieces,
+            rod_length=float((payload or {}).get("rodLength") or 6000.0),
+            gap_mm=gap,
+            dead_zone_mm=400.0,
+        )
+        return {"status": "success", "rod": rod}
+    except Exception as exc:
+        print("[TubeNest LOCKED] Failed:", str(exc), flush=True)
+        traceback.print_exc()
+        return {"status": "error", "message": str(exc)}
+
+
 def export_locked_rod_zzx(payload):
     """Export one locked UI rod as a structurally validated multi-segment ZZX."""
     try:
