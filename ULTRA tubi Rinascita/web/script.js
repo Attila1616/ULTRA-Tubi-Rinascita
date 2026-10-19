@@ -8,7 +8,7 @@ let nestingRenderSequence = 0;
 let nestingResultCache = new Map();
 let nestingLoadingGroups = new Set();
 let nestingErrorByTube = new Map();
-let nestingSettingsKey = 'gap:2';
+let nestingSettingsKey = 'gap:2|algorithm:current';
 let uiPreferences = {
     sorting: {},
     columnWidths: {},
@@ -414,6 +414,10 @@ async function openSettingsModal() {
         document.getElementById('settings-order-medium-quantity').value = parseNonNegativeInteger(config.order_priority_medium_quantity, 3);
         document.getElementById('settings-order-high-quantity').value = parseNonNegativeInteger(config.order_priority_high_quantity, 5);
         document.getElementById('settings-nesting-gap-mm').value = Number.isFinite(Number(config.nesting_gap_mm)) ? Number(config.nesting_gap_mm) : 2;
+        const nestingAlgorithm = ['current', 'global_compaction'].includes(String(config.nesting_algorithm || '').toLowerCase())
+            ? String(config.nesting_algorithm).toLowerCase()
+            : 'current';
+        document.getElementById('settings-nesting-algorithm').value = nestingAlgorithm;
         document.getElementById('settings-nesting-debug-enabled').checked = config.nesting_debug_enabled !== false;
         document.getElementById('settings-nested-text-marking-enabled').checked = !!config.nested_text_marking_enabled;
         document.getElementById('settings-round-text-head-motion-enabled').checked = config.nested_round_text_head_motion_enabled !== false;
@@ -551,6 +555,7 @@ async function saveSettings() {
             order_priority_high_quantity: parseNonNegativeInteger(document.getElementById('settings-order-high-quantity').value, 5),
             order_include_low_priority: document.getElementById('settings-order-include-low-priority').checked,
             nesting_gap_mm: Math.max(0, Number(document.getElementById('settings-nesting-gap-mm').value) || 0),
+            nesting_algorithm: document.getElementById('settings-nesting-algorithm').value,
             nesting_debug_enabled: document.getElementById('settings-nesting-debug-enabled').checked,
             nested_text_marking_enabled: document.getElementById('settings-nested-text-marking-enabled').checked,
             nested_round_text_head_motion_enabled: document.getElementById('settings-round-text-head-motion-enabled').checked,
@@ -581,7 +586,7 @@ async function saveSettings() {
         }
         closeSettingsModal();
         applyLockColors(response.config?.lock_unlocked_color, response.config?.lock_locked_color);
-        nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}`;
+        nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}|algorithm:${String(response.config?.nesting_algorithm || payload.nesting_algorithm || 'current')}`;
         nestingDebugEnabled = response.config?.nesting_debug_enabled !== false;
         invalidateNestingCache();
         document.getElementById('current-folder-path').textContent = response.config?.da_fare_path || 'Non impostato';
@@ -724,7 +729,7 @@ async function initialize() {
         const configResponse = await window.pywebview.api.get_config_settings();
         if (configResponse?.status === 'success') {
             applyLockColors(configResponse.config?.lock_unlocked_color, configResponse.config?.lock_locked_color);
-            nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}`;
+            nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}|algorithm:${String(configResponse.config?.nesting_algorithm || 'current')}`;
             nestingDebugEnabled = configResponse.config?.nesting_debug_enabled !== false;
         }
         
