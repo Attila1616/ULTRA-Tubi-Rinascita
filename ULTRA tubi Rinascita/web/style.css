@@ -1459,3 +1459,15 @@ body.modal-scroll-locked {
     width: 100%;
     box-sizing: border-box;
 }
+
+/* Locked rod requires a fixed-order pose calculation before ZZX export. */
+.locked-rod-renest-button {
+    background: #f5cc40 !important;
+    color: #242424 !important;
+    border: 1px solid #b58b08 !important;
+    font-size: 18px;
+    font-weight: bold;
+}
+.locked-rod-renest-button:hover:not(:disabled) {
+    background: #ffd955 !important;
+}
