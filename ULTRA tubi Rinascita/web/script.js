@@ -52,6 +52,7 @@ let settingsIgnoreInput, settingsIgnoreList;
 let settingsIgnoredFolders = [];
 let lockColors = { unlocked: '#dc3545', locked: '#198754' };
 let nestingDebugEnabled = true;
+let nestingRotationVisualizationEnabled = false;
 let inventoryExportModal, inventoryExportIncludeMissing;
 let orderPriorityModal, orderPrioritySearch, orderPrioritySelectAll, orderPriorityRowsContainer;
 let orderPriorityStatus, orderPriorityRows = [];
@@ -414,10 +415,11 @@ async function openSettingsModal() {
         document.getElementById('settings-order-medium-quantity').value = parseNonNegativeInteger(config.order_priority_medium_quantity, 3);
         document.getElementById('settings-order-high-quantity').value = parseNonNegativeInteger(config.order_priority_high_quantity, 5);
         document.getElementById('settings-nesting-gap-mm').value = Number.isFinite(Number(config.nesting_gap_mm)) ? Number(config.nesting_gap_mm) : 2;
-        const nestingAlgorithm = ['current', 'global_compaction'].includes(String(config.nesting_algorithm || '').toLowerCase())
-            ? String(config.nesting_algorithm).toLowerCase()
-            : 'current';
+        let nestingAlgorithm = String(config.nesting_algorithm || 'current').toLowerCase();
+        if (nestingAlgorithm === 'global_compaction') nestingAlgorithm = 'best_fit';
+        if (!['current', 'best_fit'].includes(nestingAlgorithm)) nestingAlgorithm = 'current';
         document.getElementById('settings-nesting-algorithm').value = nestingAlgorithm;
+        document.getElementById('settings-nesting-rotation-visualization-enabled').checked = !!config.nesting_rotation_visualization_enabled;
         document.getElementById('settings-nesting-debug-enabled').checked = config.nesting_debug_enabled !== false;
         document.getElementById('settings-nested-text-marking-enabled').checked = !!config.nested_text_marking_enabled;
         document.getElementById('settings-round-text-head-motion-enabled').checked = config.nested_round_text_head_motion_enabled !== false;
@@ -556,6 +558,7 @@ async function saveSettings() {
             order_include_low_priority: document.getElementById('settings-order-include-low-priority').checked,
             nesting_gap_mm: Math.max(0, Number(document.getElementById('settings-nesting-gap-mm').value) || 0),
             nesting_algorithm: document.getElementById('settings-nesting-algorithm').value,
+            nesting_rotation_visualization_enabled: document.getElementById('settings-nesting-rotation-visualization-enabled').checked,
             nesting_debug_enabled: document.getElementById('settings-nesting-debug-enabled').checked,
             nested_text_marking_enabled: document.getElementById('settings-nested-text-marking-enabled').checked,
             nested_round_text_head_motion_enabled: document.getElementById('settings-round-text-head-motion-enabled').checked,
@@ -587,6 +590,7 @@ async function saveSettings() {
         closeSettingsModal();
         applyLockColors(response.config?.lock_unlocked_color, response.config?.lock_locked_color);
         nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}|algorithm:${String(response.config?.nesting_algorithm || payload.nesting_algorithm || 'current')}`;
+        nestingRotationVisualizationEnabled = !!response.config?.nesting_rotation_visualization_enabled;
         nestingDebugEnabled = response.config?.nesting_debug_enabled !== false;
         invalidateNestingCache();
         document.getElementById('current-folder-path').textContent = response.config?.da_fare_path || 'Non impostato';
@@ -730,6 +734,7 @@ async function initialize() {
         if (configResponse?.status === 'success') {
             applyLockColors(configResponse.config?.lock_unlocked_color, configResponse.config?.lock_locked_color);
             nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}|algorithm:${String(configResponse.config?.nesting_algorithm || 'current')}`;
+            nestingRotationVisualizationEnabled = !!configResponse.config?.nesting_rotation_visualization_enabled;
             nestingDebugEnabled = configResponse.config?.nesting_debug_enabled !== false;
         }
         
@@ -2484,6 +2489,32 @@ function segmentLayoutMm(segments) {
     });
 }
 
+function formatRotationAttemptSummary(segment) {
+    const placement = segment?.nestPlacement;
+    if (!placement) return '';
+
+    const selected = Number(placement.axial_rotation_degrees || 0);
+    const reversed = !!placement.reversed_end_for_end;
+    const candidates = Array.isArray(placement.rotation_candidates_degrees)
+        ? placement.rotation_candidates_degrees
+        : [];
+    const normalAllowed = placement.candidate_normal_orientation !== false;
+    const reversedAllowed = !!placement.candidate_reversed_orientation;
+
+    const tried = candidates.length
+        ? candidates.map(value => `${Number(value).toFixed(Number(value) % 1 ? 1 : 0)}°`).join('/')
+        : '0°';
+    const orientationText = reversedAllowed && normalAllowed
+        ? ' + normale/ribaltato'
+        : (reversedAllowed ? ' + ribaltato' : '');
+    const selectedText = `R${selected.toFixed(selected % 1 ? 1 : 0)}°${reversed ? ' REV' : ''}`;
+
+    return {
+        tried: `${tried}${orientationText}`,
+        selected: selectedText,
+    };
+}
+
 function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked, isDone, isEmptyPlaceholder, nestRod = null }) {
     const totalUsed = getRodUsedMm(segments, nestRod);
     const remainingToCut = (segments || []).reduce((sum, segment) => {
@@ -2510,7 +2541,22 @@ function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked,
         });
     }
 
-    html += `</div></div><div class="rod-actions">`;
+    html += '</div>';
+    if (nestingRotationVisualizationEnabled && segments && segments.length > 0) {
+        const rotationItems = segments
+            .map(segment => {
+                const info = formatRotationAttemptSummary(segment);
+                if (!info) return '';
+                const labelText = String(segment.length ?? '?');
+                return `<span class="rod-rotation-trace-item"><strong>${escapeHtml(labelText)}:</strong> prova ${escapeHtml(info.tried)} → ${escapeHtml(info.selected)}</span>`;
+            })
+            .filter(Boolean)
+            .join('');
+        if (rotationItems) {
+            html += `<div class="rod-rotation-trace">${rotationItems}</div>`;
+        }
+    }
+    html += `</div><div class="rod-actions">`;
     if (kind === 'locked') {
         html += `<button class="action-button" data-action="export-locked-rod-zzx" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Esporta questa verga come ZZX annidato"${segments.length === 0 ? ' disabled' : ''}>ZZX</button>`;
         html += `<button class="action-button icon-button rod-lock-button rod-lock-locked" data-action="unlock-locked-rod" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Sblocca verga">&#128274;</button>`;
@@ -2563,6 +2609,13 @@ function renderRodSegmentHTML(segment, kind, rodId, tubeType, startMm, endMm) {
     }
 
     html += `<span class="rod-segment-length">${escapeHtml(segment.length)}</span>`;
+
+    if (nestingRotationVisualizationEnabled && placement) {
+        const rotationInfo = formatRotationAttemptSummary(segment);
+        if (rotationInfo) {
+            html += `<span class="rod-rotation-selected" title="Rotazioni provate: ${escapeAttr(rotationInfo.tried)}">${escapeHtml(rotationInfo.selected)}</span>`;
+        }
+    }
 
     if (preview && widthPercent > 4) {
         const leftLabel = preview.leftAngle > 0.05 ? `${preview.leftAngle.toFixed(0)}°` : '';
