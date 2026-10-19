@@ -39,7 +39,14 @@ EXACT_REQUIRE_ALL_MAX_ESTIMATED_BRANCHES = 100_000
 MERGE_PAIR_ATTEMPT_LIMIT = 160
 PARALLEL_MIN_ITEMS = 8
 PARALLEL_MIN_UNIQUE_TYPES = 6
+# Windows spawn duplicates the item geometry and fit cache in every worker.
+# Keep very large/diverse jobs in one shared process instead of multiplying
+# their RAM footprint across the whole CPU.
+PARALLEL_MAX_ITEMS = 96
+PARALLEL_MAX_UNIQUE_TYPES = 48
 CONTOUR_MAX_CPU_WORKERS = 12
+CONTOUR_MEMORY_SAFE_CPU_WORKERS = 6
+PAIRWISE_PRECOMPUTE_MAX_TRANSITIONS = 100_000
 CONTOUR_LARGE_JOB_MIN_ITEMS = 24
 LARGE_SEARCH_MIN_ITEMS = 32
 LARGE_SEARCH_MIN_UNIQUE_TYPES = 8
@@ -60,11 +67,11 @@ MAX_CPU_WORKERS = 24
 # individual pieces into other rods. This is aimed at cases where a different
 # order lets the final legal piece extend into the chuck/dead-zone and saves an
 # otherwise wasted stock rod.
-GLOBAL_COMPACTION_BEAM_WIDTH = 480
-GLOBAL_COMPACTION_MAX_CANDIDATE_TYPES = 120
-GLOBAL_COMPACTION_MERGE_ATTEMPT_LIMIT = 600
-GLOBAL_REDISTRIBUTION_DONOR_MAX_PIECES = 12
-GLOBAL_REDISTRIBUTION_ATTEMPT_LIMIT = 220
+GLOBAL_COMPACTION_BEAM_WIDTH = 220
+GLOBAL_COMPACTION_MAX_CANDIDATE_TYPES = 48
+GLOBAL_COMPACTION_MERGE_ATTEMPT_LIMIT = 120
+GLOBAL_REDISTRIBUTION_DONOR_MAX_PIECES = 10
+GLOBAL_REDISTRIBUTION_ATTEMPT_LIMIT = 120
 
 _PAIRWISE_FIT_CACHE = {}
 _PAIRWISE_FIT_ERROR_TAG = "__FIT_ERROR__"
@@ -585,6 +592,53 @@ def _terminal_score(state, require_all):
     )
 
 
+def _bounded_state_map_add(
+    best_by_key,
+    state,
+    beam_width,
+    *,
+    exact_mode=False,
+    buffer_factor=3,
+):
+    """Keep one best state per dedupe key without retaining a whole layer.
+
+    Beam search only needs its best bounded frontier. The old implementation
+    first materialized every candidate in a layer and pruned afterwards; a
+    wide square-tube job could therefore create hundreds of thousands of
+    RodSearchState objects at once. Periodic prefix pruning keeps RAM bounded.
+    """
+    key = _state_dedupe_key(state)
+    previous = best_by_key.get(key)
+    if (
+        previous is None
+        or _partial_score(state) < _partial_score(previous)
+    ):
+        best_by_key[key] = state
+
+    if exact_mode:
+        return
+
+    beam_width = max(1, int(beam_width))
+    hard_limit = max(
+        beam_width * max(2, int(buffer_factor)),
+        beam_width + 32,
+    )
+    if len(best_by_key) <= hard_limit:
+        return
+
+    keep = max(
+        beam_width * 2,
+        beam_width + 16,
+    )
+    ranked = sorted(
+        best_by_key.values(),
+        key=_partial_score,
+    )[:keep]
+    best_by_key.clear()
+    for candidate in ranked:
+        best_by_key[_state_dedupe_key(candidate)] = candidate
+
+
 def _append_candidate(
     state,
     item,
@@ -715,7 +769,7 @@ def _search_single_rod(
     )
 
     for _depth in range(len(items) + 1):
-        next_states = []
+        best_by_key = {}
 
         for state in beam:
             if state.used_mask:
@@ -760,20 +814,25 @@ def _search_single_rod(
                         gap_mm=gap_mm,
                     )
                     if candidate is not None:
-                        next_states.append(candidate)
+                        _bounded_state_map_add(
+                            best_by_key,
+                            candidate,
+                            beam_width,
+                            exact_mode=exact_mode,
+                        )
 
-        if not next_states:
+        if not best_by_key:
             break
 
-        best_by_key = {}
-        for state in next_states:
-            key = _state_dedupe_key(state)
-            previous = best_by_key.get(key)
-            if previous is None or _partial_score(state) < _partial_score(previous):
-                best_by_key[key] = state
-
-        ordered_states = sorted(best_by_key.values(), key=_partial_score)
-        beam = ordered_states if exact_mode else ordered_states[:beam_width]
+        ordered_states = sorted(
+            best_by_key.values(),
+            key=_partial_score,
+        )
+        beam = (
+            ordered_states
+            if exact_mode
+            else ordered_states[:beam_width]
+        )
 
     terminals.extend(beam)
 
@@ -877,11 +936,39 @@ def _representative_items_by_type(items):
 
 
 def _precompute_pairwise_catalog(items, gap_mm):
-    """Build every legal type/pose transition once in the parent process."""
+    """Build a bounded legal type/pose catalog in the parent process."""
     representatives = _representative_items_by_type(items)
+    started = time.perf_counter()
+
+    next_pose_total = sum(
+        _pose_branch_estimate(item, first=False)
+        for item in representatives
+    )
+    estimated_transitions = sum(
+        _pose_branch_estimate(item, first=True)
+        * next_pose_total
+        for item in representatives
+    )
+    _PARALLEL_STATS["precompute_estimated_transitions"] = int(
+        estimated_transitions
+    )
+
+    if estimated_transitions > PAIRWISE_PRECOMPUTE_MAX_TRANSITIONS:
+        _PARALLEL_STATS["precompute_seconds"] = (
+            time.perf_counter() - started
+        )
+        _PARALLEL_STATS["precomputed_transitions"] = 0
+        _PARALLEL_STATS["precomputed_failures"] = 0
+        _PARALLEL_STATS["precompute_skipped_memory_guard"] = True
+        print(
+            "[TubeNest] pairwise precompute skipped: "
+            f"estimated={estimated_transitions}, "
+            f"limit={PAIRWISE_PRECOMPUTE_MAX_TRANSITIONS}"
+        )
+        return {}
+
     catalog_keys = set()
     failures = 0
-    started = time.perf_counter()
 
     for previous_item in representatives:
         for previous_pose in _first_pose_candidates(previous_item):
@@ -955,6 +1042,8 @@ def _should_use_process_pool(items):
         workers > 1
         and item_count >= PARALLEL_MIN_ITEMS
         and unique_types >= PARALLEL_MIN_UNIQUE_TYPES
+        and item_count <= PARALLEL_MAX_ITEMS
+        and unique_types <= PARALLEL_MAX_UNIQUE_TYPES
     )
 
 
@@ -1024,15 +1113,42 @@ def _expand_state_worker(task):
 
 
 def _expand_state_chunk_worker(task):
-    states, allowed_mask, max_candidate_types = task
-    result = []
-    for state in states:
-        result.extend(
-            _expand_state_worker(
-                (state, allowed_mask, max_candidate_types)
+    (
+        states,
+        allowed_mask,
+        max_candidate_types,
+        return_limit,
+    ) = task
+
+    # Exact searches are already capped by the branch estimator and must not
+    # prune. Normal beam searches keep only a bounded local frontier before
+    # sending results through Windows multiprocessing pipes.
+    if return_limit is None:
+        result = []
+        for state in states:
+            result.extend(
+                _expand_state_worker(
+                    (state, allowed_mask, max_candidate_types)
+                )
             )
-        )
-    return result
+        return result
+
+    best_by_key = {}
+    for state in states:
+        for candidate in _expand_state_worker(
+            (state, allowed_mask, max_candidate_types)
+        ):
+            _bounded_state_map_add(
+                best_by_key,
+                candidate,
+                int(return_limit),
+                exact_mode=False,
+            )
+
+    return sorted(
+        best_by_key.values(),
+        key=_partial_score,
+    )[:int(return_limit)]
 
 
 def _search_mask_worker(task):
@@ -1246,8 +1362,21 @@ def _search_single_rod_parallel(
             ]
             _PARALLEL_STATS["tasks"] += len(chunks)
 
+            worker_return_limit = (
+                None
+                if exact_mode
+                else max(
+                    int(beam_width) * 2,
+                    int(beam_width) + 32,
+                )
+            )
             task_iter = (
-                (chunk, allowed_mask, max_candidate_types)
+                (
+                    chunk,
+                    allowed_mask,
+                    max_candidate_types,
+                    worker_return_limit,
+                )
                 for chunk in chunks
             )
             batches = local_executor.map(
@@ -1908,6 +2037,21 @@ def _global_compact_rods(
     started = time.perf_counter()
     _PARALLEL_STATS["global_rods_before"] = len(rods)
 
+    # First attack the exact failure mode this setting exists for: empty a
+    # short leftover rod by moving its small pieces into scrap on earlier rods.
+    stage_started = time.perf_counter()
+    rods = _redistribute_short_rods(
+        items,
+        rods,
+        rod_length=rod_length,
+        dead_zone_mm=dead_zone_mm,
+        gap_mm=gap_mm,
+    )
+    redistribution_seconds = time.perf_counter() - stage_started
+
+    # Then spend a bounded amount of extra work on whole-pair reordering. This
+    # is intentionally much smaller than the first implementation, which could
+    # explode both runtime and RAM on large production groups.
     stage_started = time.perf_counter()
     rods = _deep_merge_all_rod_pairs(
         items,
@@ -1920,6 +2064,9 @@ def _global_compact_rods(
         time.perf_counter() - stage_started
     )
 
+    # Pair merges can expose new receiver capacity, so retry redistribution
+    # once. Rebuilt receivers are already fully optimized; a blanket final
+    # re-refinement of every rod is unnecessary.
     stage_started = time.perf_counter()
     rods = _redistribute_short_rods(
         items,
@@ -1928,22 +2075,11 @@ def _global_compact_rods(
         dead_zone_mm=dead_zone_mm,
         gap_mm=gap_mm,
     )
-    _PARALLEL_STATS["global_redistribution_seconds"] = (
+    redistribution_seconds += (
         time.perf_counter() - stage_started
     )
-
-    # One final whole-membership refinement can reduce leftover on the rods
-    # whose membership changed during redistribution.
-    rods = _refine_rods(
-        items,
-        rods,
-        rod_length=rod_length,
-        dead_zone_mm=dead_zone_mm,
-        gap_mm=gap_mm,
-        executor=None,
-        beam_width=GLOBAL_COMPACTION_BEAM_WIDTH,
-        max_candidate_types=GLOBAL_COMPACTION_MAX_CANDIDATE_TYPES,
-        utilization_threshold=None,
+    _PARALLEL_STATS["global_redistribution_seconds"] = (
+        redistribution_seconds
     )
 
     _PARALLEL_STATS["global_rods_after"] = len(rods)
@@ -2590,11 +2726,21 @@ def _optimize_normalized(
         )
 
     use_pool = _should_use_process_pool(normalized)
-    worker_cap = (
-        min(configured_workers, CONTOUR_MAX_CPU_WORKERS)
-        if contour_heavy
-        else configured_workers
-    )
+    if contour_heavy:
+        contour_worker_limit = (
+            CONTOUR_MEMORY_SAFE_CPU_WORKERS
+            if (
+                len(normalized) >= 48
+                or unique_types >= 24
+            )
+            else CONTOUR_MAX_CPU_WORKERS
+        )
+        worker_cap = min(
+            configured_workers,
+            contour_worker_limit,
+        )
+    else:
+        worker_cap = configured_workers
     pool_workers = min(
         worker_cap,
         max(1, len(normalized)),
