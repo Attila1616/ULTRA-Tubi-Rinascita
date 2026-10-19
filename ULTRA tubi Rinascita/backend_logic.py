@@ -315,7 +315,14 @@ def _hydrate_group_sources(group):
     return pieces, sources
 
 
-def _nesting_group_signature(tube_type, pieces, rod_length, gap_mm, dead_zone_mm=400.0):
+def _nesting_group_signature(
+    tube_type,
+    pieces,
+    rod_length,
+    gap_mm,
+    dead_zone_mm=400.0,
+    algorithm="current",
+):
     compact = []
     for piece in pieces or []:
         part = piece.get("tubePart") if isinstance(piece, dict) else None
@@ -343,6 +350,7 @@ def _nesting_group_signature(tube_type, pieces, rod_length, gap_mm, dead_zone_mm
         "rodLength": float(rod_length),
         "gapMm": float(gap_mm),
         "deadZoneMm": float(dead_zone_mm),
+        "algorithm": str(algorithm or "current"),
         "pieces": compact,
     }
     raw = json.dumps(
@@ -1532,6 +1540,12 @@ def nest_piece_groups(groups, rod_length=6000):
         except (TypeError, ValueError):
             gap_mm = 2.0
 
+        nesting_algorithm = str(
+            config.get("nesting_algorithm") or "current"
+        ).strip().lower()
+        if nesting_algorithm not in {"current", "global_compaction"}:
+            nesting_algorithm = "current"
+
         _load_persistent_nesting_cache()
 
         result_groups = []
@@ -1584,6 +1598,7 @@ def nest_piece_groups(groups, rod_length=6000):
                 rod_length=rod_length,
                 gap_mm=gap_mm,
                 dead_zone_mm=400.0,
+                algorithm=nesting_algorithm,
             )
             cached = signature in _NESTING_GROUP_CACHE
             optimizer_seconds = 0.0
@@ -1597,6 +1612,7 @@ def nest_piece_groups(groups, rod_length=6000):
                     rod_length=rod_length,
                     gap_mm=gap_mm,
                     dead_zone_mm=400.0,
+                    algorithm=nesting_algorithm,
                 )
                 optimizer_seconds = time.perf_counter() - optimizer_started
                 parallel_stats = tubenest_engine.get_parallel_stats()
@@ -1621,13 +1637,19 @@ def nest_piece_groups(groups, rod_length=6000):
                 f"sources={len(unique_sources)}, validation={validation_seconds:.3f}s "
                 f"(memory={validation_memory_checks}, disk={validation_disk_reads}), "
                 f"optimizer={optimizer_seconds:.3f}s, total={total_seconds:.3f}s, "
-                f"cache={'HIT' if cached else 'MISS'}, parallel={parallel_stats}"
+                f"cache={'HIT' if cached else 'MISS'}, "
+                f"algorithm={nesting_algorithm}, parallel={parallel_stats}"
             )
 
             result_groups.append({
                 "tubeType": tube_type,
                 "rods": rods,
-                "optimizer": "geometry",
+                "optimizer": (
+                    "geometry-global-compaction"
+                    if nesting_algorithm == "global_compaction"
+                    else "geometry-current"
+                ),
+                "nestingAlgorithm": nesting_algorithm,
                 "gapMm": gap_mm,
                 "cacheHit": cached,
                 "signature": signature,
