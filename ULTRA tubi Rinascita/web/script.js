@@ -15,7 +15,8 @@ let uiPreferences = {
     databaseCollapsedRipiani: {},
     databaseCollapsedLocations: {},
     showUnlockedRodsDefault: true,
-    showUnlockedRodsByTube: {}
+    showUnlockedRodsByTube: {},
+    tubeGroupSort: 'name-asc'
 };
 let mainContainer, historyContainer, mainViewBtn, historyViewBtn;
 let tubeDatabaseContainer, databaseViewBtn, tubeDatabaseList, tubeDatabaseStatus;
@@ -283,6 +284,12 @@ if (searchModal) searchModal.addEventListener('mousedown', (e) => { if (e.target
 
     // Delegated listeners for dynamic content
     mainContainer.addEventListener('click', handleContainerClick);
+    mainContainer.addEventListener('change', event => {
+        if (event.target?.id !== 'tube-group-sort') return;
+        uiPreferences.tubeGroupSort = event.target.value;
+        saveUiState();
+        renderUI();
+    });
     mainContainer.addEventListener('dblclick', handleContainerDblClick);
     mainContainer.addEventListener('dragstart', handleSegmentDragStart);
     mainContainer.addEventListener('dragend', handleSegmentDragEnd);
@@ -712,6 +719,7 @@ async function initialize() {
         daFareOverrides = savedState.daFareOverrides || {};
         uiPreferences = savedState.uiPreferences || { sorting: {}, columnWidths: {} };
         uiPreferences.sorting = uiPreferences.sorting || {};
+        uiPreferences.tubeGroupSort = uiPreferences.tubeGroupSort || 'name-asc';
         uiPreferences.columnWidths = uiPreferences.columnWidths || {};
         uiPreferences.databaseCollapsedRipiani = uiPreferences.databaseCollapsedRipiani || {};
         uiPreferences.databaseCollapsedLocations = uiPreferences.databaseCollapsedLocations || {};
@@ -2087,7 +2095,7 @@ async function renderUI() {
     const nextCurrentPieceByLogicalKey = new Map();
     const groupsToStart = [];
 
-    (allTubeData || []).sort((a, b) => a.tubeType.localeCompare(b.tubeType));
+    const sortedTubeGroups = sortTubeGroups(allTubeData || []);
 
     (allTubeData || []).forEach(group => {
         (group.pieces || []).forEach(piece => {
@@ -2114,7 +2122,7 @@ async function renderUI() {
 
     mainContainer.insertAdjacentHTML('beforeend', renderNestingGlobalControls());
 
-    (allTubeData || []).forEach(group => {
+    sortedTubeGroups.forEach(group => {
         const isExpanded = !!expandedState[group.tubeType];
         const groupDiv = document.createElement('div');
         groupDiv.className = 'tube-group';
@@ -3128,12 +3136,65 @@ async function handleResizeMouseUp() {
 
 
 // --- Locked Rod State & Dragging ---
+function tubeGroupSizeKey(name) {
+    // Match rectangular/square WxH and round ØD profiles numerically.
+    const text = String(name || '').replace(/,/g, '.');
+    const square = text.match(/(\\d+(?:\\.\\d+)?)\\s*[x×]\\s*(\\d+(?:\\.\\d+)?)/i);
+    const round = text.match(/[Ø⌀]\\s*(\\d+(?:\\.\\d+)?)/i);
+    if (square) {
+        const width = Number(square[1]), height = Number(square[2]);
+        return [width * height, Math.max(width, height), Math.min(width, height)];
+    }
+    if (round) {
+        const diameter = Number(round[1]);
+        return [Math.PI * diameter * diameter / 4, diameter, diameter];
+    }
+    return [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
+}
+
+function sortTubeGroups(groups) {
+    const mode = uiPreferences.tubeGroupSort || 'name-asc';
+    const quantity = group => (group.pieces || []).reduce((total, piece) => {
+        const count = daFareOverrides[piece.filePath] !== undefined
+            ? daFareOverrides[piece.filePath] : piece.quantityNeeded;
+        return total + Math.max(0, Number.parseInt(count, 10) || 0);
+    }, 0);
+    const length = group => (group.pieces || []).reduce((total, piece) => {
+        const count = daFareOverrides[piece.filePath] !== undefined
+            ? daFareOverrides[piece.filePath] : piece.quantityNeeded;
+        return total + Math.max(0, Number.parseInt(count, 10) || 0) * (Number(piece.length) || 0);
+    }, 0);
+    const cache = new Map(groups.map(group => [group, {
+        pieces: quantity(group),
+        length: length(group),
+        locked: (lockedRods[group.tubeType] || []).length,
+        size: tubeGroupSizeKey(group.tubeType),
+    }]));
+    const byName = (a, b) => String(a.tubeType || '').localeCompare(String(b.tubeType || ''), 'it', {numeric:true});
+    return [...groups].sort((a, b) => {
+        const x = cache.get(a), y = cache.get(b);
+        let result = 0;
+        if (mode.startsWith('size-')) {
+            for (let i = 0; i < 3 && !result; i++) result = x.size[i] - y.size[i];
+        } else if (mode.startsWith('pieces-')) result = x.pieces - y.pieces;
+        else if (mode.startsWith('length-')) result = x.length - y.length;
+        else if (mode === 'locked-desc') result = y.locked - x.locked;
+        else if (mode === 'name-desc') result = -byName(a, b);
+        if (mode.endsWith('-desc') && mode !== 'name-desc' && mode !== 'locked-desc') result = -result;
+        return result || byName(a, b);
+    });
+}
+
 function renderNestingGlobalControls() {
     const allVisible = uiPreferences.showUnlockedRodsDefault !== false;
     return `<div class="nesting-global-controls">
         <button class="action-button" data-action="toggle-all-unlocked-rods">${allVisible ? 'Nascondi tutte le verghe libere' : 'Mostra tutte le verghe libere'}</button>
         <button class="action-button" data-action="lock-all-rods">Blocca tutte le verghe</button>
         <button class="action-button" data-action="unlock-all-rods">Sblocca tutte le verghe</button>
+        <label class="tube-group-sort-label" for="tube-group-sort">Ordina tubi:</label>
+        <select id="tube-group-sort" class="tube-group-sort-select" aria-label="Ordina gruppi tubi">
+            ${[['name-asc','Nome A-Z'],['name-desc','Nome Z-A'],['size-asc','Dimensione crescente'],['size-desc','Dimensione decrescente'],['pieces-desc','Pezzi da tagliare: più prima'],['pieces-asc','Pezzi da tagliare: meno prima'],['length-desc','Metri da tagliare: più prima'],['length-asc','Metri da tagliare: meno prima'],['locked-desc','Verghe bloccate: più prima']].map(([value,label]) => `<option value="${value}"${(uiPreferences.tubeGroupSort || 'name-asc') === value ? ' selected' : ''}>${label}</option>`).join('')}
+        </select>
     </div>`;
 }
 function sanitizeLockedRods(raw) {
