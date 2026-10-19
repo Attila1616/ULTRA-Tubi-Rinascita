@@ -2060,6 +2060,46 @@ def _best_insert_item_fixed_order(
     return None
 
 
+def _fast_append_after_deadline(items, rods, item_index, rod_length, dead_zone_mm, gap_mm):
+    """Cheap, geometry-validated fallback when expensive insertion search times out.
+
+    Never turn every remaining item into a new rod just because the search budget
+    expired. Reuse the last state on each existing rod, trying its legal poses
+    through the same machine-safety checks as the full optimizer.
+    """
+    item = items[item_index]
+    accessible_limit = float(rod_length) - float(dead_zone_mm)
+    best = None
+    for rod_index, rod in enumerate(rods):
+        if rod.tail_used:
+            continue
+        if float(rod.nominal_packed) + float(item.physical_length) > float(rod_length) + 1.0:
+            # This is only a preference filter: interlocking can make a
+            # nominally long sequence fit, so don't reject it here.
+            pass
+        last = rod.placed[-1]
+        for pose in _next_pose_candidates(
+            items[last.item_index], last.pose, item, rod.rectangle_family
+        ):
+            candidate = _append_candidate(
+                rod, item, pose, items,
+                rod_length=rod_length,
+                accessible_limit=accessible_limit,
+                dead_zone_mm=dead_zone_mm,
+                gap_mm=gap_mm,
+            )
+            if candidate is None:
+                continue
+            score = (
+                round(float(rod_length) - float(candidate.used_span), 6),
+                -int(candidate.common_lines),
+                rod_index,
+            )
+            if best is None or score < best[0]:
+                best = (score, rod_index, candidate)
+    return None if best is None else (best[1], best[2])
+
+
 def _fast_best_fit_build(
     items,
     rod_length,
@@ -2071,6 +2111,28 @@ def _fast_best_fit_build(
     rods = []
 
     for item_index in order:
+        # The deadline only limits expensive sequence re-optimization, not
+        # basic packing. Otherwise the old code created one rod for EVERY
+        # remaining piece when the budget expired.
+        if deadline is not None and time.perf_counter() >= float(deadline):
+            fallback = _fast_append_after_deadline(
+                items, rods, item_index, rod_length, dead_zone_mm, gap_mm
+            )
+            if fallback is not None:
+                rod_index, candidate = fallback
+                rods[rod_index] = candidate
+                continue
+            candidate = _optimize_fixed_item_sequence(
+                items, [item_index], rod_length, dead_zone_mm, gap_mm
+            )
+            if candidate is None:
+                raise ValueError(
+                    "No machine-safe nesting found for piece "
+                    + items[item_index].instance_key
+                )
+            rods.append(candidate)
+            continue
+
         choices = []
         for rod_index, rod in enumerate(rods):
             if (
@@ -2111,6 +2173,17 @@ def _fast_best_fit_build(
             )
             rods[rod_index] = candidate
             continue
+
+        # If the deadline expired halfway through this item, retry with
+        # cheap validated append moves before considering a new rod.
+        if deadline is not None and time.perf_counter() >= float(deadline):
+            fallback = _fast_append_after_deadline(
+                items, rods, item_index, rod_length, dead_zone_mm, gap_mm
+            )
+            if fallback is not None:
+                rod_index, candidate = fallback
+                rods[rod_index] = candidate
+                continue
 
         candidate = _optimize_fixed_item_sequence(
             items,
