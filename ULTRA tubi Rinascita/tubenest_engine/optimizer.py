@@ -2073,10 +2073,6 @@ def _fast_append_after_deadline(items, rods, item_index, rod_length, dead_zone_m
     for rod_index, rod in enumerate(rods):
         if rod.tail_used:
             continue
-        if float(rod.nominal_packed) + float(item.physical_length) > float(rod_length) + 1.0:
-            # This is only a preference filter: interlocking can make a
-            # nominally long sequence fit, so don't reject it here.
-            pass
         last = rod.placed[-1]
         for pose in _next_pose_candidates(
             items[last.item_index], last.pose, item, rod.rectangle_family
