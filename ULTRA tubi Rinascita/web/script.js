@@ -2163,7 +2163,10 @@ async function renderUI() {
 
             let statusHtml = '';
             if (isLoading) {
-                statusHtml = '<div class="nesting-group-status">Calcolo nesting geometrico in corso...</div>';
+                const algorithmLabel = nestingSettingsKey.includes('algorithm:best_fit')
+                    ? 'best-fit rapido'
+                    : 'geometrico';
+                statusHtml = `<div class="nesting-group-status">Calcolo nesting ${algorithmLabel} in corso...</div>`;
             } else if (error) {
                 statusHtml = `<div class="nesting-group-status nesting-group-error">Errore nesting: ${escapeHtml(error)}</div>`;
             } else if (cachedRods === null) {
