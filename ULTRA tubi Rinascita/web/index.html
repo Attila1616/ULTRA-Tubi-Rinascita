@@ -379,7 +379,7 @@
                         <option value="current">Attuale (ricerca geometrica)</option>
                         <option value="best_fit">Best-fit rapido (meno scarto)</option>
                     </select>
-                    <span>Il best-fit prova inserimenti in più punti della verga e può mettere pezzi piccoli prima dell'ultimo pezzo per sfruttare legalmente la zona rossa, senza la ricerca combinatoria lenta.</span>
+                    <span>Il best-fit preserva le catene di tagli compatibili (common-line, incastri e tagli inclinati), poi inserisce i pezzi piccoli negli spazi liberi senza spezzare inutilmente quelle catene. Può lasciare l'ultimo pezzo idoneo nella zona rossa.</span>
                 </div>
                 <label class="settings-checkbox-row">
                     <input id="settings-nesting-rotation-visualization-enabled" type="checkbox">
