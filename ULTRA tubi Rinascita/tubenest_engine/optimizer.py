@@ -72,6 +72,8 @@ FAST_BEST_FIT_CONSOLIDATION_PASSES = 1
 FAST_BEST_FIT_DONOR_MAX_PIECES = 10
 FAST_BEST_FIT_DONOR_ATTEMPTS = 48
 FAST_BEST_FIT_TIME_BUDGET_SECONDS = 12.0
+FAST_CHAIN_OVERLAP_EPS_MM = 0.05
+FAST_CHAIN_ANGLE_EPS_DEGREES = 1.0
 
 _PAIRWISE_FIT_CACHE = {}
 _PAIRWISE_FIT_ERROR_TAG = "__FIT_ERROR__"
@@ -1892,6 +1894,77 @@ def _insertion_positions(sequence):
     )
 
 
+def _boundary_chain_strength(
+    items,
+    previous_placed,
+    current_placed,
+):
+    """Return how strongly an existing adjacency should be preserved.
+
+    Fast best-fit is meant to move *groups* of compatible cuts together, not
+    scatter straight pieces between 45-degree/common-line chains merely
+    because a local insertion looks marginally tighter. The score is only used
+    to protect an existing boundary during insertion; if no other insertion is
+    legal, the algorithm may still split it as a fallback.
+    """
+    if bool(current_placed.common_line_before):
+        return 3
+
+    if (
+        float(current_placed.overlap_before_mm or 0.0)
+        > FAST_CHAIN_OVERLAP_EPS_MM
+    ):
+        return 2
+
+    previous_item = items[previous_placed.item_index]
+    current_item = items[current_placed.item_index]
+    if (
+        previous_item.geometry_available
+        and current_item.geometry_available
+    ):
+        try:
+            _previous_start, previous_end = posed_ends(
+                previous_item.tube_part,
+                previous_placed.pose,
+            )
+            current_start, _current_end = posed_ends(
+                current_item.tube_part,
+                current_placed.pose,
+            )
+            previous_angle = math.degrees(
+                math.atan(previous_end.slope_magnitude)
+            )
+            current_angle = math.degrees(
+                math.atan(current_start.slope_magnitude)
+            )
+            if (
+                previous_angle >= FAST_CHAIN_ANGLE_EPS_DEGREES
+                and current_angle >= FAST_CHAIN_ANGLE_EPS_DEGREES
+            ):
+                return 1
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+    return 0
+
+
+def _protected_insertion_positions(items, rod):
+    """Positions that would break an efficient/angled existing cut chain."""
+    protected = set()
+    placed = list(rod.placed)
+    for position in range(1, len(placed)):
+        if (
+            _boundary_chain_strength(
+                items,
+                placed[position - 1],
+                placed[position],
+            )
+            > 0
+        ):
+            protected.add(position)
+    return protected
+
+
 def _best_insert_item_fixed_order(
     items,
     rod,
@@ -1906,43 +1979,85 @@ def _best_insert_item_fixed_order(
         placed.item_index
         for placed in rod.placed
     ]
-    best = None
+    positions = _insertion_positions(sequence)
+    protected = _protected_insertion_positions(
+        items,
+        rod,
+    )
 
-    for position in _insertion_positions(sequence):
+    # First preserve already-efficient chains (common-line, interlocked, or
+    # angled-to-angled). Only if the item cannot be inserted anywhere else do
+    # we permit breaking one of those boundaries.
+    passes = [
+        [
+            position
+            for position in positions
+            if position not in protected
+        ],
+        [
+            position
+            for position in positions
+            if position in protected
+        ],
+    ]
+
+    for candidate_positions in passes:
+        if not candidate_positions:
+            continue
+
+        best = None
+        for position in candidate_positions:
+            if (
+                deadline is not None
+                and time.perf_counter() >= float(deadline)
+            ):
+                break
+            candidate_sequence = (
+                sequence[:position]
+                + [int(item_index)]
+                + sequence[position:]
+            )
+            candidate = _optimize_fixed_item_sequence(
+                items,
+                candidate_sequence,
+                rod_length=rod_length,
+                dead_zone_mm=dead_zone_mm,
+                gap_mm=gap_mm,
+            )
+            _PARALLEL_STATS[
+                "fast_best_fit_insertion_attempts"
+            ] += 1
+            if candidate is None:
+                continue
+
+            # Keep material span primary, but among equally good placements
+            # prefer the solution with more shared/interlocking boundaries.
+            key = (
+                round(float(candidate.used_span), 6),
+                -int(candidate.common_lines),
+                -round(
+                    sum(
+                        float(placed.overlap_before_mm or 0.0)
+                        for placed in candidate.placed[1:]
+                    ),
+                    6,
+                ),
+                0 if candidate.tail_used else 1,
+                position,
+            )
+            if best is None or key < best[0]:
+                best = (key, candidate)
+
+        if best is not None:
+            return best[1]
+
         if (
             deadline is not None
             and time.perf_counter() >= float(deadline)
         ):
             break
-        candidate_sequence = (
-            sequence[:position]
-            + [int(item_index)]
-            + sequence[position:]
-        )
-        candidate = _optimize_fixed_item_sequence(
-            items,
-            candidate_sequence,
-            rod_length=rod_length,
-            dead_zone_mm=dead_zone_mm,
-            gap_mm=gap_mm,
-        )
-        _PARALLEL_STATS["fast_best_fit_insertion_attempts"] += 1
-        if candidate is None:
-            continue
 
-        # Same membership: a smaller physical span is always preferable.
-        # The old secondary algorithm accidentally preferred the LARGEST span
-        # here, wasting material and making later insertion harder.
-        key = (
-            round(float(candidate.used_span), 6),
-            -int(candidate.common_lines),
-            0 if candidate.tail_used else 1,
-            position,
-        )
-        if best is None or key < best[0]:
-            best = (key, candidate)
-
-    return best[1] if best is not None else None
+    return None
 
 
 def _fast_best_fit_build(
