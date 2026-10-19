@@ -307,6 +307,59 @@ class GeometryOptimizerTests(unittest.TestCase):
 
         self.assertEqual(len(rods), 1)
 
+    def test_fast_best_fit_does_not_split_existing_common_line_chain(self):
+        first = make_part(
+            1000,
+            start_plane=(0.0, 0.0, 0.0),
+            end_plane=(950.0, 0.0, 1.0),
+        )
+        second = make_part(
+            980,
+            start_plane=(50.0, 0.0, 1.0),
+            end_plane=(980.0, 0.0, 0.0),
+        )
+        first["ends"][1]["boundary_signature"] = "shared-45"
+        second["ends"][0]["boundary_signature"] = "shared-45"
+        small = make_part(380)
+
+        pieces = [
+            item("A", 1000, first),
+            item("B", 980, second),
+            item("SMALL", 380, small),
+        ]
+        normalized = optimizer_module._normalize_items(
+            pieces,
+            6000.0,
+        )
+        chain = optimizer_module._optimize_fixed_item_sequence(
+            normalized,
+            [0, 1],
+            rod_length=6000.0,
+            dead_zone_mm=400.0,
+            gap_mm=2.0,
+        )
+        self.assertIsNotNone(chain)
+        self.assertTrue(chain.placed[1].common_line_before)
+
+        inserted = optimizer_module._best_insert_item_fixed_order(
+            normalized,
+            chain,
+            2,
+            rod_length=6000.0,
+            dead_zone_mm=400.0,
+            gap_mm=2.0,
+        )
+        self.assertIsNotNone(inserted)
+
+        order = [placed.item_index for placed in inserted.placed]
+        self.assertIn(order, ([2, 0, 1], [0, 1, 2]))
+        pair_position = order.index(1)
+        self.assertGreater(pair_position, 0)
+        self.assertEqual(order[pair_position - 1], 0)
+        self.assertTrue(
+            inserted.placed[pair_position].common_line_before
+        )
+
     def test_fast_best_fit_inserts_small_parts_before_tail_piece(self):
         pieces = [
             item("LONG", 5400, make_part(5400)),
