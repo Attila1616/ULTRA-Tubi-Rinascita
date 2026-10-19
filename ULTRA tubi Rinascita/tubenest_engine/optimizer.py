@@ -53,6 +53,19 @@ CONTOUR_REFINE_MAX_CANDIDATE_TYPES = 24
 CONTOUR_REFINE_UTILIZATION_THRESHOLD = 0.90
 MAX_CPU_WORKERS = 24
 
+# Optional slower material-first mode. The current optimizer remains the
+# default. Global compaction deliberately spends more search time after the
+# normal plan exists: it re-searches whole rod memberships (instead of only
+# stitching existing sequences) and then tries to empty short rods by moving
+# individual pieces into other rods. This is aimed at cases where a different
+# order lets the final legal piece extend into the chuck/dead-zone and saves an
+# otherwise wasted stock rod.
+GLOBAL_COMPACTION_BEAM_WIDTH = 480
+GLOBAL_COMPACTION_MAX_CANDIDATE_TYPES = 120
+GLOBAL_COMPACTION_MERGE_ATTEMPT_LIMIT = 600
+GLOBAL_REDISTRIBUTION_DONOR_MAX_PIECES = 12
+GLOBAL_REDISTRIBUTION_ATTEMPT_LIMIT = 220
+
 _PAIRWISE_FIT_CACHE = {}
 _PAIRWISE_FIT_ERROR_TAG = "__FIT_ERROR__"
 _PAIRWISE_FIT_CACHE_LIMIT = 200000
@@ -107,6 +120,12 @@ def _reset_parallel_stats():
         precomputed_failures=0,
         unique_type_count=0,
         strategy="serial_small_job",
+        algorithm="current",
+        global_compaction_seconds=0.0,
+        global_pair_merge_seconds=0.0,
+        global_redistribution_seconds=0.0,
+        global_rods_before=0,
+        global_rods_after=0,
     )
 
 
@@ -1666,6 +1685,274 @@ def _refine_rods(
     return result
 
 
+def _deep_merge_all_rod_pairs(
+    items,
+    rods,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Re-search whole rod memberships with no stitch-only shortcut.
+
+    The normal large-job path intentionally preserves existing sequences for
+    speed. Material-first mode instead permits complete reordering/pose changes
+    for candidate rod pairs, including selecting a different final flip-tail.
+    """
+    return _try_merge_rods(
+        items,
+        list(rods),
+        rod_length=rod_length,
+        dead_zone_mm=dead_zone_mm,
+        gap_mm=gap_mm,
+        executor=None,
+        attempt_limit=GLOBAL_COMPACTION_MERGE_ATTEMPT_LIMIT,
+        beam_width=GLOBAL_COMPACTION_BEAM_WIDTH,
+        max_candidate_types=GLOBAL_COMPACTION_MAX_CANDIDATE_TYPES,
+        stitch_only=False,
+    )
+
+
+def _try_redistribute_donor_rod(
+    items,
+    rods,
+    donor_index,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Try to empty one rod by reassigning its pieces to all other rods.
+
+    This is a bounded large-neighborhood search. Every candidate receiver is
+    rebuilt through the authoritative single-rod geometry search, so common
+    lines, rotations, interlocking and the flip-tail/dead-zone rules remain
+    exactly the same as the existing optimizer.
+    """
+    donor = rods[donor_index]
+    donor_indices = [
+        placed.item_index
+        for placed in donor.placed
+    ]
+    if (
+        not donor_indices
+        or len(donor_indices) > GLOBAL_REDISTRIBUTION_DONOR_MAX_PIECES
+        or len(rods) <= 1
+    ):
+        return None
+
+    # Harder/longer pieces first usually proves impossibility sooner. Stable
+    # instance key tie-breaking keeps plans deterministic.
+    donor_indices.sort(
+        key=lambda item_index: (
+            -float(items[item_index].physical_length),
+            str(items[item_index].instance_key),
+        )
+    )
+
+    receivers = [
+        rod
+        for index, rod in enumerate(rods)
+        if index != donor_index
+    ]
+    attempts = 0
+    search_cache = {}
+
+    def fit_added_piece(receiver, item_index):
+        nonlocal attempts
+        bit = 1 << int(item_index)
+        target_mask = int(receiver.used_mask) | bit
+        cache_key = target_mask
+        if cache_key in search_cache:
+            return search_cache[cache_key]
+        if attempts >= GLOBAL_REDISTRIBUTION_ATTEMPT_LIMIT:
+            return None
+        attempts += 1
+
+        # Cheap lower bound: common-line/interlocking can only help, but a
+        # wildly oversized nominal request is not useful to search.
+        nominal = sum(
+            float(item.nominal_length)
+            for item in items
+            if target_mask & (1 << item.index)
+        )
+        if nominal > float(rod_length) + 3000.0:
+            search_cache[cache_key] = None
+            return None
+
+        candidate = _search_single_rod(
+            items,
+            allowed_mask=target_mask,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+            require_all=True,
+            beam_width=GLOBAL_COMPACTION_BEAM_WIDTH,
+            max_candidate_types=GLOBAL_COMPACTION_MAX_CANDIDATE_TYPES,
+        )
+        search_cache[cache_key] = candidate
+        return candidate
+
+    # Memoize failed redistribution states by remaining donor position and the
+    # receiver membership masks. This gives limited backtracking without an
+    # unbounded assignment explosion.
+    failed_states = set()
+
+    def assign(position, current_receivers):
+        if position >= len(donor_indices):
+            return current_receivers
+        if attempts >= GLOBAL_REDISTRIBUTION_ATTEMPT_LIMIT:
+            return None
+
+        state_key = (
+            position,
+            tuple(
+                sorted(
+                    int(receiver.used_mask)
+                    for receiver in current_receivers
+                )
+            ),
+        )
+        if state_key in failed_states:
+            return None
+
+        item_index = donor_indices[position]
+
+        # Prefer fuller rods first: the objective is to consume their remaining
+        # scrap before opening/keeping another stock rod.
+        receiver_order = sorted(
+            range(len(current_receivers)),
+            key=lambda index: (
+                -float(current_receivers[index].used_span),
+                -int(current_receivers[index].piece_count),
+                index,
+            ),
+        )
+
+        for receiver_index in receiver_order:
+            rebuilt = fit_added_piece(
+                current_receivers[receiver_index],
+                item_index,
+            )
+            if rebuilt is None:
+                continue
+
+            updated = list(current_receivers)
+            updated[receiver_index] = rebuilt
+            solved = assign(position + 1, updated)
+            if solved is not None:
+                return solved
+
+        failed_states.add(state_key)
+        return None
+
+    redistributed = assign(0, receivers)
+    if redistributed is None:
+        return None
+
+    return redistributed
+
+
+def _redistribute_short_rods(
+    items,
+    rods,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Repeatedly try to eliminate the least-filled rod.
+
+    Unlike the legacy merge pass, donor pieces may land on different receiver
+    rods. This is useful when several small leftovers can consume scrap on
+    multiple earlier rods.
+    """
+    rods = list(rods)
+    improved = True
+    while improved and len(rods) > 1:
+        improved = False
+        donor_order = sorted(
+            range(len(rods)),
+            key=lambda index: (
+                float(rods[index].nominal_packed),
+                float(rods[index].used_span),
+                int(rods[index].piece_count),
+                index,
+            ),
+        )
+
+        for donor_index in donor_order:
+            redistributed = _try_redistribute_donor_rod(
+                items,
+                rods,
+                donor_index,
+                rod_length=rod_length,
+                dead_zone_mm=dead_zone_mm,
+                gap_mm=gap_mm,
+            )
+            if redistributed is None:
+                continue
+
+            rods = list(redistributed)
+            improved = True
+            break
+
+    return rods
+
+
+def _global_compact_rods(
+    items,
+    rods,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Material-first second-stage optimizer used only by the new setting."""
+    started = time.perf_counter()
+    _PARALLEL_STATS["global_rods_before"] = len(rods)
+
+    stage_started = time.perf_counter()
+    rods = _deep_merge_all_rod_pairs(
+        items,
+        rods,
+        rod_length=rod_length,
+        dead_zone_mm=dead_zone_mm,
+        gap_mm=gap_mm,
+    )
+    _PARALLEL_STATS["global_pair_merge_seconds"] = (
+        time.perf_counter() - stage_started
+    )
+
+    stage_started = time.perf_counter()
+    rods = _redistribute_short_rods(
+        items,
+        rods,
+        rod_length=rod_length,
+        dead_zone_mm=dead_zone_mm,
+        gap_mm=gap_mm,
+    )
+    _PARALLEL_STATS["global_redistribution_seconds"] = (
+        time.perf_counter() - stage_started
+    )
+
+    # One final whole-membership refinement can reduce leftover on the rods
+    # whose membership changed during redistribution.
+    rods = _refine_rods(
+        items,
+        rods,
+        rod_length=rod_length,
+        dead_zone_mm=dead_zone_mm,
+        gap_mm=gap_mm,
+        executor=None,
+        beam_width=GLOBAL_COMPACTION_BEAM_WIDTH,
+        max_candidate_types=GLOBAL_COMPACTION_MAX_CANDIDATE_TYPES,
+        utilization_threshold=None,
+    )
+
+    _PARALLEL_STATS["global_rods_after"] = len(rods)
+    _PARALLEL_STATS["global_compaction_seconds"] = (
+        time.perf_counter() - started
+    )
+    return rods
+
+
 def _posed_end_dict(end):
     if end is None:
         return None
@@ -1744,6 +2031,7 @@ def optimize_items(
     rod_length=DEFAULT_ROD_LENGTH,
     gap_mm=DEFAULT_GAP_MM,
     dead_zone_mm=DEFAULT_CHUCK_DEAD_ZONE,
+    algorithm="current",
 ):
     _reset_parallel_stats()
     rod_length = float(rod_length)
@@ -1759,12 +2047,25 @@ def optimize_items(
     if not normalized:
         return []
 
+    algorithm = str(algorithm or "current").strip().lower()
+    if algorithm not in {"current", "global_compaction"}:
+        algorithm = "current"
+    _PARALLEL_STATS["algorithm"] = algorithm
+
     rods = _optimize_normalized(
         normalized,
         rod_length=rod_length,
         dead_zone_mm=dead_zone_mm,
         gap_mm=gap_mm,
     )
+    if algorithm == "global_compaction":
+        rods = _global_compact_rods(
+            normalized,
+            rods,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+        )
 
     rods.sort(
         key=lambda state: (
@@ -2446,6 +2747,7 @@ def optimize_items_dict(
     rod_length=DEFAULT_ROD_LENGTH,
     gap_mm=DEFAULT_GAP_MM,
     dead_zone_mm=DEFAULT_CHUCK_DEAD_ZONE,
+    algorithm="current",
 ):
     _reset_parallel_stats()
     _reset_pairwise_fit_stats()
@@ -2454,12 +2756,25 @@ def optimize_items_dict(
     if not normalized:
         return []
 
+    algorithm = str(algorithm or "current").strip().lower()
+    if algorithm not in {"current", "global_compaction"}:
+        algorithm = "current"
+    _PARALLEL_STATS["algorithm"] = algorithm
+
     rods = _optimize_normalized(
         normalized,
         rod_length=float(rod_length),
         dead_zone_mm=float(dead_zone_mm),
         gap_mm=max(0.0, float(gap_mm)),
     )
+    if algorithm == "global_compaction":
+        rods = _global_compact_rods(
+            normalized,
+            rods,
+            rod_length=float(rod_length),
+            dead_zone_mm=float(dead_zone_mm),
+            gap_mm=max(0.0, float(gap_mm)),
+        )
     rods.sort(
         key=lambda state: (
             -round(state.used_span, 6),
