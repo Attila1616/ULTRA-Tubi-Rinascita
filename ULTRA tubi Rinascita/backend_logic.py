@@ -1646,11 +1646,7 @@ def nest_piece_groups(groups, rod_length=6000):
             result_groups.append({
                 "tubeType": tube_type,
                 "rods": rods,
-                "optimizer": (
-                    "geometry-fast-best-fit"
-                    if nesting_algorithm == "best_fit"
-                    else "geometry-current"
-                ),
+                "optimizer": "geometry-current",
                 "nestingAlgorithm": nesting_algorithm,
                 "gapMm": gap_mm,
                 "cacheHit": cached,
