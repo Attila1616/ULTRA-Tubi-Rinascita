@@ -1495,3 +1495,19 @@ body.modal-scroll-locked {
 .history-rod-entry > div {
     min-width: 0;
 }
+
+/* Tube profile group ordering controls. */
+.tube-group-sort-label {
+    margin-left: auto;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.tube-group-sort-select {
+    padding: 5px 8px;
+    border: 1px solid #cbd3dc;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 12px;
+    max-width: 245px;
+}
