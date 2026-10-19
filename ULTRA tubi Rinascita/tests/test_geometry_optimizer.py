@@ -434,6 +434,35 @@ class GeometryOptimizerTests(unittest.TestCase):
             48,
         )
 
+    def test_best_fit_deadline_fallback_still_packs_existing_rods(self):
+        # Regression: exhausting the search budget used to create one new
+        # rod for every subsequent item without attempting any placement.
+        lengths = [1290] * 8 + [1170] * 4 + [1150] * 4 + [1070] * 6 + [1050] * 4 + [107] * 8 + [80] * 4
+        pieces = [
+            item(f"TIMEOUT-{index}", length, make_part(length))
+            for index, length in enumerate(lengths)
+        ]
+        normalized = optimizer_module._normalize_items(pieces, 6000.0)
+        order = sorted(
+            range(len(normalized)),
+            key=lambda index: -normalized[index].physical_length,
+        )
+        rods = optimizer_module._fast_best_fit_build(
+            normalized,
+            rod_length=6000.0,
+            dead_zone_mm=400.0,
+            gap_mm=2.0,
+            order=order,
+            deadline=0.0,
+        )
+        self.assertLess(len(rods), 15)
+        self.assertEqual(
+            sum(len(rod.placed) for rod in rods),
+            len(lengths),
+        )
+        for rod in rods:
+            self.assertLessEqual(rod.used_span, 6000.0)
+
     def test_rotation_metadata_lists_tried_and_selected_poses(self):
         square = make_part(1000)
         rods = optimize_items_dict(
