@@ -8,7 +8,7 @@ let nestingRenderSequence = 0;
 let nestingResultCache = new Map();
 let nestingLoadingGroups = new Set();
 let nestingErrorByTube = new Map();
-let nestingSettingsKey = 'gap:2|algorithm:current';
+let nestingSettingsKey = 'gap:2|algorithm:current|manual-locked-v1';
 let uiPreferences = {
     sorting: {},
     columnWidths: {},
@@ -415,10 +415,6 @@ async function openSettingsModal() {
         document.getElementById('settings-order-medium-quantity').value = parseNonNegativeInteger(config.order_priority_medium_quantity, 3);
         document.getElementById('settings-order-high-quantity').value = parseNonNegativeInteger(config.order_priority_high_quantity, 5);
         document.getElementById('settings-nesting-gap-mm').value = Number.isFinite(Number(config.nesting_gap_mm)) ? Number(config.nesting_gap_mm) : 2;
-        let nestingAlgorithm = String(config.nesting_algorithm || 'current').toLowerCase();
-        if (nestingAlgorithm === 'global_compaction') nestingAlgorithm = 'best_fit';
-        if (!['current', 'best_fit'].includes(nestingAlgorithm)) nestingAlgorithm = 'current';
-        document.getElementById('settings-nesting-algorithm').value = nestingAlgorithm;
         document.getElementById('settings-nesting-rotation-visualization-enabled').checked = !!config.nesting_rotation_visualization_enabled;
         document.getElementById('settings-nesting-debug-enabled').checked = config.nesting_debug_enabled !== false;
         document.getElementById('settings-nested-text-marking-enabled').checked = !!config.nested_text_marking_enabled;
@@ -557,7 +553,7 @@ async function saveSettings() {
             order_priority_high_quantity: parseNonNegativeInteger(document.getElementById('settings-order-high-quantity').value, 5),
             order_include_low_priority: document.getElementById('settings-order-include-low-priority').checked,
             nesting_gap_mm: Math.max(0, Number(document.getElementById('settings-nesting-gap-mm').value) || 0),
-            nesting_algorithm: document.getElementById('settings-nesting-algorithm').value,
+            nesting_algorithm: 'current',
             nesting_rotation_visualization_enabled: document.getElementById('settings-nesting-rotation-visualization-enabled').checked,
             nesting_debug_enabled: document.getElementById('settings-nesting-debug-enabled').checked,
             nested_text_marking_enabled: document.getElementById('settings-nested-text-marking-enabled').checked,
@@ -589,7 +585,7 @@ async function saveSettings() {
         }
         closeSettingsModal();
         applyLockColors(response.config?.lock_unlocked_color, response.config?.lock_locked_color);
-        nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}|algorithm:${String(response.config?.nesting_algorithm || payload.nesting_algorithm || 'current')}`;
+        nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}|algorithm:current`;
         nestingRotationVisualizationEnabled = !!response.config?.nesting_rotation_visualization_enabled;
         nestingDebugEnabled = response.config?.nesting_debug_enabled !== false;
         invalidateNestingCache();
@@ -733,7 +729,7 @@ async function initialize() {
         const configResponse = await window.pywebview.api.get_config_settings();
         if (configResponse?.status === 'success') {
             applyLockColors(configResponse.config?.lock_unlocked_color, configResponse.config?.lock_locked_color);
-            nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}|algorithm:${String(configResponse.config?.nesting_algorithm || 'current')}`;
+            nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}|algorithm:current`;
             nestingRotationVisualizationEnabled = !!configResponse.config?.nesting_rotation_visualization_enabled;
             nestingDebugEnabled = configResponse.config?.nesting_debug_enabled !== false;
         }
@@ -2010,7 +2006,7 @@ function buildClientNestingSignature(group, piecesToNest) {
     }).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
 
     return JSON.stringify([
-        'optimizer-cache-v5',
+        'optimizer-cache-v6',
         nestingSettingsKey,
         group?.tubeType || '',
         compact
@@ -2562,7 +2558,12 @@ function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked,
     }
     html += `</div><div class="rod-actions">`;
     if (kind === 'locked') {
-        html += `<button class="action-button" data-action="export-locked-rod-zzx" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Esporta questa verga come ZZX annidato"${segments.length === 0 ? ' disabled' : ''}>ZZX</button>`;
+        const canExport = segments.length > 0 && segments.every(segment => !!segment.nestPlacement);
+        if (canExport) {
+            html += `<button class="action-button" data-action="export-locked-rod-zzx" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Esporta questa verga come ZZX annidato">ZZX</button>`;
+        } else {
+            html += `<button class="action-button icon-button locked-rod-renest-button" data-action="nest-locked-rod" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Ricalcola rotazioni e tagli comuni rispettando l'ordine manuale"${segments.length === 0 ? ' disabled' : ''}>&#8635;</button>`;
+        }
         html += `<button class="action-button icon-button rod-lock-button rod-lock-locked" data-action="unlock-locked-rod" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Sblocca verga">&#128274;</button>`;
         html += `<button class="action-button fatto-button ctrl-required" data-action="mark-locked-rod-fatto" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}"${isDone ? ' disabled' : ''}>Fatto</button>`;
     } else {
@@ -2716,6 +2717,63 @@ function renderHistory(historyData) {
 }
 
 
+// Optimize poses inside one manually arranged locked rod without reordering pieces.
+const lockedRodNestInProgress = new Set();
+async function nestLockedRodInPlace(tubeType, rodId) {
+    const rod = getLockedRod(tubeType, rodId);
+    if (!rod || !rod.segments?.length || lockedRodNestInProgress.has(rodId)) return;
+
+    const pieceSources = {};
+    const segments = rod.segments.map(segment => {
+        const source = findPieceById(segment.sourceId);
+        pieceSources[segment.sourceId] = {
+            sourceId: segment.sourceId,
+            tubePart: source?.tubePart || null,
+            filePath: source?.filePath || segment.filePath || '',
+            fileName: source?.fileName || segment.fileName || ''
+        };
+        return {
+            instanceKey: segment.instanceKey,
+            sourceId: segment.sourceId,
+            length: segment.length
+        };
+    });
+    const snapshot = segments.map(segment => segment.instanceKey).join('\\u001f');
+    lockedRodNestInProgress.add(rodId);
+    try {
+        const response = await window.pywebview.api.nest_locked_rod_sequence({
+            tubeType, rodId, rodLength: 6000, segments, sources: pieceSources
+        });
+        if (response?.status !== 'success') {
+            alert(response?.message || 'Nesting della verga bloccata non riuscito.');
+            return;
+        }
+        const currentRod = getLockedRod(tubeType, rodId);
+        if (!currentRod ||
+            currentRod.segments.map(segment => segment.instanceKey).join('\\u001f') !== snapshot) {
+            alert('La composizione della verga è cambiata durante il calcolo. Riprova.');
+            return;
+        }
+        const placements = response.rod?.placements || [];
+        if (placements.length !== currentRod.segments.length ||
+            placements.some((placement, index) =>
+                placement.instance_key !== currentRod.segments[index].instanceKey)) {
+            alert('Errore: il backend ha restituito un ordine di pezzi differente.');
+            return;
+        }
+        currentRod.segments.forEach((segment, index) => {
+            segment.nestPlacement = placements[index];
+        });
+        await saveUiState();
+        renderUI();
+    } catch (error) {
+        console.error('Locked rod nesting failed:', error);
+        alert('Errore durante il nesting della verga bloccata.');
+    } finally {
+        lockedRodNestInProgress.delete(rodId);
+    }
+}
+
 // --- Event Handlers & Actions ---
 async function exportLockedRodZzx(tubeType, rodId) {
     const rod = getLockedRod(tubeType, rodId);
@@ -2819,6 +2877,9 @@ async function handleContainerClick(event) {
                 break;
             case 'unlock-locked-rod':
                 unlockLockedRod(actionTarget.dataset.tubeType, actionTarget.dataset.rodId);
+                break;
+            case 'nest-locked-rod':
+                await nestLockedRodInPlace(actionTarget.dataset.tubeType, actionTarget.dataset.rodId);
                 break;
             case 'export-locked-rod-zzx':
                 await exportLockedRodZzx(
