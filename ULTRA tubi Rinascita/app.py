@@ -51,9 +51,12 @@ class Api:
         nesting_algorithm = str(
             self.config.get("nesting_algorithm") or "current"
         ).strip().lower()
-        if nesting_algorithm not in {"current", "global_compaction"}:
+        if nesting_algorithm == "global_compaction":
+            nesting_algorithm = "best_fit"
+        if nesting_algorithm not in {"current", "best_fit"}:
             nesting_algorithm = "current"
         self.config["nesting_algorithm"] = nesting_algorithm
+        self.config.setdefault("nesting_rotation_visualization_enabled", False)
         self.config.setdefault("nesting_debug_enabled", True)
         self.config.setdefault("nested_text_marking_enabled", False)
         self.config.setdefault("nested_text_marking_height_mm", 5.0)
@@ -106,9 +109,20 @@ class Api:
             )
             or "current"
         ).strip().lower()
-        if nesting_algorithm not in {"current", "global_compaction"}:
+        if nesting_algorithm == "global_compaction":
+            nesting_algorithm = "best_fit"
+        if nesting_algorithm not in {"current", "best_fit"}:
             nesting_algorithm = "current"
         updated["nesting_algorithm"] = nesting_algorithm
+        updated["nesting_rotation_visualization_enabled"] = bool(
+            payload.get(
+                "nesting_rotation_visualization_enabled",
+                updated.get(
+                    "nesting_rotation_visualization_enabled",
+                    False,
+                ),
+            )
+        )
 
         updated["inventory_request_enabled"] = bool(payload.get("inventory_request_enabled"))
         updated["nested_text_marking_enabled"] = bool(
