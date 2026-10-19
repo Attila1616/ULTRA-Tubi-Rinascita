@@ -285,16 +285,16 @@ class GeometryOptimizerTests(unittest.TestCase):
             rotation = round(placement["axial_rotation_degrees"]) % 180
             self.assertEqual(rotation, family)
 
-    def test_current_algorithm_does_not_run_global_compaction(self):
+    def test_current_algorithm_does_not_run_fast_best_fit(self):
         pieces = [
             item("A", 1000, make_part(1000)),
             item("B", 900, make_part(900)),
         ]
         with patch.object(
             optimizer_module,
-            "_global_compact_rods",
+            "_fast_best_fit_optimize",
             side_effect=AssertionError(
-                "legacy/current mode must not run global compaction"
+                "current mode must not run the secondary algorithm"
             ),
         ):
             rods = optimize_items_dict(
@@ -307,53 +307,61 @@ class GeometryOptimizerTests(unittest.TestCase):
 
         self.assertEqual(len(rods), 1)
 
-    def test_global_compaction_reorders_pair_to_use_tail_zone(self):
+    def test_fast_best_fit_inserts_small_parts_before_tail_piece(self):
         pieces = [
             item("LONG", 5400, make_part(5400)),
             item("SMALL-A", 250, make_part(250)),
             item("SMALL-B", 250, make_part(250)),
         ]
-        normalized = optimizer_module._normalize_items(
+
+        rods = optimize_items_dict(
             pieces,
-            6000.0,
+            rod_length=6000.0,
+            gap_mm=2.0,
+            dead_zone_mm=400.0,
+            algorithm="best_fit",
         )
 
-        long_rod = optimizer_module._search_single_rod(
-            normalized,
-            allowed_mask=1 << 0,
-            rod_length=6000.0,
-            dead_zone_mm=400.0,
-            gap_mm=2.0,
-            require_all=True,
-        )
-        small_rod = optimizer_module._search_single_rod(
-            normalized,
-            allowed_mask=(1 << 1) | (1 << 2),
-            rod_length=6000.0,
-            dead_zone_mm=400.0,
-            gap_mm=2.0,
-            require_all=True,
-        )
-        self.assertIsNotNone(long_rod)
-        self.assertIsNotNone(small_rod)
-        self.assertFalse(long_rod.tail_used)
-        self.assertEqual(len([long_rod, small_rod]), 2)
-
-        compacted = optimizer_module._global_compact_rods(
-            normalized,
-            [long_rod, small_rod],
-            rod_length=6000.0,
-            dead_zone_mm=400.0,
-            gap_mm=2.0,
-        )
-
-        self.assertEqual(len(compacted), 1)
-        self.assertEqual(compacted[0].used_mask.bit_count(), 3)
-        self.assertGreater(compacted[0].used_span, 5600.0)
-        self.assertLessEqual(compacted[0].used_span, 6000.0)
-        self.assertTrue(compacted[0].tail_used)
+        self.assertEqual(len(rods), 1)
+        self.assertEqual(len(rods[0]["placements"]), 3)
+        self.assertGreater(rods[0]["used"], 5600.0)
+        self.assertLessEqual(rods[0]["used"], 6000.0)
+        self.assertTrue(rods[0]["usesTailFlip"])
         self.assertTrue(
-            compacted[0].placed[-1].requires_tail_flip
+            rods[0]["placements"][-1]["requires_tail_flip"]
+        )
+        self.assertEqual(
+            rods[0]["placements"][-1]["source_id"],
+            "LONG",
+        )
+
+    def test_rotation_metadata_lists_tried_and_selected_poses(self):
+        square = make_part(1000)
+        rods = optimize_items_dict(
+            [
+                item("A", 1000, square),
+                item("B", 1000, square),
+            ],
+            rod_length=6000.0,
+            gap_mm=2.0,
+            dead_zone_mm=400.0,
+            algorithm="best_fit",
+        )
+
+        placement = rods[0]["placements"][0]
+        self.assertEqual(
+            placement["rotation_candidates_degrees"],
+            [0.0, 90.0, 180.0, 270.0],
+        )
+        self.assertTrue(
+            placement["candidate_normal_orientation"]
+        )
+        self.assertTrue(
+            placement["candidate_reversed_orientation"]
+        )
+        self.assertIn(
+            placement["axial_rotation_degrees"],
+            placement["rotation_candidates_degrees"],
         )
 
     def test_tail_flip_can_use_last_400mm(self):
