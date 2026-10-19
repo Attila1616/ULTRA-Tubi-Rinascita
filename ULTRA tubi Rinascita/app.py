@@ -396,6 +396,17 @@ class Api:
                 "text": "Errore durante il debug nesting.",
             }
 
+    def nest_locked_rod_sequence(self, payload):
+        try:
+            return logic.nest_locked_rod_sequence(payload or {})
+        except Exception:
+            print("--- PYTHON ERROR in nest_locked_rod_sequence ---")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": "Errore nel nesting della verga bloccata.",
+            }
+
     def export_locked_rod_zzx(self, payload):
         try:
             return logic.export_locked_rod_zzx(payload or {})
