@@ -2010,6 +2010,7 @@ function buildClientNestingSignature(group, piecesToNest) {
     }).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
 
     return JSON.stringify([
+        'optimizer-cache-v5',
         nestingSettingsKey,
         group?.tubeType || '',
         compact
