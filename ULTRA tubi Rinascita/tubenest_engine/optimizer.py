@@ -67,10 +67,11 @@ MAX_CPU_WORKERS = 24
 # only the poses for that fixed order are solved. This keeps the search close to
 # polynomial while still allowing a small piece to be inserted before the last
 # piece so that the last piece can legally extend into the 400 mm chuck zone.
-FAST_BEST_FIT_MAX_INSERTION_POSITIONS = 18
-FAST_BEST_FIT_CONSOLIDATION_PASSES = 3
-FAST_BEST_FIT_DONOR_MAX_PIECES = 12
-FAST_BEST_FIT_DONOR_ATTEMPTS = 180
+FAST_BEST_FIT_MAX_INSERTION_POSITIONS = 4
+FAST_BEST_FIT_CONSOLIDATION_PASSES = 1
+FAST_BEST_FIT_DONOR_MAX_PIECES = 10
+FAST_BEST_FIT_DONOR_ATTEMPTS = 48
+FAST_BEST_FIT_TIME_BUDGET_SECONDS = 12.0
 
 _PAIRWISE_FIT_CACHE = {}
 _PAIRWISE_FIT_ERROR_TAG = "__FIT_ERROR__"
@@ -1898,6 +1899,7 @@ def _best_insert_item_fixed_order(
     rod_length,
     dead_zone_mm,
     gap_mm,
+    deadline=None,
 ):
     """Return the best rod obtained by inserting one item into this sequence."""
     sequence = [
@@ -1907,6 +1909,11 @@ def _best_insert_item_fixed_order(
     best = None
 
     for position in _insertion_positions(sequence):
+        if (
+            deadline is not None
+            and time.perf_counter() >= float(deadline)
+        ):
+            break
         candidate_sequence = (
             sequence[:position]
             + [int(item_index)]
@@ -1923,8 +1930,11 @@ def _best_insert_item_fixed_order(
         if candidate is None:
             continue
 
+        # Same membership: a smaller physical span is always preferable.
+        # The old secondary algorithm accidentally preferred the LARGEST span
+        # here, wasting material and making later insertion harder.
         key = (
-            -round(float(candidate.used_span), 6),
+            round(float(candidate.used_span), 6),
             -int(candidate.common_lines),
             0 if candidate.tail_used else 1,
             position,
@@ -1941,12 +1951,18 @@ def _fast_best_fit_build(
     dead_zone_mm,
     gap_mm,
     order,
+    deadline=None,
 ):
     rods = []
 
     for item_index in order:
         choices = []
         for rod_index, rod in enumerate(rods):
+            if (
+                deadline is not None
+                and time.perf_counter() >= float(deadline)
+            ):
+                break
             candidate = _best_insert_item_fixed_order(
                 items,
                 rod,
@@ -1954,6 +1970,7 @@ def _fast_best_fit_build(
                 rod_length=rod_length,
                 dead_zone_mm=dead_zone_mm,
                 gap_mm=gap_mm,
+                deadline=deadline,
             )
             if candidate is None:
                 continue
@@ -2019,11 +2036,23 @@ def _fast_redistribute_short_rods(
     rod_length,
     dead_zone_mm,
     gap_mm,
+    deadline=None,
 ):
-    """Try to eliminate short rods using fixed-order insertions only."""
+    """Bounded greedy attempt to eliminate the shortest leftover rod.
+
+    No recursive/backtracking assignment is used here. The previous version
+    could revisit many receiver combinations and became unexpectedly slow even
+    on modest production groups. We try at most two deterministic donor orders
+    and keep the first complete elimination.
+    """
     rods = list(rods)
+    if len(rods) <= 1:
+        return rods
 
     for _pass in range(FAST_BEST_FIT_CONSOLIDATION_PASSES):
+        if deadline is not None and time.perf_counter() >= float(deadline):
+            break
+
         improved = False
         donor_order = sorted(
             range(len(rods)),
@@ -2036,6 +2065,9 @@ def _fast_redistribute_short_rods(
         )
 
         for donor_index in donor_order:
+            if deadline is not None and time.perf_counter() >= float(deadline):
+                break
+
             donor = rods[donor_index]
             donor_items = [
                 placed.item_index
@@ -2043,103 +2075,118 @@ def _fast_redistribute_short_rods(
             ]
             if (
                 not donor_items
-                or len(donor_items)
-                > FAST_BEST_FIT_DONOR_MAX_PIECES
+                or len(donor_items) > FAST_BEST_FIT_DONOR_MAX_PIECES
             ):
                 continue
 
-            # Smaller pieces first are more likely to consume leftover material
-            # in the already-full receiver rods.
-            donor_items.sort(
-                key=lambda index: (
-                    float(items[index].physical_length),
-                    str(items[index].instance_key),
-                )
-            )
-            receivers = [
+            receivers_base = [
                 rod
                 for index, rod in enumerate(rods)
                 if index != donor_index
             ]
-            attempts = 0
-            failed = set()
-
-            def assign(position, current_receivers):
-                nonlocal attempts
-                if position >= len(donor_items):
-                    return current_receivers
-                if attempts >= FAST_BEST_FIT_DONOR_ATTEMPTS:
-                    return None
-
-                state_key = (
-                    position,
-                    tuple(
-                        int(receiver.used_mask)
-                        for receiver in current_receivers
+            donor_orders = [
+                sorted(
+                    donor_items,
+                    key=lambda index: (
+                        -float(items[index].physical_length),
+                        str(items[index].instance_key),
                     ),
-                )
-                if state_key in failed:
-                    return None
+                ),
+                sorted(
+                    donor_items,
+                    key=lambda index: (
+                        float(items[index].physical_length),
+                        str(items[index].instance_key),
+                    ),
+                ),
+            ]
 
-                item_index = donor_items[position]
-                choices = []
-                for receiver_index, receiver in enumerate(
-                    current_receivers
-                ):
-                    if attempts >= FAST_BEST_FIT_DONOR_ATTEMPTS:
-                        break
-                    attempts += 1
-                    _PARALLEL_STATS[
-                        "fast_best_fit_consolidation_attempts"
-                    ] += 1
-                    candidate = _best_insert_item_fixed_order(
-                        items,
-                        receiver,
-                        item_index,
-                        rod_length=rod_length,
-                        dead_zone_mm=dead_zone_mm,
-                        gap_mm=gap_mm,
-                    )
-                    if candidate is None:
-                        continue
-                    choices.append(
-                        (
-                            round(
-                                float(rod_length)
-                                - float(candidate.used_span),
-                                6,
-                            ),
-                            0 if candidate.tail_used else 1,
-                            receiver_index,
-                            candidate,
+            seen_orders = set()
+            for ordered_items in donor_orders:
+                order_key = tuple(ordered_items)
+                if order_key in seen_orders:
+                    continue
+                seen_orders.add(order_key)
+
+                receivers = list(receivers_base)
+                attempts = 0
+                complete = True
+
+                for item_index in ordered_items:
+                    if (
+                        attempts >= FAST_BEST_FIT_DONOR_ATTEMPTS
+                        or (
+                            deadline is not None
+                            and time.perf_counter() >= float(deadline)
                         )
+                    ):
+                        complete = False
+                        break
+
+                    choices = []
+                    for receiver_index, receiver in enumerate(receivers):
+                        if (
+                            attempts >= FAST_BEST_FIT_DONOR_ATTEMPTS
+                            or (
+                                deadline is not None
+                                and time.perf_counter() >= float(deadline)
+                            )
+                        ):
+                            break
+
+                        attempts += 1
+                        _PARALLEL_STATS[
+                            "fast_best_fit_consolidation_attempts"
+                        ] += 1
+                        candidate = _best_insert_item_fixed_order(
+                            items,
+                            receiver,
+                            item_index,
+                            rod_length=rod_length,
+                            dead_zone_mm=dead_zone_mm,
+                            gap_mm=gap_mm,
+                            deadline=deadline,
+                        )
+                        if candidate is None:
+                            continue
+
+                        choices.append(
+                            (
+                                round(
+                                    float(rod_length)
+                                    - float(candidate.used_span),
+                                    6,
+                                ),
+                                0 if candidate.tail_used else 1,
+                                -int(candidate.common_lines),
+                                receiver_index,
+                                candidate,
+                            )
+                        )
+
+                    if not choices:
+                        complete = False
+                        break
+
+                    (
+                        _remaining,
+                        _tail_rank,
+                        _common_rank,
+                        receiver_index,
+                        candidate,
+                    ) = min(
+                        choices,
+                        key=lambda value: value[:4],
                     )
+                    receivers[receiver_index] = candidate
 
-                choices.sort(
-                    key=lambda value: value[:3]
-                )
-                for (
-                    _remaining,
-                    _tail_rank,
-                    receiver_index,
-                    candidate,
-                ) in choices:
-                    updated = list(current_receivers)
-                    updated[receiver_index] = candidate
-                    solved = assign(position + 1, updated)
-                    if solved is not None:
-                        return solved
+                if complete:
+                    rods = receivers
+                    improved = True
+                    break
 
-                failed.add(state_key)
-                return None
-
-            redistributed = assign(0, receivers)
-            if redistributed is None:
-                continue
-
-            rods = list(redistributed)
-            improved = True
-            break
+            if improved:
+                break
 
         if not improved:
             break
@@ -2153,64 +2200,46 @@ def _fast_best_fit_optimize(
     dead_zone_mm,
     gap_mm,
 ):
-    """Fast secondary nesting algorithm with insertion-based local search."""
+    """Time-bounded secondary algorithm for interactive production use."""
     started = time.perf_counter()
+    deadline = started + FAST_BEST_FIT_TIME_BUDGET_SECONDS
 
+    # One strong deterministic order is enough for the interactive mode.
+    # Longest-first is standard bin-packing behavior; insertion before the last
+    # piece still allows the final legal flip-tail to enter the 400 mm zone.
     indices = list(range(len(items)))
-    orders = [
-        sorted(
-            indices,
-            key=lambda index: (
-                -float(items[index].physical_length),
-                str(items[index].instance_key),
-            ),
+    order = sorted(
+        indices,
+        key=lambda index: (
+            -float(items[index].physical_length),
+            str(items[index].instance_key),
         ),
-        sorted(
-            indices,
-            key=lambda index: (
-                float(items[index].physical_length),
-                str(items[index].instance_key),
-            ),
-        ),
-        sorted(
-            indices,
-            key=lambda index: (
-                -_pose_branch_estimate(items[index], first=True),
-                -float(items[index].physical_length),
-                str(items[index].instance_key),
-            ),
-        ),
-    ]
+    )
 
-    candidates = []
-    seen_orders = set()
-    for order in orders:
-        key = tuple(order)
-        if key in seen_orders:
-            continue
-        seen_orders.add(key)
-        plan = _fast_best_fit_build(
-            items,
-            rod_length=rod_length,
-            dead_zone_mm=dead_zone_mm,
-            gap_mm=gap_mm,
-            order=order,
-        )
-        plan = _fast_redistribute_short_rods(
-            items,
-            plan,
-            rod_length=rod_length,
-            dead_zone_mm=dead_zone_mm,
-            gap_mm=gap_mm,
-        )
-        candidates.append(plan)
-
-    rods = min(
-        candidates,
-        key=_fast_plan_score,
+    rods = _fast_best_fit_build(
+        items,
+        rod_length=rod_length,
+        dead_zone_mm=dead_zone_mm,
+        gap_mm=gap_mm,
+        order=order,
+        deadline=deadline,
+    )
+    rods = _fast_redistribute_short_rods(
+        items,
+        rods,
+        rod_length=rod_length,
+        dead_zone_mm=dead_zone_mm,
+        gap_mm=gap_mm,
+        deadline=deadline,
     )
     _PARALLEL_STATS["algorithm"] = "best_fit"
-    _PARALLEL_STATS["strategy"] = "fast_fixed_order_best_fit"
+    _PARALLEL_STATS["strategy"] = "time_bounded_best_fit"
+    _PARALLEL_STATS["fast_best_fit_time_budget_seconds"] = (
+        FAST_BEST_FIT_TIME_BUDGET_SECONDS
+    )
+    _PARALLEL_STATS["fast_best_fit_budget_exhausted"] = (
+        time.perf_counter() >= deadline
+    )
     _PARALLEL_STATS["fast_best_fit_rods"] = len(rods)
     _PARALLEL_STATS["fast_best_fit_seconds"] = (
         time.perf_counter() - started
