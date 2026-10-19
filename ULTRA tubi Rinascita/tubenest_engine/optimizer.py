@@ -1950,6 +1950,14 @@ def _global_compact_rods(
     _PARALLEL_STATS["global_compaction_seconds"] = (
         time.perf_counter() - started
     )
+    _PARALLEL_STATS["total_seconds"] = (
+        float(_PARALLEL_STATS.get("total_seconds") or 0.0)
+        + float(_PARALLEL_STATS["global_compaction_seconds"])
+    )
+    _PARALLEL_STATS["strategy"] = (
+        str(_PARALLEL_STATS.get("strategy") or "geometry")
+        + "+global_compaction"
+    )
     return rods
 
 
