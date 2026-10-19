@@ -3269,6 +3269,32 @@ def _optimize_normalized(
         )
 
 
+def optimize_locked_sequence_dict(items, rod_length=DEFAULT_ROD_LENGTH,
+                                  gap_mm=DEFAULT_GAP_MM,
+                                  dead_zone_mm=DEFAULT_CHUCK_DEAD_ZONE):
+    """Fit rotations/end-for-end poses without changing the user's rod order."""
+    _reset_pairwise_fit_stats()
+    normalized = _normalize_items(items, rod_length)
+    if not normalized:
+        raise ValueError("La verga non contiene pezzi.")
+    state = _optimize_fixed_item_sequence(
+        normalized, list(range(len(normalized))),
+        rod_length=float(rod_length),
+        dead_zone_mm=float(dead_zone_mm),
+        gap_mm=max(0.0, float(gap_mm)),
+    )
+    if state is None:
+        raise ValueError(
+            "I pezzi non entrano sulla verga nell'ordine scelto con "
+            "rotazioni e ribaltamenti consentiti. Modifica l'ordine o "
+            "rimuovi un pezzo."
+        )
+    return _rod_to_dict(
+        state, normalized, rod_length=float(rod_length),
+        dead_zone_mm=float(dead_zone_mm), gap_mm=max(0.0, float(gap_mm)),
+    )
+
+
 def optimize_items_dict(
     items,
     rod_length=DEFAULT_ROD_LENGTH,
@@ -3284,26 +3310,13 @@ def optimize_items_dict(
         return []
 
     algorithm = str(algorithm or "current").strip().lower()
-    if algorithm == "global_compaction":
-        algorithm = "best_fit"
-    if algorithm not in {"current", "best_fit"}:
-        algorithm = "current"
-    _PARALLEL_STATS["algorithm"] = algorithm
-
-    if algorithm == "best_fit":
-        rods = _fast_best_fit_optimize(
-            normalized,
-            rod_length=float(rod_length),
-            dead_zone_mm=float(dead_zone_mm),
-            gap_mm=max(0.0, float(gap_mm)),
-        )
-    else:
-        rods = _optimize_normalized(
-            normalized,
-            rod_length=float(rod_length),
-            dead_zone_mm=float(dead_zone_mm),
-            gap_mm=max(0.0, float(gap_mm)),
-        )
+    _PARALLEL_STATS["algorithm"] = "current"
+    rods = _optimize_normalized(
+        normalized,
+        rod_length=float(rod_length),
+        dead_zone_mm=float(dead_zone_mm),
+        gap_mm=max(0.0, float(gap_mm)),
+    )
     rods.sort(
         key=lambda state: (
             -round(state.used_span, 6),
