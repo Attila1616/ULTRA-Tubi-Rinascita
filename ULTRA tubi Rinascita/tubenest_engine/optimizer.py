@@ -125,6 +125,8 @@ def _reset_parallel_stats():
         precompute_seconds=0.0,
         precomputed_transitions=0,
         precomputed_failures=0,
+        precompute_estimated_transitions=0,
+        precompute_skipped_memory_guard=False,
         unique_type_count=0,
         strategy="serial_small_job",
         algorithm="current",
