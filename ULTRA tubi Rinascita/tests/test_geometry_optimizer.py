@@ -471,6 +471,55 @@ class GeometryOptimizerTests(unittest.TestCase):
             before,
         )
 
+    def test_very_large_diverse_group_avoids_process_pool_memory_duplication(self):
+        pieces = [
+            optimizer_module.OptimizerItem(
+                index=index,
+                instance_key=f"M::{index}",
+                source_id=f"M{index}",
+                nominal_length=200.0 + index,
+                tube_part=make_part(200.0 + index),
+            )
+            for index in range(
+                optimizer_module.PARALLEL_MAX_ITEMS + 1
+            )
+        ]
+        self.assertFalse(
+            optimizer_module._should_use_process_pool(pieces)
+        )
+
+    def test_pairwise_precompute_has_memory_guard(self):
+        pieces = [
+            optimizer_module.OptimizerItem(
+                index=index,
+                instance_key=f"C::{index}",
+                source_id=f"C{index}",
+                nominal_length=500.0 + index,
+                tube_part=make_nonplanar_v_part(
+                    length=500.0 + index,
+                    sample_count=64,
+                ),
+            )
+            for index in range(55)
+        ]
+
+        optimizer_module._reset_parallel_stats()
+        optimizer_module._PAIRWISE_FIT_CACHE.clear()
+        catalog = optimizer_module._precompute_pairwise_catalog(
+            pieces,
+            2.0,
+        )
+
+        self.assertEqual(catalog, {})
+        stats = optimizer_module.get_parallel_stats()
+        self.assertTrue(
+            stats["precompute_skipped_memory_guard"]
+        )
+        self.assertGreater(
+            stats["precompute_estimated_transitions"],
+            optimizer_module.PAIRWISE_PRECOMPUTE_MAX_TRANSITIONS,
+        )
+
     def test_diverse_group_can_use_process_pool_strategy(self):
         diverse = [
             optimizer_module.OptimizerItem(
