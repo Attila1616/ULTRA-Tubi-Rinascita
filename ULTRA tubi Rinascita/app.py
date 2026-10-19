@@ -48,6 +48,12 @@ class Api:
     def get_config_settings(self):
         self.config = logic.load_config() or {}
         self.config.setdefault("nesting_gap_mm", 2.0)
+        nesting_algorithm = str(
+            self.config.get("nesting_algorithm") or "current"
+        ).strip().lower()
+        if nesting_algorithm not in {"current", "global_compaction"}:
+            nesting_algorithm = "current"
+        self.config["nesting_algorithm"] = nesting_algorithm
         self.config.setdefault("nesting_debug_enabled", True)
         self.config.setdefault("nested_text_marking_enabled", False)
         self.config.setdefault("nested_text_marking_height_mm", 5.0)
@@ -92,6 +98,17 @@ class Api:
             updated["nesting_gap_mm"] = max(0.0, float(payload.get("nesting_gap_mm", 2.0)))
         except (TypeError, ValueError):
             updated["nesting_gap_mm"] = 2.0
+
+        nesting_algorithm = str(
+            payload.get(
+                "nesting_algorithm",
+                updated.get("nesting_algorithm", "current"),
+            )
+            or "current"
+        ).strip().lower()
+        if nesting_algorithm not in {"current", "global_compaction"}:
+            nesting_algorithm = "current"
+        updated["nesting_algorithm"] = nesting_algorithm
 
         updated["inventory_request_enabled"] = bool(payload.get("inventory_request_enabled"))
         updated["nested_text_marking_enabled"] = bool(
