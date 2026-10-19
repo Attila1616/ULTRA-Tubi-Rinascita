@@ -60,18 +60,17 @@ CONTOUR_REFINE_MAX_CANDIDATE_TYPES = 24
 CONTOUR_REFINE_UTILIZATION_THRESHOLD = 0.90
 MAX_CPU_WORKERS = 24
 
-# Optional slower material-first mode. The current optimizer remains the
-# default. Global compaction deliberately spends more search time after the
-# normal plan exists: it re-searches whole rod memberships (instead of only
-# stitching existing sequences) and then tries to empty short rods by moving
-# individual pieces into other rods. This is aimed at cases where a different
-# order lets the final legal piece extend into the chuck/dead-zone and saves an
-# otherwise wasted stock rod.
-GLOBAL_COMPACTION_BEAM_WIDTH = 220
-GLOBAL_COMPACTION_MAX_CANDIDATE_TYPES = 48
-GLOBAL_COMPACTION_MERGE_ATTEMPT_LIMIT = 120
-GLOBAL_REDISTRIBUTION_DONOR_MAX_PIECES = 10
-GLOBAL_REDISTRIBUTION_ATTEMPT_LIMIT = 120
+# Optional second algorithm: fast best-fit insertion.
+#
+# It deliberately avoids the combinatorial beam/global-compaction search.
+# Pieces are inserted into every useful position of existing rod sequences and
+# only the poses for that fixed order are solved. This keeps the search close to
+# polynomial while still allowing a small piece to be inserted before the last
+# piece so that the last piece can legally extend into the 400 mm chuck zone.
+FAST_BEST_FIT_MAX_INSERTION_POSITIONS = 18
+FAST_BEST_FIT_CONSOLIDATION_PASSES = 3
+FAST_BEST_FIT_DONOR_MAX_PIECES = 12
+FAST_BEST_FIT_DONOR_ATTEMPTS = 180
 
 _PAIRWISE_FIT_CACHE = {}
 _PAIRWISE_FIT_ERROR_TAG = "__FIT_ERROR__"
@@ -130,11 +129,10 @@ def _reset_parallel_stats():
         unique_type_count=0,
         strategy="serial_small_job",
         algorithm="current",
-        global_compaction_seconds=0.0,
-        global_pair_merge_seconds=0.0,
-        global_redistribution_seconds=0.0,
-        global_rods_before=0,
-        global_rods_after=0,
+        fast_best_fit_seconds=0.0,
+        fast_best_fit_insertion_attempts=0,
+        fast_best_fit_consolidation_attempts=0,
+        fast_best_fit_rods=0,
     )
 
 
@@ -1669,71 +1667,18 @@ def _refine_fixed_sequence_poses(
     if rod is None or not rod.placed:
         return rod
 
-    sequence = [placed.item_index for placed in rod.placed]
-    accessible_limit = float(rod_length) - float(dead_zone_mm)
-    states = [RodSearchState()]
-
-    for item_index in sequence:
-        item = items[item_index]
-        next_states = []
-        for state in states:
-            if not state.placed:
-                poses = _first_pose_candidates(item)
-            else:
-                previous = state.placed[-1]
-                previous_item = items[previous.item_index]
-                poses = _next_pose_candidates(
-                    previous_item,
-                    previous.pose,
-                    item,
-                    state.rectangle_family,
-                )
-            for pose in poses:
-                candidate = _append_candidate(
-                    state,
-                    item,
-                    pose,
-                    items,
-                    rod_length=rod_length,
-                    accessible_limit=accessible_limit,
-                    dead_zone_mm=dead_zone_mm,
-                    gap_mm=gap_mm,
-                )
-                if candidate is not None:
-                    next_states.append(candidate)
-
-        if not next_states:
-            return rod
-
-        best_by_pose = {}
-        for state in next_states:
-            last = state.placed[-1]
-            key = (
-                round(
-                    _normalize_angle(
-                        last.pose.axial_rotation_degrees
-                    ),
-                    6,
-                ),
-                bool(last.pose.reversed_end_for_end),
-                state.rectangle_family,
-                bool(state.tail_used),
-            )
-            previous = best_by_pose.get(key)
-            if previous is None or _terminal_score(
-                state,
-                True,
-            ) < _terminal_score(previous, True):
-                best_by_pose[key] = state
-        states = list(best_by_pose.values())
-
-    if not states:
-        return rod
-    best = min(
-        states,
-        key=lambda state: _terminal_score(state, True),
+    sequence = [
+        placed.item_index
+        for placed in rod.placed
+    ]
+    best = _optimize_fixed_item_sequence(
+        items,
+        sequence,
+        rod_length=rod_length,
+        dead_zone_mm=dead_zone_mm,
+        gap_mm=gap_mm,
     )
-    if best.used_mask != rod.used_mask:
+    if best is None or best.used_mask != rod.used_mask:
         return rod
     return best
 
@@ -1814,6 +1759,466 @@ def _refine_rods(
         if refined is not None:
             result[index] = refined
     return result
+
+
+def _optimize_fixed_item_sequence(
+    items,
+    sequence,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Optimize legal poses for one fixed piece order.
+
+    State count is bounded by the legal pose set of the last part rather than
+    by permutations of every part. This makes it suitable for interactive
+    insertion tests even on production jobs with many pieces.
+    """
+    sequence = [int(index) for index in sequence]
+    if not sequence:
+        return None
+
+    accessible_limit = float(rod_length) - float(dead_zone_mm)
+    states = [RodSearchState()]
+
+    for item_index in sequence:
+        item = items[item_index]
+        next_states = []
+
+        for state in states:
+            # Once a piece enters the chuck/dead zone it must be the final
+            # piece on the rod. This mirrors _search_single_rod.
+            if state.tail_used:
+                continue
+
+            if not state.placed:
+                poses = _first_pose_candidates(item)
+            else:
+                previous = state.placed[-1]
+                previous_item = items[previous.item_index]
+                poses = _next_pose_candidates(
+                    previous_item,
+                    previous.pose,
+                    item,
+                    state.rectangle_family,
+                )
+
+            for pose in poses:
+                candidate = _append_candidate(
+                    state,
+                    item,
+                    pose,
+                    items,
+                    rod_length=rod_length,
+                    accessible_limit=accessible_limit,
+                    dead_zone_mm=dead_zone_mm,
+                    gap_mm=gap_mm,
+                )
+                if candidate is not None:
+                    next_states.append(candidate)
+
+        if not next_states:
+            return None
+
+        best_by_pose = {}
+        for state in next_states:
+            last = state.placed[-1]
+            key = (
+                round(
+                    _normalize_angle(
+                        last.pose.axial_rotation_degrees
+                    ),
+                    6,
+                ),
+                bool(last.pose.reversed_end_for_end),
+                state.rectangle_family,
+                bool(state.tail_used),
+            )
+            previous = best_by_pose.get(key)
+            if (
+                previous is None
+                or _terminal_score(state, True)
+                < _terminal_score(previous, True)
+            ):
+                best_by_pose[key] = state
+        states = list(best_by_pose.values())
+
+    expected_mask = 0
+    for item_index in sequence:
+        expected_mask |= 1 << item_index
+    candidates = [
+        state
+        for state in states
+        if state.used_mask == expected_mask
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda state: _terminal_score(state, True),
+    )
+
+
+def _insertion_positions(sequence):
+    count = len(sequence)
+    positions = list(range(count + 1))
+    if len(positions) <= FAST_BEST_FIT_MAX_INSERTION_POSITIONS:
+        return positions
+
+    # Keep both ends, the positions around the last piece (important for the
+    # chuck-zone case), and evenly distributed interior samples.
+    wanted = {
+        0,
+        1,
+        max(0, count - 1),
+        count,
+    }
+    slots = max(
+        0,
+        FAST_BEST_FIT_MAX_INSERTION_POSITIONS - len(wanted),
+    )
+    if slots:
+        for step in range(1, slots + 1):
+            wanted.add(
+                round(
+                    step * count / (slots + 1)
+                )
+            )
+    return sorted(
+        position
+        for position in wanted
+        if 0 <= position <= count
+    )
+
+
+def _best_insert_item_fixed_order(
+    items,
+    rod,
+    item_index,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Return the best rod obtained by inserting one item into this sequence."""
+    sequence = [
+        placed.item_index
+        for placed in rod.placed
+    ]
+    best = None
+
+    for position in _insertion_positions(sequence):
+        candidate_sequence = (
+            sequence[:position]
+            + [int(item_index)]
+            + sequence[position:]
+        )
+        candidate = _optimize_fixed_item_sequence(
+            items,
+            candidate_sequence,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+        )
+        _PARALLEL_STATS["fast_best_fit_insertion_attempts"] += 1
+        if candidate is None:
+            continue
+
+        key = (
+            -round(float(candidate.used_span), 6),
+            -int(candidate.common_lines),
+            0 if candidate.tail_used else 1,
+            position,
+        )
+        if best is None or key < best[0]:
+            best = (key, candidate)
+
+    return best[1] if best is not None else None
+
+
+def _fast_best_fit_build(
+    items,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+    order,
+):
+    rods = []
+
+    for item_index in order:
+        choices = []
+        for rod_index, rod in enumerate(rods):
+            candidate = _best_insert_item_fixed_order(
+                items,
+                rod,
+                item_index,
+                rod_length=rod_length,
+                dead_zone_mm=dead_zone_mm,
+                gap_mm=gap_mm,
+            )
+            if candidate is None:
+                continue
+
+            # Best-fit: fill an existing rod as tightly as possible. A legal
+            # tail-flip is preferred when utilization is otherwise similar.
+            key = (
+                round(
+                    float(rod_length)
+                    - float(candidate.used_span),
+                    6,
+                ),
+                0 if candidate.tail_used else 1,
+                -int(candidate.common_lines),
+                rod_index,
+            )
+            choices.append((key, rod_index, candidate))
+
+        if choices:
+            _key, rod_index, candidate = min(
+                choices,
+                key=lambda value: value[0],
+            )
+            rods[rod_index] = candidate
+            continue
+
+        candidate = _optimize_fixed_item_sequence(
+            items,
+            [item_index],
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+        )
+        if candidate is None:
+            raise ValueError(
+                "No machine-safe nesting found for piece "
+                + items[item_index].instance_key
+            )
+        rods.append(candidate)
+
+    return rods
+
+
+def _fast_plan_score(rods):
+    """Prefer fewer rods, then a smaller final/shortest leftover rod."""
+    if not rods:
+        return (0, 0.0, 0.0, ())
+    used = sorted(
+        (float(rod.used_span) for rod in rods),
+        reverse=True,
+    )
+    return (
+        len(rods),
+        round(sum(float(rod.used_span) for rod in rods), 6),
+        round(min(used), 6),
+        tuple(round(value, 6) for value in used),
+    )
+
+
+def _fast_redistribute_short_rods(
+    items,
+    rods,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Try to eliminate short rods using fixed-order insertions only."""
+    rods = list(rods)
+
+    for _pass in range(FAST_BEST_FIT_CONSOLIDATION_PASSES):
+        improved = False
+        donor_order = sorted(
+            range(len(rods)),
+            key=lambda index: (
+                float(rods[index].nominal_packed),
+                float(rods[index].used_span),
+                int(rods[index].piece_count),
+                index,
+            ),
+        )
+
+        for donor_index in donor_order:
+            donor = rods[donor_index]
+            donor_items = [
+                placed.item_index
+                for placed in donor.placed
+            ]
+            if (
+                not donor_items
+                or len(donor_items)
+                > FAST_BEST_FIT_DONOR_MAX_PIECES
+            ):
+                continue
+
+            # Smaller pieces first are more likely to consume leftover material
+            # in the already-full receiver rods.
+            donor_items.sort(
+                key=lambda index: (
+                    float(items[index].physical_length),
+                    str(items[index].instance_key),
+                )
+            )
+            receivers = [
+                rod
+                for index, rod in enumerate(rods)
+                if index != donor_index
+            ]
+            attempts = 0
+            failed = set()
+
+            def assign(position, current_receivers):
+                nonlocal attempts
+                if position >= len(donor_items):
+                    return current_receivers
+                if attempts >= FAST_BEST_FIT_DONOR_ATTEMPTS:
+                    return None
+
+                state_key = (
+                    position,
+                    tuple(
+                        int(receiver.used_mask)
+                        for receiver in current_receivers
+                    ),
+                )
+                if state_key in failed:
+                    return None
+
+                item_index = donor_items[position]
+                choices = []
+                for receiver_index, receiver in enumerate(
+                    current_receivers
+                ):
+                    if attempts >= FAST_BEST_FIT_DONOR_ATTEMPTS:
+                        break
+                    attempts += 1
+                    _PARALLEL_STATS[
+                        "fast_best_fit_consolidation_attempts"
+                    ] += 1
+                    candidate = _best_insert_item_fixed_order(
+                        items,
+                        receiver,
+                        item_index,
+                        rod_length=rod_length,
+                        dead_zone_mm=dead_zone_mm,
+                        gap_mm=gap_mm,
+                    )
+                    if candidate is None:
+                        continue
+                    choices.append(
+                        (
+                            round(
+                                float(rod_length)
+                                - float(candidate.used_span),
+                                6,
+                            ),
+                            0 if candidate.tail_used else 1,
+                            receiver_index,
+                            candidate,
+                        )
+                    )
+
+                choices.sort(
+                    key=lambda value: value[:3]
+                )
+                for (
+                    _remaining,
+                    _tail_rank,
+                    receiver_index,
+                    candidate,
+                ) in choices:
+                    updated = list(current_receivers)
+                    updated[receiver_index] = candidate
+                    solved = assign(position + 1, updated)
+                    if solved is not None:
+                        return solved
+
+                failed.add(state_key)
+                return None
+
+            redistributed = assign(0, receivers)
+            if redistributed is None:
+                continue
+
+            rods = list(redistributed)
+            improved = True
+            break
+
+        if not improved:
+            break
+
+    return rods
+
+
+def _fast_best_fit_optimize(
+    items,
+    rod_length,
+    dead_zone_mm,
+    gap_mm,
+):
+    """Fast secondary nesting algorithm with insertion-based local search."""
+    started = time.perf_counter()
+
+    indices = list(range(len(items)))
+    orders = [
+        sorted(
+            indices,
+            key=lambda index: (
+                -float(items[index].physical_length),
+                str(items[index].instance_key),
+            ),
+        ),
+        sorted(
+            indices,
+            key=lambda index: (
+                float(items[index].physical_length),
+                str(items[index].instance_key),
+            ),
+        ),
+        sorted(
+            indices,
+            key=lambda index: (
+                -_pose_branch_estimate(items[index], first=True),
+                -float(items[index].physical_length),
+                str(items[index].instance_key),
+            ),
+        ),
+    ]
+
+    candidates = []
+    seen_orders = set()
+    for order in orders:
+        key = tuple(order)
+        if key in seen_orders:
+            continue
+        seen_orders.add(key)
+        plan = _fast_best_fit_build(
+            items,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+            order=order,
+        )
+        plan = _fast_redistribute_short_rods(
+            items,
+            plan,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+        )
+        candidates.append(plan)
+
+    rods = min(
+        candidates,
+        key=_fast_plan_score,
+    )
+    _PARALLEL_STATS["algorithm"] = "best_fit"
+    _PARALLEL_STATS["strategy"] = "fast_fixed_order_best_fit"
+    _PARALLEL_STATS["fast_best_fit_rods"] = len(rods)
+    _PARALLEL_STATS["fast_best_fit_seconds"] = (
+        time.perf_counter() - started
+    )
+    _PARALLEL_STATS["total_seconds"] = (
+        _PARALLEL_STATS["fast_best_fit_seconds"]
+    )
+    return rods
 
 
 def _deep_merge_all_rod_pairs(
@@ -2125,6 +2530,37 @@ def _rod_to_dict(state, items, rod_length, dead_zone_mm, gap_mm):
             end_a, end_b = posed_ends(part, placed.pose)
 
         physical_length = item.physical_length
+        if position == 0:
+            attempted_poses = _first_pose_candidates(item)
+        else:
+            previous_placed = state.placed[position - 1]
+            previous_item = items[previous_placed.item_index]
+            attempted_poses = _next_pose_candidates(
+                previous_item,
+                previous_placed.pose,
+                item,
+                state.rectangle_family,
+            )
+        attempted_rotations = sorted(
+            {
+                round(
+                    _normalize_angle(
+                        candidate.axial_rotation_degrees
+                    ),
+                    3,
+                )
+                for candidate in attempted_poses
+            }
+        )
+        attempted_reversed = any(
+            bool(candidate.reversed_end_for_end)
+            for candidate in attempted_poses
+        )
+        attempted_normal = any(
+            not bool(candidate.reversed_end_for_end)
+            for candidate in attempted_poses
+        )
+
         placement = {
             "instance_key": item.instance_key,
             "source_id": item.source_id,
@@ -2134,6 +2570,9 @@ def _rod_to_dict(state, items, rod_length, dead_zone_mm, gap_mm):
             "nominal_length": float(item.nominal_length),
             "axial_rotation_degrees": float(_normalize_angle(placed.pose.axial_rotation_degrees)),
             "reversed_end_for_end": bool(placed.pose.reversed_end_for_end),
+            "rotation_candidates_degrees": attempted_rotations,
+            "candidate_normal_orientation": attempted_normal,
+            "candidate_reversed_orientation": attempted_reversed,
             "geometry_available": bool(part),
             "part_fingerprint": part.get("part_fingerprint") if part else None,
             "source_sha256": part.get("source_sha256") if part else None,
@@ -2194,20 +2633,22 @@ def optimize_items(
         return []
 
     algorithm = str(algorithm or "current").strip().lower()
-    if algorithm not in {"current", "global_compaction"}:
+    if algorithm == "global_compaction":
+        algorithm = "best_fit"
+    if algorithm not in {"current", "best_fit"}:
         algorithm = "current"
     _PARALLEL_STATS["algorithm"] = algorithm
 
-    rods = _optimize_normalized(
-        normalized,
-        rod_length=rod_length,
-        dead_zone_mm=dead_zone_mm,
-        gap_mm=gap_mm,
-    )
-    if algorithm == "global_compaction":
-        rods = _global_compact_rods(
+    if algorithm == "best_fit":
+        rods = _fast_best_fit_optimize(
             normalized,
-            rods,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+        )
+    else:
+        rods = _optimize_normalized(
+            normalized,
             rod_length=rod_length,
             dead_zone_mm=dead_zone_mm,
             gap_mm=gap_mm,
@@ -2913,20 +3354,22 @@ def optimize_items_dict(
         return []
 
     algorithm = str(algorithm or "current").strip().lower()
-    if algorithm not in {"current", "global_compaction"}:
+    if algorithm == "global_compaction":
+        algorithm = "best_fit"
+    if algorithm not in {"current", "best_fit"}:
         algorithm = "current"
     _PARALLEL_STATS["algorithm"] = algorithm
 
-    rods = _optimize_normalized(
-        normalized,
-        rod_length=float(rod_length),
-        dead_zone_mm=float(dead_zone_mm),
-        gap_mm=max(0.0, float(gap_mm)),
-    )
-    if algorithm == "global_compaction":
-        rods = _global_compact_rods(
+    if algorithm == "best_fit":
+        rods = _fast_best_fit_optimize(
             normalized,
-            rods,
+            rod_length=float(rod_length),
+            dead_zone_mm=float(dead_zone_mm),
+            gap_mm=max(0.0, float(gap_mm)),
+        )
+    else:
+        rods = _optimize_normalized(
+            normalized,
             rod_length=float(rod_length),
             dead_zone_mm=float(dead_zone_mm),
             gap_mm=max(0.0, float(gap_mm)),
