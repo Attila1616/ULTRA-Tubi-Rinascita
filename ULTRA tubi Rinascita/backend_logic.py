@@ -55,7 +55,7 @@ NESTING_CACHE_FILE = runtime_paths.NESTING_CACHE_FILE
 
 _NESTING_GROUP_CACHE = {}
 _NESTING_GROUP_CACHE_LIMIT = 128
-_NESTING_CACHE_VERSION = 5
+_NESTING_CACHE_VERSION = 6
 _NESTING_GROUP_CACHE_LOADED = False
 _NESTING_CACHE_LOCK = threading.RLock()
 _NESTING_VALIDATION_CACHE = {}
@@ -1540,13 +1540,7 @@ def nest_piece_groups(groups, rod_length=6000):
         except (TypeError, ValueError):
             gap_mm = 2.0
 
-        nesting_algorithm = str(
-            config.get("nesting_algorithm") or "current"
-        ).strip().lower()
-        if nesting_algorithm == "global_compaction":
-            nesting_algorithm = "best_fit"
-        if nesting_algorithm not in {"current", "best_fit"}:
-            nesting_algorithm = "current"
+        nesting_algorithm = "current"
 
         _load_persistent_nesting_cache()
 
