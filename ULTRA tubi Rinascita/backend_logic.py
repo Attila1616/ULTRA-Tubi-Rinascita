@@ -1543,7 +1543,9 @@ def nest_piece_groups(groups, rod_length=6000):
         nesting_algorithm = str(
             config.get("nesting_algorithm") or "current"
         ).strip().lower()
-        if nesting_algorithm not in {"current", "global_compaction"}:
+        if nesting_algorithm == "global_compaction":
+            nesting_algorithm = "best_fit"
+        if nesting_algorithm not in {"current", "best_fit"}:
             nesting_algorithm = "current"
 
         _load_persistent_nesting_cache()
@@ -1645,8 +1647,8 @@ def nest_piece_groups(groups, rod_length=6000):
                 "tubeType": tube_type,
                 "rods": rods,
                 "optimizer": (
-                    "geometry-global-compaction"
-                    if nesting_algorithm == "global_compaction"
+                    "geometry-fast-best-fit"
+                    if nesting_algorithm == "best_fit"
                     else "geometry-current"
                 ),
                 "nestingAlgorithm": nesting_algorithm,
