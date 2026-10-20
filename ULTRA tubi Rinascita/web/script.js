@@ -212,6 +212,7 @@ if (searchModal) searchModal.addEventListener('mousedown', (e) => { if (e.target
     document.getElementById('db-import-codes-btn')?.addEventListener('click', importTubeCodes);
     document.getElementById('db-add-code-btn')?.addEventListener('click', addManualTubeCode);
     document.getElementById('db-codes-docx-btn')?.addEventListener('click', generateTubeCodesDocx);
+    document.getElementById('db-multi-location-docx-btn')?.addEventListener('click', generateMultiLocationTubesDocx);
     document.getElementById('db-export-xlsx-btn')?.addEventListener('click', openInventoryExportModal);
     document.getElementById('db-order-priorities-btn')?.addEventListener('click', openOrderPriorityModal);
     document.getElementById('db-order-txt-btn')?.addEventListener('click', generateTubeOrderTxt);
@@ -1666,6 +1667,32 @@ async function generateTubeCodesDocx() {
         alert('Errore durante generazione Lista Codici.');
     }
 }
+async function generateMultiLocationTubesDocx() {
+    try {
+        const resp = await window.pywebview.api.generate_multi_location_tubes_docx();
+        if (!resp || resp.status !== 'success') {
+            alert(
+                resp?.message
+                || 'Errore durante generazione lista tubi multi-posizione.'
+            );
+            return;
+        }
+        alert(
+            'Lista tubi multi-posizione generata:\n'
+            + String(resp.path || '')
+            + '\n\nTipi tubo: '
+            + String(resp.rows_count ?? 0)
+            + '\nPosizioni totali elencate: '
+            + String(resp.positions_count ?? 0)
+        );
+    } catch (e) {
+        console.error(e);
+        alert(
+            'Errore durante generazione lista tubi multi-posizione.'
+        );
+    }
+}
+
 function orderPriorityTubeLabel(row) {
     const misura = String(row.misura || '').split('x').map(part => part.replace('.', ',')).join('x');
     const spessore = String(row.spessore || '').replace('.', ',');
