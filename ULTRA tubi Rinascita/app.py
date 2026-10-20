@@ -565,6 +565,25 @@ class Api:
             traceback.print_exc()
             return {"status": "error", "message": "Errore durante la generazione Lista Codici."}
 
+    def generate_multi_location_tubes_docx(self):
+        try:
+            return logic.generate_multi_location_tubes_docx(
+                self.da_fare_path
+            )
+        except Exception:
+            print(
+                "--- PYTHON ERROR in "
+                "generate_multi_location_tubes_docx ---"
+            )
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": (
+                    "Errore durante la generazione della lista "
+                    "tubi multi-posizione."
+                ),
+            }
+
     def generate_tube_inventory_xlsx(self, include_missing_codes=True):
         try:
             return logic.generate_tube_inventory_xlsx(bool(include_missing_codes), self.da_fare_path)
