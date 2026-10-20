@@ -28,11 +28,12 @@ from datetime import datetime
 try:
     from docx import Document
     from docx.shared import Pt, Mm
+    from docx.enum.section import WD_ORIENT
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
 except Exception:  # allow app to run even if python-docx isn't installed yet
     Document = None
-    Pt = Mm = OxmlElement = qn = None
+    Pt = Mm = WD_ORIENT = OxmlElement = qn = None
 
 # --- Robust Path Management ---
 def get_app_data_path():
@@ -1030,6 +1031,187 @@ def generate_tube_codes_docx(da_fare_path=None):
     except Exception:
         traceback.print_exc()
         return {"status": "error", "message": "Errore durante la generazione della Lista Codici."}
+
+def generate_multi_location_tubes_docx(da_fare_path=None):
+    """Create a print-ready list of tubes stocked in more than one position."""
+    if Document is None:
+        return {"status": "error", "message": "python-docx non e installato."}
+
+    ensure_result = ensure_tube_database(da_fare_path)
+    if ensure_result.get("status") != "success":
+        return {
+            "status": "error",
+            "message": ensure_result.get(
+                "message",
+                "Database Tubi non disponibile.",
+            ),
+        }
+
+    try:
+        rows = tube_database.get_multi_location_tubes(
+            VARIABLES_ROOT
+        )
+
+        output_dir = _get_docx_output_dir_fallback(
+            da_fare_path,
+            "codes_docx_output_dir",
+        )
+        filename = (
+            "Tubi Multi-Posizione "
+            + datetime.now().strftime("%Y-%m-%d %H%M")
+            + ".docx"
+        )
+        file_path = os.path.join(output_dir, filename)
+
+        doc = Document()
+        section = doc.sections[0]
+        section.orientation = WD_ORIENT.LANDSCAPE
+        section.page_width = Mm(297)
+        section.page_height = Mm(210)
+        section.left_margin = Mm(10)
+        section.right_margin = Mm(10)
+        section.top_margin = Mm(10)
+        section.bottom_margin = Mm(10)
+
+        title = doc.add_paragraph("Tubi presenti in piu posizioni")
+        title_run = (
+            title.runs[0]
+            if title.runs
+            else title.add_run("Tubi presenti in piu posizioni")
+        )
+        title_run.bold = True
+        title_run.font.size = Pt(18)
+        title.paragraph_format.space_after = Pt(3)
+
+        generated = doc.add_paragraph(
+            "Generata: "
+            + datetime.now().strftime("%d/%m/%Y %H:%M")
+        )
+        generated.paragraph_format.space_after = Pt(0)
+
+        note = doc.add_paragraph(
+            "Sono inclusi solo i tubi con quantita positiva presenti "
+            "in almeno 2 posizioni distinte."
+        )
+        note.paragraph_format.space_after = Pt(5)
+
+        summary = doc.add_paragraph(
+            f"Tipi tubo multi-posizione: {len(rows)}"
+        )
+        summary.paragraph_format.space_after = Pt(7)
+
+        if not rows:
+            doc.add_paragraph(
+                "Nessun tubo risulta presente in piu posizioni."
+            )
+        else:
+            table = doc.add_table(rows=1, cols=5)
+            table.style = "Table Grid"
+            table.autofit = False
+
+            tbl_pr = table._tbl.tblPr
+            layout = OxmlElement("w:tblLayout")
+            layout.set(qn("w:type"), "fixed")
+            tbl_pr.append(layout)
+
+            widths = [Mm(78), Mm(35), Mm(18), Mm(18), Mm(128)]
+            headers = [
+                "Misura tubo",
+                "Codice",
+                "Totale",
+                "Pos.",
+                "Ubicazioni",
+            ]
+
+            header_row = table.rows[0]
+            for index, (header, width) in enumerate(
+                zip(headers, widths)
+            ):
+                cell = header_row.cells[index]
+                cell.width = width
+                cell.text = header
+                shading = OxmlElement("w:shd")
+                shading.set(qn("w:fill"), "D9E2F3")
+                cell._tc.get_or_add_tcPr().append(shading)
+                for paragraph in cell.paragraphs:
+                    paragraph.paragraph_format.space_after = Pt(0)
+                    for run in paragraph.runs:
+                        run.bold = True
+                        run.font.size = Pt(9)
+
+            tr_pr = header_row._tr.get_or_add_trPr()
+            table_header = OxmlElement("w:tblHeader")
+            table_header.set(qn("w:val"), "true")
+            tr_pr.append(table_header)
+
+            for row in rows:
+                cells = table.add_row().cells
+                positions = row.get("posizioni") or []
+
+                cells[0].text = tube_database.display_tube_measure(
+                    row.get("misura"),
+                    row.get("spessore"),
+                    row.get("materiale"),
+                    row.get("finitura"),
+                    include_defaults=True,
+                )
+                cells[1].text = str(
+                    row.get("codice")
+                    or "CODICE MANCANTE"
+                )
+                cells[2].text = str(
+                    int(row.get("quantitaTotale") or 0)
+                )
+                cells[3].text = str(
+                    int(row.get("numeroPosizioni") or len(positions))
+                )
+                cells[4].text = "\n".join(
+                    f"{position.get('label') or '?'} - "
+                    f"{int(position.get('quantita') or 0)} pz"
+                    for position in positions
+                )
+
+                for index, width in enumerate(widths):
+                    cells[index].width = width
+                    for paragraph in cells[index].paragraphs:
+                        paragraph.paragraph_format.space_after = Pt(0)
+                        paragraph.paragraph_format.space_before = Pt(0)
+                        for run in paragraph.runs:
+                            run.font.size = Pt(9)
+
+                if not row.get("hasCode"):
+                    for paragraph in cells[1].paragraphs:
+                        for run in paragraph.runs:
+                            run.bold = True
+                    shading = OxmlElement("w:shd")
+                    shading.set(qn("w:fill"), "FFF2CC")
+                    cells[1]._tc.get_or_add_tcPr().append(shading)
+
+                row_pr = table.rows[-1]._tr.get_or_add_trPr()
+                cant_split = OxmlElement("w:cantSplit")
+                row_pr.append(cant_split)
+
+        doc.save(file_path)
+        os.startfile(file_path)
+        return {
+            "status": "success",
+            "path": file_path,
+            "rows_count": len(rows),
+            "positions_count": sum(
+                int(row.get("numeroPosizioni") or 0)
+                for row in rows
+            ),
+        }
+    except Exception:
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": (
+                "Errore durante la generazione della lista "
+                "tubi multi-posizione."
+            ),
+        }
+
 
 def _excel_inventory_value(value):
     normalized = tube_database.decimal_number(value)
