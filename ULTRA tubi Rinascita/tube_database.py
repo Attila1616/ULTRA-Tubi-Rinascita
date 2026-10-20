@@ -914,6 +914,65 @@ def summarize_inventory(project_root, filters=None):
     return rows
 
 
+def get_multi_location_tubes(project_root):
+    """Return stocked tube identities that are present in 2+ positions.
+
+    Position rows are merged by the same compact location label shown in the
+    database UI. Empty/zero-quantity records do not count as a location.
+    """
+    rows = summarize_inventory(project_root, {})
+    result = []
+
+    for row in rows:
+        merged_positions = {}
+        for position in row.get("posizioni") or []:
+            try:
+                quantity = int(position.get("quantita") or 0)
+            except (TypeError, ValueError):
+                quantity = 0
+            if quantity <= 0:
+                continue
+
+            label = str(
+                position.get("label")
+                or format_location_label(
+                    position.get("scaffalatura"),
+                    position.get("ripiano"),
+                )
+                or ""
+            ).strip()
+            if not label:
+                continue
+
+            if label not in merged_positions:
+                merged_positions[label] = {
+                    "label": label,
+                    "quantita": 0,
+                    "scaffalatura": str(position.get("scaffalatura") or ""),
+                    "ripiano": str(position.get("ripiano") or ""),
+                    "tipo": str(position.get("tipo") or ""),
+                }
+            merged_positions[label]["quantita"] += quantity
+
+        if len(merged_positions) < 2:
+            continue
+
+        positions = sorted(
+            merged_positions.values(),
+            key=lambda item: str(item.get("label") or "").lower(),
+        )
+        enriched = dict(row)
+        enriched["posizioni"] = positions
+        enriched["numeroPosizioni"] = len(positions)
+        enriched["quantitaTotale"] = sum(
+            int(position.get("quantita") or 0)
+            for position in positions
+        )
+        result.append(enriched)
+
+    return result
+
+
 def load_locations(project_root, filters=None):
     filters = filters or {}
     locations = []
