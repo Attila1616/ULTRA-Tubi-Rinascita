@@ -306,6 +306,38 @@ class Api:
             "path": paths[0],
         }
 
+    def pick_igs_folder(self):
+        result = window.create_file_dialog(
+            webview.FOLDER_DIALOG,
+        )
+        if not result:
+            return {
+                "status": "cancelled",
+                "path": "",
+            }
+
+        path = result if isinstance(result, str) else result[0]
+        return {
+            "status": "success",
+            "path": str(path),
+        }
+
+    def find_igs_files_in_folder(self, folder_path):
+        try:
+            return logic.find_igs_files_in_folder(
+                folder_path,
+            )
+        except Exception:
+            print("--- PYTHON ERROR in find_igs_files_in_folder ---")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": "Errore durante la scansione della cartella IGS.",
+                "folderPath": str(folder_path or ""),
+                "paths": [],
+                "count": 0,
+            }
+
     def pick_igs_file(self):
         result = self.pick_igs_files()
         if result.get("status") != "success":
