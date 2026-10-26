@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -23,6 +25,62 @@ class IgsBatchConversionTests(unittest.TestCase):
                 backend_logic._igs_batch_worker_count(50),
                 8,
             )
+
+    def test_folder_scan_finds_igs_recursively_and_ignores_other_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            nested = os.path.join(temp_dir, "PROD", "TT", "pezzo")
+            os.makedirs(nested, exist_ok=True)
+
+            expected = [
+                os.path.join(temp_dir, "root.igs"),
+                os.path.join(nested, "part_a.IGS"),
+                os.path.join(nested, "part_b.iges"),
+            ]
+            for path in expected:
+                with open(path, "w", encoding="ascii") as handle:
+                    handle.write("dummy")
+
+            with open(
+                os.path.join(nested, "already.zzx"),
+                "w",
+                encoding="ascii",
+            ) as handle:
+                handle.write("dummy")
+            with open(
+                os.path.join(nested, "notes.txt"),
+                "w",
+                encoding="ascii",
+            ) as handle:
+                handle.write("dummy")
+
+            result = backend_logic.find_igs_files_in_folder(
+                temp_dir
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["count"], 3)
+        self.assertEqual(
+            sorted(
+                os.path.normcase(path)
+                for path in result["paths"]
+            ),
+            sorted(
+                os.path.normcase(path)
+                for path in expected
+            ),
+        )
+
+    def test_folder_scan_rejects_missing_folder(self):
+        result = backend_logic.find_igs_files_in_folder(
+            os.path.join(
+                tempfile.gettempdir(),
+                "ultra-folder-that-does-not-exist-123456",
+            )
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["paths"], [])
+        self.assertEqual(result["count"], 0)
 
     def test_single_file_batch_uses_serial_worker(self):
         fake_result = {
