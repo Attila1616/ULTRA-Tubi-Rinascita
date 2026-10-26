@@ -165,7 +165,8 @@ closeSearchBtn = document.getElementById('close-search-btn');
 
     // Attach all event listeners
     document.getElementById('refresh-button').addEventListener('click', loadTubeData);
-    document.getElementById('igs-to-zzx-btn')?.addEventListener('click', convertIgsFileToZzx);
+    document.getElementById('igs-to-zzx-btn')?.addEventListener('click', () => convertIgsFileToZzx('files'));
+    document.getElementById('igs-folder-to-zzx-btn')?.addEventListener('click', () => convertIgsFileToZzx('folder'));
     document.getElementById('summary-btn').addEventListener('click', openSummaryModal);
     document.getElementById('close-summary-btn').addEventListener('click', closeSummaryModal);
     document.getElementById('settings-btn')?.addEventListener('click', openSettingsModal);
@@ -764,8 +765,11 @@ async function initialize() {
         alert("A critical error occurred on startup. Check the browser console for details.");
     }
 }
-async function convertIgsFileToZzx() {
-    const button = document.getElementById('igs-to-zzx-btn');
+async function convertIgsFileToZzx(sourceMode = 'files') {
+    const folderMode = sourceMode === 'folder';
+    const button = document.getElementById(
+        folderMode ? 'igs-folder-to-zzx-btn' : 'igs-to-zzx-btn'
+    );
     if (!button || button.disabled) return;
 
     const originalText = button.textContent;
@@ -803,9 +807,37 @@ async function convertIgsFileToZzx() {
     };
 
     try {
-        button.textContent = 'Seleziona IGS...';
-        const picked = await window.pywebview.api.pick_igs_files();
-        if (!picked || picked.status === 'cancelled') return;
+        let picked;
+        if (folderMode) {
+            button.textContent = 'Seleziona cartella...';
+            const folder = await window.pywebview.api.pick_igs_folder();
+            if (!folder || folder.status === 'cancelled') return;
+            if (folder.status !== 'success' || !folder.path) {
+                throw new Error(
+                    folder?.message || 'Impossibile selezionare la cartella.'
+                );
+            }
+
+            button.textContent = 'Scansione cartella...';
+            picked = await window.pywebview.api.find_igs_files_in_folder(
+                folder.path
+            );
+            if (!picked || picked.status !== 'success') {
+                throw new Error(
+                    picked?.message || 'Errore durante la scansione della cartella.'
+                );
+            }
+            if (!Array.isArray(picked.paths) || picked.paths.length === 0) {
+                alert(
+                    'Nessun file IGS/IGES trovato nella cartella selezionata o nelle sue sottocartelle.'
+                );
+                return;
+            }
+        } else {
+            button.textContent = 'Seleziona IGS...';
+            picked = await window.pywebview.api.pick_igs_files();
+            if (!picked || picked.status === 'cancelled') return;
+        }
 
         const paths = Array.from(new Set(
             Array.isArray(picked.paths)
@@ -907,9 +939,13 @@ async function convertIgsFileToZzx() {
         }
 
         const summaryLines = [
-            'Conversione IGS completata.',
+            folderMode
+                ? 'Conversione cartella IGS completata.'
+                : 'Conversione IGS completata.',
             '',
-            `Selezionati: ${paths.length}`,
+            folderMode
+                ? `IGS trovati nella cartella: ${paths.length}`
+                : `Selezionati: ${paths.length}`,
             `Convertiti: ${successful.length}`,
             `Già esistenti non sovrascritti: ${skippedExisting}`,
             `Errori: ${failed.length}`
