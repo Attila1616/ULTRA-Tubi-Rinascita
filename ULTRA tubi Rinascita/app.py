@@ -3,8 +3,124 @@ import backend_logic as logic
 import os
 import multiprocessing
 import re
+import subprocess
 import traceback
 import threading
+
+def _pick_windows_explorer_folder(initial_directory=None):
+    """Use the normal Windows Explorer-style file dialog as a folder picker.
+
+    pywebview.FOLDER_DIALOG uses the compact tree-only shell browser on the
+    Windows setup used in production. OpenFileDialog provides the familiar
+    Explorer navigation pane (including Network/UNC locations). A dummy file
+    name lets the current directory itself be accepted as the selected folder.
+    """
+    if os.name != "nt":
+        return None
+
+    powershell = r"""
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Seleziona cartella'
+$dialog.ValidateNames = $false
+$dialog.CheckFileExists = $false
+$dialog.CheckPathExists = $true
+$dialog.Multiselect = $false
+$dialog.FileName = 'Seleziona questa cartella'
+$dialog.Filter = 'Cartella|*.folder'
+
+$initial = $env:ULTRA_FOLDER_PICKER_INITIAL
+if ($initial -and [System.IO.Directory]::Exists($initial)) {
+    $dialog.InitialDirectory = $initial
+}
+
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+    $folder = [System.IO.Path]::GetDirectoryName($dialog.FileName)
+    if ($folder) {
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        Write-Output $folder
+    }
+}
+"""
+
+    environment = os.environ.copy()
+    if initial_directory:
+        environment["ULTRA_FOLDER_PICKER_INITIAL"] = str(
+            initial_directory
+        )
+
+    try:
+        completed = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-STA",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                powershell,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            creationflags=getattr(
+                subprocess,
+                "CREATE_NO_WINDOW",
+                0,
+            ),
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        traceback.print_exc()
+        return None
+
+    if completed.returncode != 0:
+        print(
+            "[FolderPicker] Windows Explorer picker failed: "
+            + str(completed.stderr or "").strip()
+        )
+        return None
+
+    lines = [
+        line.strip()
+        for line in str(completed.stdout or "").splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        return ""
+
+    selected = lines[-1]
+    if os.path.isdir(selected):
+        return selected
+
+    # UNC paths may occasionally be returned before Python can immediately
+    # query them (temporary network latency). Preserve the explicit user
+    # selection rather than silently discarding it.
+    if selected.startswith(r"\\"):
+        return selected
+    return selected
+
+
+def _pick_folder(initial_directory=None):
+    selected = _pick_windows_explorer_folder(
+        initial_directory
+    )
+    if selected is not None:
+        return selected
+
+    result = window.create_file_dialog(
+        webview.FOLDER_DIALOG,
+    )
+    if not result:
+        return ""
+
+    if isinstance(result, str):
+        return result
+    return str(result[0]) if result else ""
+
 
 class Api:
     def __init__(self):
@@ -216,9 +332,14 @@ class Api:
         return response
 
     def pick_settings_folder(self):
-        result = window.create_file_dialog(webview.FOLDER_DIALOG)
-        if result:
-            return {"status": "success", "path": result[0]}
+        current = (
+            self.config.get("da_fare_path")
+            if isinstance(self.config, dict)
+            else None
+        )
+        path = _pick_folder(current)
+        if path:
+            return {"status": "success", "path": path}
         return {"status": "cancelled"}
 
     def initialize_inventory_request_folder(self, folder_path):
@@ -307,16 +428,17 @@ class Api:
         }
 
     def pick_igs_folder(self):
-        result = window.create_file_dialog(
-            webview.FOLDER_DIALOG,
+        path = _pick_folder(
+            self.config.get("da_fare_path")
+            if isinstance(self.config, dict)
+            else None
         )
-        if not result:
+        if not path:
             return {
                 "status": "cancelled",
                 "path": "",
             }
 
-        path = result if isinstance(result, str) else result[0]
         return {
             "status": "success",
             "path": str(path),
@@ -681,9 +803,10 @@ class Api:
             return {"status": "error", "message": "Errore durante il decremento del database."}
 
     def select_and_save_da_fare_folder(self):
-        result = window.create_file_dialog(webview.FOLDER_DIALOG)
-        if result and len(result) > 0:
-            folder_path = result[0]
+        folder_path = _pick_folder(
+            self.da_fare_path
+        )
+        if folder_path:
             self.config['da_fare_path'] = folder_path
             response = logic.save_config(self.config)
             if response.get('status') == 'success':
