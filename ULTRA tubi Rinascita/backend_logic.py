@@ -125,6 +125,47 @@ def _igs_batch_worker_count(file_count):
     )
 
 
+def find_igs_files_in_folder(folder_path):
+    """Recursively collect IGS/IGES files below one selected folder."""
+    root = os.path.abspath(
+        os.path.expanduser(
+            str(folder_path or "").strip()
+        )
+    )
+    if not root or not os.path.isdir(root):
+        return {
+            "status": "error",
+            "message": "La cartella selezionata non esiste o non è accessibile.",
+            "folderPath": root,
+            "paths": [],
+            "count": 0,
+        }
+
+    paths = []
+    for current_root, dir_names, file_names in os.walk(root):
+        # Stable traversal makes the result/report deterministic.
+        dir_names.sort(key=lambda value: str(value).casefold())
+        for file_name in sorted(
+            file_names,
+            key=lambda value: str(value).casefold(),
+        ):
+            if os.path.splitext(file_name)[1].lower() not in {".igs", ".iges"}:
+                continue
+            paths.append(
+                os.path.join(
+                    current_root,
+                    file_name,
+                )
+            )
+
+    return {
+        "status": "success",
+        "folderPath": root,
+        "paths": paths,
+        "count": len(paths),
+    }
+
+
 def convert_igs_files_to_zzx(file_paths, overwrite=False):
     """Convert independent IGS files in parallel processes.
 
