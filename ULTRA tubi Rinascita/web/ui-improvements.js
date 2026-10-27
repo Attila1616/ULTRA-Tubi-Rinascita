@@ -173,6 +173,93 @@
         window.renderTubeDatabase(tubeDatabaseDebug);
     }
 
+
+    // Filtering here is strictly visual: it never reorders pieces, modifies rods,
+    // invokes the nesting engine or changes a saved lock.
+    const renderActiveOriginal = window.renderUI;
+    let activeProfileSearch = '';
+
+    function filterActiveProfiles() {
+        const container = document.getElementById('tube-list-container');
+        if (!container) return;
+        const needle = normalize(activeProfileSearch);
+        const cards = [...container.querySelectorAll('.tube-group')];
+        let visible = 0;
+        cards.forEach(card => {
+            const label = card.querySelector('.tube-header')?.dataset.tubeType || '';
+            const show = !needle || needle.split(' ').every(part => normalize(label).includes(part));
+            card.style.display = show ? '' : 'none';
+            if (show) visible++;
+        });
+        const count = document.getElementById('active-profile-count');
+        if (count) count.textContent = visible + ' di ' + cards.length + ' profili';
+        const empty = document.getElementById('active-filter-empty');
+        if (empty) empty.hidden = visible !== 0;
+    }
+
+    function buildActiveFilterBar() {
+        const container = document.getElementById('tube-list-container');
+        if (!container || container.querySelector('.active-filter-bar')) return;
+        const firstGroup = container.querySelector('.tube-group');
+        if (!firstGroup) return;
+
+        const bar = document.createElement('div');
+        bar.className = 'active-filter-bar';
+        const label = document.createElement('label');
+        label.htmlFor = 'active-profile-search';
+        label.textContent = 'Cerca un profilo';
+        const input = document.createElement('input');
+        input.id = 'active-profile-search';
+        input.type = 'search';
+        input.className = 'search-input';
+        input.placeholder = 'Es. 100x100, Ø60.3, 316...';
+        input.autocomplete = 'off';
+        input.value = activeProfileSearch;
+        input.addEventListener('input', () => {
+            activeProfileSearch = input.value;
+            filterActiveProfiles();
+        });
+        const count = document.createElement('span');
+        count.id = 'active-profile-count';
+        count.className = 'active-profile-count';
+        const clear = document.createElement('button');
+        clear.type = 'button';
+        clear.className = 'action-button button-subtle';
+        clear.textContent = 'Pulisci';
+        clear.addEventListener('click', () => {
+            activeProfileSearch = '';
+            input.value = '';
+            filterActiveProfiles();
+            input.focus();
+        });
+        const closeAll = document.createElement('button');
+        closeAll.type = 'button';
+        closeAll.className = 'action-button';
+        closeAll.textContent = 'Chiudi tutti i profili';
+        closeAll.title = 'Chiude i profili aperti senza modificare le verghe';
+        closeAll.addEventListener('click', () => {
+            Object.keys(expandedState).forEach(name => { expandedState[name] = false; });
+            window.renderUI();
+        });
+        bar.append(label, input, count, clear, closeAll);
+        firstGroup.before(bar);
+        const empty = document.createElement('div');
+        empty.id = 'active-filter-empty';
+        empty.className = 'database-empty-state';
+        empty.hidden = true;
+        empty.textContent = 'Nessun profilo corrisponde alla ricerca.';
+        bar.after(empty);
+    }
+
+    if (typeof renderActiveOriginal === 'function') {
+        window.renderUI = async function (...args) {
+            const result = await renderActiveOriginal(...args);
+            buildActiveFilterBar();
+            filterActiveProfiles();
+            return result;
+        };
+    }
+
     window.addEventListener('pywebviewready', () => {
         const search = byId('db-quick-search');
         const clear = byId('db-clear-quick');
@@ -200,12 +287,14 @@
         // "/" focuses the database search while no input or modal is active.
         document.addEventListener('keydown', event => {
             if (event.key !== '/' || event.ctrlKey || event.altKey || event.metaKey) return;
-            if (byId('tube-database-container')?.style.display === 'none') return;
             if (document.querySelector('.modal-overlay[style*="display: flex"]')) return;
             const tag = document.activeElement?.tagName;
             if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.activeElement?.isContentEditable) return;
+            const databaseOpen = byId('tube-database-container')?.style.display !== 'none';
+            const target = databaseOpen ? search : byId('active-profile-search');
+            if (!target || (!databaseOpen && byId('tube-list-container')?.style.display === 'none')) return;
             event.preventDefault();
-            search?.focus();
+            target.focus();
         });
 
         // Close only the optional header tools popover when clicking elsewhere.
