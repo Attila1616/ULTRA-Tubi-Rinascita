@@ -202,3 +202,22 @@ button, input, select, summary { font: inherit; }
     .shared-search-input-row { flex-wrap: wrap; }
     .header-database-search #db-search-submit { width: 100%; }
 }
+
+/* IGS/ZZX comparison: separate actionable missing files from benign
+   quantity-only filename variants, with the latter collapsed by default. */
+.igs-warning-banner { display: flex; flex-direction: column; align-items: stretch; gap: 9px; margin: 12px 0 18px; padding: 15px; border-radius: 11px; }
+.igs-warning-banner > .igs-warning-title { margin: 0; font-size: 14px; }
+.igs-warning-banner > [data-action="convert-all-missing-igs"] { align-self: flex-start; }
+.igs-warning-banner ul { margin: 0; padding: 0; list-style: none; max-height: 450px; overflow-y: auto; }
+.igs-warning-banner li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px; border-bottom: 1px solid rgba(118, 139, 170, .20); border-radius: 4px; }
+.igs-warning-banner li > span:first-child { flex: 1 1 360px; overflow-wrap: anywhere; }
+.igs-warning-actions { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 6px; }
+.igs-warning-actions .action-button { min-height: 29px; }
+.igs-quantity-differences { margin-top: 7px; background: #edf5fd; border: 1px solid #c6dcf1; border-radius: 8px; color: #35536c; }
+.igs-quantity-differences > summary { cursor: pointer; padding: 10px 12px; font-weight: 700; font-size: 12px; }
+.igs-quantity-differences > p { padding: 0 12px; font-size: 12px; }
+.igs-quantity-differences > ul { padding: 0 12px 12px; }
+.igs-quantity-differences li { border-bottom-color: #d9e6f2; }
+@media(max-width: 750px) {
+  .igs-warning-actions { width: 100%; justify-content: flex-end; }
+}
