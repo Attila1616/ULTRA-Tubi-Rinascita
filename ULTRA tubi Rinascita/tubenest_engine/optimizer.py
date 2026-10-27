@@ -21,6 +21,8 @@ from .fit import (
     fit_adjacent_parts,
     posed_ends,
     tail_flip_eligibility,
+    PLANAR_FIT_TOLERANCE_MM,
+    STRAIGHT_SLOPE_EPS,
 )
 
 
@@ -136,6 +138,8 @@ def _reset_parallel_stats():
         fast_best_fit_insertion_attempts=0,
         fast_best_fit_consolidation_attempts=0,
         fast_best_fit_rods=0,
+        straight_rotation_reduced_parts=0,
+        straight_rotation_total_parts=0,
     )
 
 
@@ -343,6 +347,55 @@ def _rectangle_family(rotation):
     return 0 if quarter % 2 == 0 else 90
 
 
+def _straight_rotation_is_redundant(item):
+    """Recognize end geometries for which axial rotation cannot alter a fit.
+
+    For a square cross-section, all quarter turns have identical support;
+    for a rectangle, 0/180 and 90/270 are equivalent *within their
+    respective orientation families*. We only collapse those rotations
+    when BOTH ends are trustworthy, perpendicular planes with no
+    transverse curve-normal component. Otherwise the unmodified full
+    orientation search remains mandatory, including contour-based
+    fittings, bevels and end-cut signatures that rotate in X/Y.
+
+    End-for-end reversal is never pruned: it can affect end metadata,
+    weld/machining orientation and eligibility for the chuck-zone flip.
+    """
+    if not item.geometry_available or _profile_kind(item) not in ("Square", "Rect"):
+        return False
+    ends = (item.tube_part or {}).get("ends") or []
+    if len(ends) < 2:
+        return False
+    for end in ends[:2]:
+        if not isinstance(end, dict):
+            return False
+        plane = end.get("plane_z_equals_c_plus_ax_plus_by")
+        if not isinstance(plane, (tuple, list)) or len(plane) != 3:
+            return False
+        try:
+            c, sx, sy = (float(value) for value in plane)
+            residual = float(end.get("plane_max_residual_mm") or 0.0)
+            normal = end.get("curve_normal")
+            if not all(math.isfinite(v) for v in (c, sx, sy, residual)):
+                return False
+            if residual > PLANAR_FIT_TOLERANCE_MM or residual < 0:
+                return False
+            if math.hypot(sx, sy) > STRAIGHT_SLOPE_EPS:
+                return False
+            if normal is not None:
+                if len(normal) != 3:
+                    return False
+                nx, ny, nz = (float(value) for value in normal)
+                if (
+                    not all(math.isfinite(v) for v in (nx, ny, nz))
+                    or math.hypot(nx, ny) > 1e-7
+                ):
+                    return False
+        except (TypeError, ValueError, OverflowError):
+            return False
+    return True
+
+
 def _dedupe_poses(poses):
     result = []
     seen = set()
@@ -367,10 +420,18 @@ def _first_pose_candidates(item):
     kind = _profile_kind(item)
     poses = []
     if kind == "Square":
-        rotations = (0.0, 90.0, 180.0, 270.0)
+        # Straight/axial-normal end cuts are identical under all four square
+        # quarter-turns. Avoid exploring redundant poses.
+        rotations = (0.0,) if _straight_rotation_is_redundant(item) else (
+            0.0, 90.0, 180.0, 270.0
+        )
     elif kind == "Rect":
-        # The first rectangle establishes the orientation family of the rod.
-        rotations = (0.0, 90.0, 180.0, 270.0)
+        # The initial rectangle must still choose 0 vs 90 orientation family,
+        # but 180/270 add no information for perpendicular straight ends.
+        rotations = (
+            (0.0, 90.0) if _straight_rotation_is_redundant(item) else
+            (0.0, 90.0, 180.0, 270.0)
+        )
     elif kind == "Circle":
         # Whole-rod axial orientation is arbitrary for round stock, so 0° is
         # sufficient for the first part. Following parts rotate relative to it.
@@ -392,15 +453,25 @@ def _next_pose_candidates(previous_item, previous_pose, item, rectangle_family):
     poses = []
 
     if kind == "Square":
-        rotations = (0.0, 90.0, 180.0, 270.0)
+        rotations = (0.0,) if _straight_rotation_is_redundant(item) else (
+            0.0, 90.0, 180.0, 270.0
+        )
         for reversed_flag in (False, True):
             for rotation in rotations:
                 poses.append(PartPose(rotation, reversed_flag))
         return _dedupe_poses(poses)
 
     if kind == "Rect":
-        base = 0.0 if rectangle_family in (None, 0) else 90.0
-        rotations = (base, base + 180.0)
+        if _straight_rotation_is_redundant(item):
+            # Keep both rectangle families until one has been established.
+            # Once fixed, there is only one meaningful axial orientation.
+            rotations = (
+                (0.0, 90.0) if rectangle_family is None
+                else (0.0,) if rectangle_family == 0 else (90.0,)
+            )
+        else:
+            base = 0.0 if rectangle_family in (None, 0) else 90.0
+            rotations = (base, base + 180.0)
         for reversed_flag in (False, True):
             for rotation in rotations:
                 poses.append(PartPose(rotation, reversed_flag))
@@ -496,6 +567,11 @@ def _pose_branch_estimate(item, *, first):
     if not item.geometry_available:
         return 1
     kind = _profile_kind(item)
+    if _straight_rotation_is_redundant(item):
+        if kind == "Square":
+            return 2  # Two end-for-end options; one rotation.
+        if kind == "Rect":
+            return 4 if first else 2  # Keep the two rectangle families.
     if kind == "Square":
         return 8
     if kind == "Rect":
@@ -2819,6 +2895,11 @@ def diagnose_items_dict(
     lines.append(f"Gap: {float(gap_mm):g} mm")
     lines.append(f"Beam normale: {DEFAULT_BEAM_WIDTH}")
     lines.append(f"Tipi candidati per livello: {DEFAULT_MAX_CANDIDATE_TYPES}")
+    lines.append(
+        "Taglio dritto: pose assiali ridotte per "
+        f"{get_parallel_stats().get('straight_rotation_reduced_parts', 0)} "
+        f"pezzi su {len(normalized)} (ribaltamento sempre valutato)"
+    )
     cpu_stats = get_parallel_stats()
     lines.append(
         f"CPU nesting configurato: fino a {cpu_stats['configured_workers']} processi "
@@ -3119,6 +3200,10 @@ def _optimize_normalized(
         max(1, len(normalized)),
     )
     _PARALLEL_STATS["item_count"] = len(normalized)
+    _PARALLEL_STATS["straight_rotation_total_parts"] = len(normalized)
+    _PARALLEL_STATS["straight_rotation_reduced_parts"] = sum(
+        _straight_rotation_is_redundant(item) for item in normalized
+    )
     _PARALLEL_STATS["unique_type_count"] = unique_types
     _PARALLEL_STATS["workers_used"] = pool_workers if use_pool else 1
     _PARALLEL_STATS["used_process_pool"] = bool(use_pool)
