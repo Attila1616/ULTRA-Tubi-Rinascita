@@ -246,6 +246,11 @@ class OptimizerItem:
     nominal_length: float
     tube_part: Optional[dict] = None
     payload: dict = field(default_factory=dict)
+    # Per-instance memo for repeated beam/merge pose expansion. OptimizerItem
+    # geometry is immutable over one nesting call.
+    _straight_pose_redundant: Optional[bool] = field(
+        default=None, init=False, repr=False, compare=False,
+    )
 
     @property
     def geometry_available(self):
@@ -348,6 +353,15 @@ def _rectangle_family(rotation):
 
 
 def _straight_rotation_is_redundant(item):
+    """Memoized straight-cut symmetry, shared by all beam-search branches."""
+    cached = item._straight_pose_redundant
+    if cached is None:
+        cached = _compute_straight_rotation_is_redundant(item)
+        item._straight_pose_redundant = cached
+    return cached
+
+
+def _compute_straight_rotation_is_redundant(item):
     """Recognize end geometries for which axial rotation cannot alter a fit.
 
     For a square cross-section, all quarter turns have identical support;
