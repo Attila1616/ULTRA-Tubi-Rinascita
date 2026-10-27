@@ -2639,6 +2639,7 @@ function validOptimizedRodLayout(segments) {
 }
 
 function getRodUsedMm(segments, nestRod = null) {
+    if (!segments?.length) return 0;
     const backendUsed = Number(nestRod?.used);
     if (nestRod && Number.isFinite(backendUsed)) return backendUsed;
     if (validOptimizedRodLayout(segments) && (segments || []).length) {
