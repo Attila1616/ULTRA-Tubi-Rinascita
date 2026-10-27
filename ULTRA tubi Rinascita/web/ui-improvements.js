@@ -206,6 +206,9 @@
             await window.showTubeDatabaseView();
         } finally {
             placeSharedDatabaseSearch();
+            // The DOM move may blur the input. Keep the cursor ready for
+            // refining the results after switching tabs.
+            byId('db-quick-search')?.focus();
         }
     }
 
