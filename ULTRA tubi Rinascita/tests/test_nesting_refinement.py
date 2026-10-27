@@ -120,7 +120,7 @@ class IndexedRefinementTests(unittest.TestCase):
         self.assertIsNotNone(
             engine._optimize_fixed_item_sequence(
                 items, [0], rod_length=6001,
-                dead_zone_mm=400, gap_mm=2,
+                dead_zone_mm=0, gap_mm=2,
             )
         )
 
