@@ -2446,50 +2446,77 @@ def convert_missing_igs_files_to_zzx(da_fare_path, file_paths=None):
     ):
         return {"status": "error", "message": "Uno o più IGS non sono più tra i file mancanti.", "results": []}
 
-    results = []
+    return _convert_igs_files_with_layout(requested, overwrite=False)
+
+
+def convert_selected_igs_files_to_zzx(file_paths, overwrite=False):
+    """Organize explicitly selected IGS (including outside DA FARE) before export."""
+    return _convert_igs_files_with_layout(file_paths or [], overwrite=overwrite)
+
+
+def _convert_igs_files_with_layout(file_paths, overwrite=False):
+    """Safe, order-preserving conversion for both selection and missing repair."""
+    paths = [os.path.abspath(str(value)) for value in file_paths if str(value).strip()]
+    results = [None] * len(paths)
     pending = []
     seen_source = set()
     seen_output = set()
-    for name in requested:
-        source = os.path.abspath(str(name))
+    for index, source in enumerate(paths):
         key = os.path.normcase(source)
         if key in seen_source:
+            results[index] = {
+                "status": "error", "sourcePath": source,
+                "message": "File IGS selezionato più volte.",
+            }
             continue
         seen_source.add(key)
         try:
             if not os.path.isfile(source):
                 raise FileNotFoundError(source)
+            if os.path.splitext(source)[1].lower() not in {".igs", ".iges"}:
+                raise ValueError("Sono accettati soltanto file IGS / IGES.")
             destination, moved_source = _igs_conversion_destination(source)
             dest_key = os.path.normcase(os.path.abspath(str(destination)))
             if dest_key in seen_output:
                 raise FileExistsError(f"Due IGS producono lo stesso ZZX: {destination}")
             seen_output.add(dest_key)
-            if destination.exists():
-                results.append({
+
+            if destination.exists() and not overwrite:
+                results[index] = {
                     "status": "exists", "sourcePath": source,
                     "outputPath": str(destination),
                     "message": "ZZX già presente, nessun file spostato o sovrascritto.",
-                })
+                }
                 continue
+
             if os.path.normcase(os.path.abspath(str(moved_source))) != key:
                 if moved_source.exists():
-                    raise FileExistsError(f"IGS già presente nella cartella di destinazione: {moved_source}")
+                    raise FileExistsError(
+                        f"IGS già presente nella cartella di destinazione: {moved_source}"
+                    )
                 moved_source.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(source, str(moved_source))
-            pending.append((source, str(moved_source), str(destination)))
+            pending.append((index, source, str(moved_source), str(destination)))
         except Exception as exc:
-            results.append({"status": "error", "sourcePath": source, "message": str(exc)})
+            results[index] = {
+                "status": "error", "sourcePath": source, "message": str(exc),
+            }
 
+    workers = 0
+    elapsed = 0.0
     if pending:
         batch = convert_igs_files_to_zzx(
-            [entry[1] for entry in pending],
-            overwrite=False,
-            output_paths=[entry[2] for entry in pending],
+            [entry[2] for entry in pending],
+            overwrite=overwrite,
+            output_paths=[entry[3] for entry in pending],
         )
+        workers = batch.get("workersUsed", 0)
+        elapsed = batch.get("elapsedSeconds", 0.0)
         converted = batch.get("results") or []
-        for index, (original, igs_path, destination) in enumerate(pending):
-            result = dict(converted[index] or {}) if index < len(converted) else {
-                "status": "error", "message": batch.get("message") or "Nessun risultato dal convertitore.",
+        for position, (index, original, igs_path, destination) in enumerate(pending):
+            result = dict(converted[position] or {}) if position < len(converted) else {
+                "status": "error",
+                "message": batch.get("message") or "Nessun risultato dal convertitore.",
             }
             result["originalSourcePath"] = original
             result["sourcePath"] = igs_path
@@ -2497,21 +2524,28 @@ def convert_missing_igs_files_to_zzx(da_fare_path, file_paths=None):
             if result.get("status") != "success" and os.path.normcase(original) != os.path.normcase(igs_path):
                 try:
                     if os.path.exists(original):
-                        raise FileExistsError("Percorso originale già occupato: rollback manuale necessario.")
+                        raise FileExistsError(
+                            "Percorso originale occupato: ripristino manuale necessario."
+                        )
                     shutil.move(igs_path, original)
                     result["sourcePath"] = original
                     result["sourceRestored"] = True
                 except Exception as exc:
-                    result["message"] = f'{result.get("message", "Conversione fallita")} (Ripristino IGS fallito: {exc})'
-            results.append(result)
+                    result["message"] = (
+                        f'{result.get("message", "Conversione fallita")} '
+                        f'(Ripristino IGS fallito: {exc})'
+                    )
+            results[index] = result
 
+    results = [item for item in results if item is not None]
     return {
-        "status": "success",
-        "results": results,
-        "converted": sum(1 for r in results if r.get("status") == "success"),
-        "existing": sum(1 for r in results if r.get("status") == "exists"),
-        "errors": sum(1 for r in results if r.get("status") == "error"),
+        "status": "success", "results": results,
+        "workersUsed": workers, "elapsedSeconds": elapsed,
+        "converted": sum(1 for item in results if item.get("status") == "success"),
+        "existing": sum(1 for item in results if item.get("status") == "exists"),
+        "errors": sum(1 for item in results if item.get("status") == "error"),
     }
+
 
 # --- File System Logic ---
 def _rename_with_final_count(file_path, new_count):
