@@ -793,7 +793,7 @@ async function convertIgsFileToZzx(sourceMode = 'files') {
             : `Conversione ${paths.length} IGS...`;
 
         try {
-            const response = await window.pywebview.api.convert_igs_files_to_zzx(
+            const response = await window.pywebview.api.convert_selected_igs_files_to_zzx(
                 paths,
                 overwrite
             );
