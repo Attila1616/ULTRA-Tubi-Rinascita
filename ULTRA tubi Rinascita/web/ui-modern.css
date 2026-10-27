@@ -164,3 +164,22 @@ button, input, select, summary { font: inherit; }
 @media (prefers-reduced-motion: reduce) {
     .app-header .view-btn, .database-view-toggle .view-btn { transition: none; }
 }
+
+/* Active-work profile browser: no changes to nesting mechanics. */
+.active-filter-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; padding: 12px 14px; margin: 12px 0; background: #fff; border: 1px solid var(--ui-stroke); border-radius: 11px; box-shadow: var(--ui-shadow); }
+.active-filter-bar label { color: #405a74; font-size: 12px; font-weight: 750; white-space: nowrap; }
+.active-filter-bar input { min-width: 180px; flex: 1 1 300px; }
+.active-profile-count { color: var(--ui-muted); font-size: 12px; margin-right: auto; white-space: nowrap; }
+.tube-group { overflow: hidden; margin-bottom: 11px; border: 1px solid var(--ui-stroke); border-radius: 11px; background: #fff; box-shadow: var(--ui-shadow); }
+.tube-group .tube-header { min-height: 47px; background: #fff; padding: 10px 13px; cursor: pointer; color: #254866; font-weight: 750; font-size: 14px; user-select: none; }
+.tube-group .tube-header:hover { background: #f2f7fe; }
+.tube-group .tube-details { border-top: 1px solid #e6edf5; padding: 14px 15px; }
+.tube-group .tube-location-button { min-height: 30px; width: 32px; padding: 0; }
+.tube-group .rod-bar { border-color: #cbd8e5; border-radius: 6px; }
+.tube-group .details-section-title { color: #284966; border-bottom-color: #e3ebf3; }
+.nesting-global-controls { padding: 9px 12px; margin: 9px 0; background: #edf4fc; border: 1px solid #d9e7f5; border-radius: 10px; }
+#active-filter-empty[hidden] { display: none; }
+@media(max-width: 750px) {
+ .tube-group .tube-header { padding: 10px; }
+ .active-filter-bar { padding: 10px; }
+}
