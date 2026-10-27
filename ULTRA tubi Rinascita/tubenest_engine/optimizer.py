@@ -4236,8 +4236,22 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
             items, rod_length, dead_zone_mm, gap_mm,
             groups, classes, angle_buckets, transitions, packing_first=True,
         )
-        if second is not None and quality(second) < quality(selected):
-            selected = second
+        if second is not None:
+            if len(second) < len(selected):
+                selected = second
+            elif len(second) == len(selected):
+                used_second = sum(rod.used_span for rod in second)
+                used_selected = sum(rod.used_span for rod in selected)
+                # Do not turn away from genuine common-line material savings
+                # merely to make a rod appear fuller with larger gaps.
+                material_margin = max(2.0, float(gap_mm)*2.0)
+                if used_second < used_selected - material_margin:
+                    selected = second
+                elif (
+                    abs(used_second-used_selected) <= material_margin
+                    and quality(second) < quality(selected)
+                ):
+                    selected = second
 
     selected = _refine_indexed_planar_rods(
         items, selected, rod_length, dead_zone_mm, gap_mm,
