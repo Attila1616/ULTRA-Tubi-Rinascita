@@ -439,6 +439,68 @@ def _posed_envelope_at(end, pose, length, global_angle, reverse_transform):
     return lo, hi
 
 
+def contour_virtual_plane_lower_bound(
+    previous_part,
+    previous_pose,
+    next_part,
+    next_pose,
+    gap_mm=2.0,
+):
+    """A cheap, conservative lower bound on the next piece's axial origin.
+
+    Think of each sampled section of an irregular end as a virtual bounding
+    plane at that angular position. Four of the angles examined by the real
+    contour fit give necessary axial clearances; their maximum cannot exceed
+    the full contour fit's required separation.
+
+    This is ONLY a rejection bound. It must never be used to position pieces
+    or claim shared-cut compatibility. The exact contour verifier remains
+    authoritative for accepted placements.
+    """
+    if not _contour_profiles_compatible(
+        (previous_part or {}).get("profile"),
+        (next_part or {}).get("profile"),
+    ):
+        return None
+    previous_end, previous_reverse = _select_raw_end(
+        previous_part, previous_pose, "end"
+    )
+    next_start, next_reverse = _select_raw_end(
+        next_part, next_pose, "start"
+    )
+    previous_envelope = _valid_perimeter_envelope(previous_end)
+    next_envelope = _valid_perimeter_envelope(next_start)
+    if previous_envelope is None or next_envelope is None:
+        return None
+    gap = float(gap_mm)
+    if not math.isfinite(gap) or gap < 0:
+        return None
+
+    count = max(len(previous_envelope), len(next_envelope))
+    previous_length = float((previous_part or {}).get("overall_length") or 0.0)
+    next_length = float((next_part or {}).get("overall_length") or 0.0)
+    # Use actual quadrature nodes of _fit_adjacent_contours, not interpolated
+    # angles outside its sample grid: each is a provable subset of that search.
+    sample_indices = sorted({(count * step) // 4 for step in range(4)})
+    necessary = -math.inf
+    for index in sample_indices:
+        theta = 2.0 * math.pi * index / count
+        previous_bounds = _posed_envelope_at(
+            previous_end, previous_pose, previous_length,
+            theta, previous_reverse,
+        )
+        next_bounds = _posed_envelope_at(
+            next_start, next_pose, next_length,
+            theta, next_reverse,
+        )
+        if previous_bounds is None or next_bounds is None:
+            return None
+        necessary = max(
+            necessary, previous_bounds[1] - next_bounds[0] + gap
+        )
+    return necessary if math.isfinite(necessary) else None
+
+
 def _fit_adjacent_contours(
     previous_part,
     previous_pose,
