@@ -179,6 +179,37 @@ class ArbitraryAngleFastChainTests(unittest.TestCase):
             sum(len(rod["placements"]) for rod in rods), 50
         )
 
+    def test_angle_buckets_identify_rotated_cut_without_cut_signatures(self):
+        slope = math.tan(math.radians(58))
+        one = part("a", last=(slope, 0))
+        two = part("b", first=(0, slope))
+        for end in one["ends"] + two["ends"]:
+            end["boundary_signature"] = None
+            end["process_signature"] = None
+        self.assertIsNone(engine._end_cut_class(one, one["ends"][1]))
+        self.assertEqual(
+            engine._end_angle_bucket(one, one["ends"][1]),
+            engine._end_angle_bucket(two, two["ends"][0]),
+        )
+        self.assertIsNotNone(
+            engine._end_angle_bucket(one, one["ends"][1])
+        )
+        # A matching geometric bucket does not fabricate a shared cut.
+        fit = fit_adjacent_parts(
+            one, PartPose(), 0,
+            two, PartPose(270), gap_mm=2,
+        )
+        self.assertFalse(fit.common_line)
+        self.assertEqual(fit.minimum_clearance_mm, 2.0)
+
+    def test_different_angles_are_different_buckets(self):
+        a = part("a", last=(math.tan(math.radians(30)), 0))
+        b = part("b", first=(math.tan(math.radians(45)), 0))
+        self.assertNotEqual(
+            engine._end_angle_bucket(a, a["ends"][1]),
+            engine._end_angle_bucket(b, b["ends"][0]),
+        )
+
     def test_different_cut_signatures_do_not_enable_common_line(self):
         a = part("a", signature="a")
         b = part("b", signature="b")
