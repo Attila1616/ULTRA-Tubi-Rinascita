@@ -83,6 +83,65 @@ class IndexedRefinementTests(unittest.TestCase):
         ), list(range(len(items))))
         self.assertLessEqual(engine.get_parallel_stats()["edge_refine_trials"], 60)
 
+    def test_small_piece_is_inserted_between_long_end_pieces(self):
+        # A 250mm and 260mm piece leave space for a 60mm piece.
+        # Moving it here does NOT reduce the sum of occupied lengths,
+        # which is why the previous optimizer rejected this obvious fill.
+        items = instances([
+            ("front", 250, (0., 0.), 1),
+            ("last", 260, (0., 0.), 1),
+            ("small", 60, (0., 0.), 1),
+            ("other", 100, (0., 0.), 1),
+        ])
+        first = engine._optimize_fixed_item_sequence(
+            items, [0, 1], 600, 0, 2,
+        )
+        donor = engine._optimize_fixed_item_sequence(
+            items, [2, 3], 600, 0, 2,
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(donor)
+        initial = [first, donor]
+        original_total = sum(rod.used_span for rod in initial)
+        engine._reset_parallel_stats()
+        refined = engine._refine_indexed_planar_rods(
+            items, initial, 600, 0, 2,
+            max_trials=90, time_budget_s=1.5,
+        )
+        self.assertEqual(len(refined), 2)
+        self.assertEqual(
+            sorted(p.item_index for rod in refined for p in rod.placed),
+            [0, 1, 2, 3],
+        )
+        filled = next(rod for rod in refined if any(
+            p.item_index == 0 for p in rod.placed
+        ))
+        self.assertEqual([p.item_index for p in filled.placed], [0, 2, 1])
+        self.assertGreater(filled.used_span, 570)
+        self.assertLessEqual(filled.used_span, 600)
+        self.assertAlmostEqual(
+            sum(rod.used_span for rod in refined), original_total,
+            delta=0.1,
+        )
+        self.assertGreater(
+            engine._rod_fill_concentration(refined, 600),
+            engine._rod_fill_concentration(initial, 600),
+        )
+        self.assertGreaterEqual(
+            engine.get_parallel_stats()["edge_fill_transfers"], 1
+        )
+
+    def test_fill_priority_prefers_concentrating_equal_length_waste(self):
+        items = instances([("p", 100, (0., 0.), 4)])
+        a = engine._optimize_fixed_item_sequence(items, [0, 1], 600, 0, 2)
+        b = engine._optimize_fixed_item_sequence(items, [2, 3], 600, 0, 2)
+        c = engine._optimize_fixed_item_sequence(items, [0, 1, 2], 600, 0, 2)
+        d = engine._optimize_fixed_item_sequence(items, [3], 600, 0, 2)
+        self.assertGreater(
+            engine._rod_fill_concentration([c, d], 600),
+            engine._rod_fill_concentration([a, b], 600),
+        )
+
     def test_refiner_absorbs_a_short_rod_by_geometric_insertion(self):
         items = instances([
             ("A", 200, (0., 0.), 2),
