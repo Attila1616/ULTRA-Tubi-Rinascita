@@ -2446,16 +2446,18 @@ def find_unmatched_igs_files(da_fare_path):
 
     for root, dirs, files in os.walk(da_fare_path):
         in_fatto_branch = _path_contains_fatto_folder(root)
-        if in_fatto_branch:
-            dirs[:] = []
-            continue
+        # Completed ZZX files are moved to 'fatto' (possibly through several
+        # nested archive folders) and renamed with '(fatti N)'. They MUST still
+        # be indexed: an active IGS in its 'IGS' folder is not missing if the
+        # corresponding drawing has already been completed. Only archived IGS
+        # sources should be excluded from missing-file warnings.
         for file in files:
             lower_file = file.lower()
             file_path = os.path.normpath(os.path.join(root, file))
             if lower_file.endswith(".zzx"):
                 zzx_by_stem[_normalized_cut_stem(file)].append(file_path)
                 zzx_by_quantity_independent_stem[_quantity_independent_stem(file)].append(file_path)
-            elif lower_file.endswith((".igs", ".iges")):
+            elif lower_file.endswith((".igs", ".iges")) and not in_fatto_branch:
                 igs_files.append(file_path)
 
     unmatched = []
