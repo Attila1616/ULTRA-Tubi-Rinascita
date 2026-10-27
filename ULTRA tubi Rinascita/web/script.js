@@ -11,6 +11,7 @@ let lastZzxWarningSignature = '';
 let nestingRenderSequence = 0;
 let nestingResultCache = new Map();
 let nestingLoadingGroups = new Set();
+let nestingActiveGenerationByTube = new Map();
 let nestingErrorByTube = new Map();
 let nestingRodToleranceMm = 1.0;
 let nestingCacheResetEpoch = 0;
@@ -2123,6 +2124,7 @@ async function ensureGroupNesting(tubeType) {
     const requestEpoch = nestingCacheResetEpoch;
 
     nestingLoadingGroups.add(tubeType);
+    nestingActiveGenerationByTube.set(tubeType, requestEpoch);
     nestingErrorByTube.delete(tubeType);
     renderUI();
 
@@ -2159,11 +2161,16 @@ async function ensureGroupNesting(tubeType) {
         return result.rods || [];
     } catch (error) {
         console.error(`Nesting failed for ${tubeType}:`, error);
-        nestingErrorByTube.set(tubeType, error?.message || String(error));
+        if (requestEpoch === nestingCacheResetEpoch) {
+            nestingErrorByTube.set(tubeType, error?.message || String(error));
+        }
         return [];
     } finally {
-        nestingLoadingGroups.delete(tubeType);
-        renderUI();
+        if (nestingActiveGenerationByTube.get(tubeType) === requestEpoch) {
+            nestingActiveGenerationByTube.delete(tubeType);
+            nestingLoadingGroups.delete(tubeType);
+            renderUI();
+        }
     }
 }
 
@@ -3399,6 +3406,8 @@ async function clearCachedNestings() {
             throw new Error(response?.message || 'Impossibile svuotare la cache.');
         }
         nestingCacheResetEpoch++;
+        nestingLoadingGroups.clear();
+        nestingActiveGenerationByTube.clear();
         invalidateNestingCache();
         await saveUiState();
         await renderUI();
