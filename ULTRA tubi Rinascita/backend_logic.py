@@ -201,8 +201,10 @@ def convert_igs_files_to_zzx(file_paths, overwrite=False, output_paths=None):
             "message": "Numero destinazioni ZZX diverso dal numero file IGS.",
             "results": [],
         }
+    # Preserve the original two-item worker payload for existing callers.
     payloads = [
-        (path, bool(overwrite), (output_paths[index] if output_paths is not None else None))
+        ((path, bool(overwrite)) if output_paths is None
+         else (path, bool(overwrite), output_paths[index]))
         for index, path in enumerate(paths)
     ]
 
