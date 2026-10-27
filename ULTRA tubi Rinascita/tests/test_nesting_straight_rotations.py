@@ -80,7 +80,9 @@ class StraightRotationPruningTests(unittest.TestCase):
         first_rect = _next_pose_candidates(item, PartPose(), item, None)
         self.assertEqual({p.axial_rotation_degrees for p in first_rect}, {0.0, 90.0})
         self.assertEqual(_pose_branch_estimate(item, first=True), 4)
-        self.assertEqual(_pose_branch_estimate(item, first=False), 2)
+        # The conservative branch bound also covers rectangles following
+        # squares, where both families must still be considered.
+        self.assertEqual(_pose_branch_estimate(item, first=False), 4)
 
     def test_beveled_square_still_explores_every_rotation_and_flip(self):
         item = make_item(bevel=True)
