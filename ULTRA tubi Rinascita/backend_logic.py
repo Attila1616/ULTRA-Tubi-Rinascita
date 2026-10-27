@@ -1946,7 +1946,12 @@ def debug_nesting_group(group, rods, rod_length=6000, focus_rod_number=None):
         }
 
 
-_TEXT_TD_RE = re.compile(r"(?i)(T[DA]\d{4}[A-Z]\d{5})")
+# A TD drawing identifier is T + D + 4 digits + one revision letter
+# + the final five digits. Only the final five are engraved.
+_TEXT_TD_RE = re.compile(r"(?i)TD\d{4}[A-Z](\d{5})(?!\d)")
+_TEXT_LENGTH_VARIANT_RE = re.compile(
+    r"(?i)(?<![A-Z0-9])L\d+(?:[.,]\d+)?[ \t._-]*([A-Z])(?![A-Z0-9])"
+)
 
 
 def _clean_marking_prod_folder(value):
@@ -1963,12 +1968,67 @@ def _clean_marking_prod_folder(value):
     return name
 
 
+def _marking_td_codes(value):
+    """All explicit TD drawings, in source order, shortened to TD.12345.
+
+    Keep distinct occurrences: a drawing filename can refer to more than one
+    TD, and these must get separate engraving lines. Do not interpret TA,
+    arbitrary digit groups or the revision inside a TD code as a variant.
+    """
+    return [f"TD.{match.group(1)}" for match in _TEXT_TD_RE.finditer(str(value or ""))]
+
+
+def _marking_td_folder_codes(file_path):
+    """TD code(s) from the nearest folder containing a TD identifier."""
+    parts = os.path.normpath(str(file_path or "")).split(os.path.sep)
+    for part in reversed(parts[:-1]):
+        codes = _marking_td_codes(part)
+        if codes:
+            return codes
+    return []
+
+
+def _marking_length_variant(file_name, file_path=""):
+    """Find an A/B/C... revision directly after L200 or a complete TD code.
+
+    Explicit L200 A (or L200A) wins over a letter adjacent to TD because
+    it is closest to the dimension being marked. Ignore the internal letter
+    inside TD1234A56789 and words like AISI, DX, SX.
+    """
+    filename = os.path.splitext(os.path.basename(str(file_name or "")))[0]
+    match = _TEXT_LENGTH_VARIANT_RE.search(filename)
+    if match:
+        return match.group(1).upper()
+
+    for match in _TEXT_TD_RE.finditer(filename):
+        remainder = filename[match.end():]
+        variant = re.match(
+            r"(?i)^[ \t._-]*([A-Z])(?![A-Z0-9])", remainder
+        )
+        if variant:
+            return variant.group(1).upper()
+
+    # The revision may be recorded on the TD folder instead of on the file.
+    for part in reversed(os.path.normpath(str(file_path or "")).split(os.path.sep)[:-1]):
+        if _TEXT_TD_RE.search(part):
+            match = _TEXT_LENGTH_VARIANT_RE.search(part)
+            if match:
+                return match.group(1).upper()
+            for td in _TEXT_TD_RE.finditer(part):
+                suffix = re.match(r"(?i)^[ \t._-]*([A-Z])(?![A-Z0-9])", part[td.end():])
+                if suffix:
+                    return suffix.group(1).upper()
+            break
+    return ""
+
+
 def _find_marking_td_code(file_path):
+    """Legacy full-folder-code accessor for any external callers."""
     parts = os.path.normpath(str(file_path or "")).split(os.path.sep)
     for part in reversed(parts[:-1]):
         match = _TEXT_TD_RE.search(part)
         if match:
-            return match.group(1).upper()
+            return match.group(0).upper()
     return ""
 
 
@@ -2005,6 +2065,16 @@ def _resolve_nested_marking_font_path():
 
 
 def _build_nested_marking_text(segment, config):
+    """Build one unambiguous engraving line per piece of identifying data.
+
+    Layout, in order:
+      1. PROD folder (shipping month removed by the legacy helper)
+      2. Folder TD(s), shortened to TD.<last five digits>
+      3. Filename TD(s), shortened in the same way; omitted if absent
+      4. L<length> [A/B/C...] when an explicit variant is present
+
+    No invented TD marker when a drawing name lacks a TD code.
+    """
     file_path = str(segment.get("filePath") or "").strip()
     file_name = str(segment.get("fileName") or os.path.basename(file_path))
 
@@ -2016,8 +2086,10 @@ def _build_nested_marking_text(segment, config):
                 get_product_folder_name(file_path, da_fare)
             )
 
-    td_code = _find_marking_td_code(file_path)
+    folder_codes = _marking_td_folder_codes(file_path)
+    file_codes = _marking_td_codes(file_name)
     length = _format_marking_length(segment.get("length"), file_name)
+    variant = _marking_length_variant(file_name, file_path)
 
     missing = []
     if not prod:
@@ -2030,9 +2102,9 @@ def _build_nested_marking_text(segment, config):
             f"manca {', '.join(missing)}."
         )
 
-    if td_code:
-        return f"{prod}  |  {td_code}  | L{length}"
-    return f"{prod}  | L{length}"
+    lines = [prod, *folder_codes, *file_codes]
+    lines.append(f"L{length}" + (f" {variant}" if variant else ""))
+    return "\n".join(lines)
 
 
 def nest_locked_rod_sequence(payload):
