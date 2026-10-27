@@ -159,6 +159,7 @@ def _reset_parallel_stats():
         edge_chain_alternative_runs=0,
         edge_refine_trials=0,
         edge_refine_rods=0,
+        edge_fill_transfers=0,
         straight_rotation_reduced_parts=0,
         straight_rotation_total_parts=0,
     )
@@ -3089,7 +3090,8 @@ def diagnose_items_dict(
         f"ottimo certificato: {get_parallel_stats().get('edge_chain_certified', False)}, "
         f"transizioni in cache: {get_parallel_stats().get('edge_catalog_entries', 0)}"
         f" (riusi: {get_parallel_stats().get('edge_catalog_hits', 0)}), "
-        f"refine mirato: {get_parallel_stats().get('edge_refine_trials', 0)} verifiche"
+        f"refine mirato: {get_parallel_stats().get('edge_refine_trials', 0)} verifiche, "
+        f"riempimenti trasferiti: {get_parallel_stats().get('edge_fill_transfers', 0)}"
     )
     lines.append(f"Tipi candidati per livello: {DEFAULT_MAX_CANDIDATE_TYPES}")
     lines.append(
@@ -3787,9 +3789,44 @@ def _indexed_planar_chain(
     return rods
 
 
+def _rod_fill_concentration(rods, rod_length):
+    """Prefer fuller rods and concentrate residual waste on fewer rods.
+
+    For a fixed number of stock rods, maximizing squared occupancy packs
+    material toward the stock limit instead of distributing equal amounts of
+    empty space across every rod. The actual rod count remains the primary
+    goal; a full geometric fit is still necessary for every change.
+    """
+    scale = max(float(rod_length), EPS)
+    return sum((float(rod.used_span) / scale) ** 2 for rod in rods)
+
+
+def _fill_interior_slots(rod, items, *, max_slots=12):
+    """Try inserting between pieces, especially immediately before the end.
+
+    When many pieces share a rod, prioritize boundaries adjacent to longer
+    pieces (where shifting an end cut can recover the most room), while
+    retaining the first and last boundaries as fallbacks.
+    """
+    placed = list(rod.placed)
+    count = len(placed)
+    if count <= 1:
+        return list(range(count + 1))
+    positions = list(range(1, count))
+    positions.sort(key=lambda i: (
+        -(max(items[placed[i-1].item_index].physical_length,
+               items[placed[i].item_index].physical_length)),
+        abs(i - (count-1)),
+        i,
+    ))
+    head = [count-1, max(1, count-2), 1]
+    ordered = list(dict.fromkeys(head + positions + [count, 0]))
+    return ordered[:max_slots]
+
+
 def _refine_indexed_planar_rods(
     items, rods, rod_length, dead_zone_mm, gap_mm,
-    *, max_trials=220, time_budget_s=2.25,
+    *, max_trials=300, time_budget_s=3.0,
 ):
     """Bounded local improvement, never the combinatorial beam search.
 
@@ -3827,11 +3864,118 @@ def _refine_indexed_planar_rods(
         return fitted
 
     def score(states):
+        # Reducing the number of rods wins first. When that is unchanged,
+        # prefer filling some rods near stock length rather than leaving
+        # similar scraps on every rod.
         return (
             len(states),
+            -round(_rod_fill_concentration(states, rod_length), 8)
+                if len(states) > 1 else 0.0,
             round(sum(float(rod.used_span) for rod in states), 5),
             -sum(rod.common_lines for rod in states),
         )
+
+    # FULL-ROD FIRST: insert smaller pieces from short rods before the last
+    # piece of fuller rods. For straight cuts this often does *not* change
+    # the sum of occupied lengths, so the old sum-length criterion rejected
+    # exactly the useful transfers. Prefer concentrated occupancy instead.
+    # This phase runs before any interior permutation to reserve enough
+    # fitting budget for the high-priority action.
+    for _pass in range(4):
+        if trials >= max_trials or time.perf_counter() >= deadline:
+            break
+        best_move = None
+        donor_order = sorted(
+            range(len(rods)),
+            key=lambda i: (rods[i].used_span, rods[i].piece_count, i),
+        )
+        for donor_i in donor_order[:min(8, len(rods))]:
+            donor = rods[donor_i]
+            if donor.piece_count > 18:
+                continue
+            donor_seq = [p.item_index for p in donor.placed]
+            small_first = sorted(
+                enumerate(donor_seq),
+                key=lambda row: (items[row[1]].physical_length, row[0]),
+            )
+            for source_pos, piece in small_first[:min(8, len(small_first))]:
+                reduced = donor_seq[:source_pos] + donor_seq[source_pos+1:]
+                donor_fit = fit(reduced) if reduced else None
+                if reduced and donor_fit is None:
+                    continue
+                destinations = sorted(
+                    (j for j in range(len(rods)) if j != donor_i),
+                    key=lambda j: (-rods[j].used_span, j),
+                )[:min(8, len(rods)-1)]
+                for dest_i in destinations:
+                    target = rods[dest_i]
+                    if target.used_span <= donor.used_span + 0.01:
+                        continue
+                    target_seq = [p.item_index for p in target.placed]
+                    slots = _fill_interior_slots(target, items)
+                    for pos in slots:
+                        proposed = (
+                            target_seq[:pos] + [piece] + target_seq[pos:]
+                        )
+                        target_fit = fit(proposed)
+                        if target_fit is None:
+                            continue
+
+                        old_spans = (
+                            float(target.used_span), float(donor.used_span)
+                        )
+                        new_spans = (
+                            float(target_fit.used_span),
+                            float(donor_fit.used_span) if donor_fit else 0.0,
+                        )
+                        if new_spans[0] <= old_spans[0] + 0.05:
+                            continue
+                        before = sum(old_spans)
+                        after = sum(new_spans)
+                        # Never fill a rod by wasting considerable extra
+                        # material on worse connections.
+                        if after > before + max(2.0, float(gap_mm) * 2.0):
+                            continue
+                        before_concentration = sum(x*x for x in old_spans)
+                        after_concentration = sum(x*x for x in new_spans)
+                        if (
+                            donor_fit is not None
+                            and after_concentration <= before_concentration + 0.1
+                        ):
+                            continue
+
+                        # Eliminating a rod wins. Otherwise maximize the
+                        # increase in concentrated, actually cuttable length,
+                        # then minimize leftover space on the recipient.
+                        evaluation = (
+                            0 if donor_fit is None else 1,
+                            -round(after_concentration-before_concentration, 3),
+                            round(rod_length-new_spans[0], 4),
+                            round(after-before, 4),
+                            donor_i, dest_i, source_pos, pos,
+                        )
+                        if best_move is None or evaluation < best_move[0]:
+                            best_move = (
+                                evaluation, donor_i, donor_fit,
+                                dest_i, target_fit,
+                            )
+                        if trials >= max_trials or time.perf_counter() >= deadline:
+                            break
+                    if trials >= max_trials or time.perf_counter() >= deadline:
+                        break
+                if trials >= max_trials or time.perf_counter() >= deadline:
+                    break
+            if trials >= max_trials or time.perf_counter() >= deadline:
+                break
+        if best_move is None:
+            break
+        _, donor_i, donor_fit, dest_i, target_fit = best_move
+        rods[dest_i] = target_fit
+        if donor_fit is None:
+            rods.pop(donor_i)
+        else:
+            rods[donor_i] = donor_fit
+        _PARALLEL_STATS["edge_fill_transfers"] += 1
 
     # A fixed last piece acts as the right-hand boundary. Inserting or moving
     # other pieces before it exploits angle overlaps without shifting it to a
@@ -4070,6 +4214,8 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
     def quality(rods):
         return (
             len(rods),
+            -round(_rod_fill_concentration(rods, rod_length), 8)
+                if len(rods) > 1 else 0.0,
             round(sum(rod.used_span for rod in rods), 6),
             -sum(rod.common_lines for rod in rods),
         )
