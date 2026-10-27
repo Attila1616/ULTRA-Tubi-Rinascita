@@ -54,6 +54,10 @@ PARALLEL_MAX_UNIQUE_TYPES = 48
 CONTOUR_MAX_CPU_WORKERS = 12
 CONTOUR_MEMORY_SAFE_CPU_WORKERS = 6
 PAIRWISE_PRECOMPUTE_MAX_TRANSITIONS = 100_000
+# Contour fits are substantially more expensive than plane fits. On a
+# diverse job, eager evaluation of tens of thousands of largely unused
+# pair/pose transitions delays the *first* rod; use lazy cached fits instead.
+CONTOUR_EAGER_PRECOMPUTE_LIMIT = 8_192
 CONTOUR_LARGE_JOB_MIN_ITEMS = 24
 LARGE_SEARCH_MIN_ITEMS = 32
 LARGE_SEARCH_MIN_UNIQUE_TYPES = 8
@@ -136,6 +140,7 @@ def _reset_parallel_stats():
         precomputed_failures=0,
         precompute_estimated_transitions=0,
         precompute_skipped_memory_guard=False,
+        precompute_skipped_work_budget=False,
         unique_type_count=0,
         strategy="serial_small_job",
         algorithm="current",
@@ -1126,6 +1131,22 @@ def _precompute_pairwise_catalog(items, gap_mm):
     _PARALLEL_STATS["precompute_estimated_transitions"] = int(
         estimated_transitions
     )
+
+    if estimated_transitions > CONTOUR_EAGER_PRECOMPUTE_LIMIT:
+        # Nothing is discarded: pairs are evaluated and cached on demand
+        # during actual rod construction. This avoids spending time on
+        # hypothetical combinations that might never occur.
+        _PARALLEL_STATS["precompute_seconds"] = time.perf_counter() - started
+        _PARALLEL_STATS["precomputed_transitions"] = 0
+        _PARALLEL_STATS["precomputed_failures"] = 0
+        _PARALLEL_STATS["precompute_skipped_work_budget"] = True
+        print(
+            "[TubeNest] skipped eager contour pair catalog: "
+            f"estimated={estimated_transitions}, "
+            f"work_budget={CONTOUR_EAGER_PRECOMPUTE_LIMIT}; "
+            "fits will be cached lazily."
+        )
+        return {}
 
     if estimated_transitions > PAIRWISE_PRECOMPUTE_MAX_TRANSITIONS:
         _PARALLEL_STATS["precompute_seconds"] = (
@@ -2990,6 +3011,15 @@ def diagnose_items_dict(
     lines.append(f"Gap: {float(gap_mm):g} mm")
     lines.append(f"Beam normale: {DEFAULT_BEAM_WIDTH}")
     lines.append(f"Tipi candidati per livello: {DEFAULT_MAX_CANDIDATE_TYPES}")
+    lines.append(
+        "Ottimizzazione nuovi bordi: priorita a tagli planari "
+        "co-edge compatibili; bounding-planar su contorni irregolari "
+        "solo per scartare pose impossibili"
+    )
+    lines.append(
+        f"Catalogo preventivo contorni: massimo "
+        f"{CONTOUR_EAGER_PRECOMPUTE_LIMIT} transizioni (altre valutate quando servono)"
+    )
     lines.append(
         "Taglio dritto: pose assiali ridotte per "
         f"{sum(_straight_rotation_is_redundant(item) for item in normalized)} "
