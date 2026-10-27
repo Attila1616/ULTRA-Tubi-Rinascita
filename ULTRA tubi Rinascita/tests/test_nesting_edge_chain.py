@@ -1,4 +1,4 @@
-"""Regression tests for reusable cut-end classes and certified fast rod chains."""
+"""Regression tests for reusable end-cut classes and fast planar chains."""
 import math
 import unittest
 from unittest.mock import patch
@@ -106,7 +106,7 @@ class IndexedCutChainTests(unittest.TestCase):
             sum(rod.common_lines for rod in rods), 0
         )
 
-    def test_normal_optimizer_skips_expensive_beam_for_certified_straight_job(self):
+    def test_normal_optimizer_skips_expensive_beam_for_straight_job(self):
         engine._reset_parallel_stats()
         with patch.object(
             engine, "_build_initial_rods",
@@ -122,10 +122,10 @@ class IndexedCutChainTests(unittest.TestCase):
         self.assertEqual(len(states), 8)
         stats = engine.get_parallel_stats()
         self.assertTrue(stats["edge_chain_accepted"])
-        self.assertEqual(stats["strategy"], "certified_cut_class_chain")
+        self.assertEqual(stats["strategy"], "indexed_any_planar_angle")
         self.assertEqual(stats["pool_runs"], 0)
 
-    def test_angled_identical_ends_can_also_certify_chain(self):
+    def test_angled_identical_ends_also_use_direct_chain(self):
         items = self.setup_items(24, angled=True)
         engine._reset_parallel_stats()
         states = engine._certified_edge_chain_plan(
