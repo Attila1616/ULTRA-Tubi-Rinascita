@@ -167,6 +167,7 @@ class Api:
         self.config["nesting_algorithm"] = "current"
         self.config.setdefault("nesting_rotation_visualization_enabled", False)
         self.config.setdefault("nesting_debug_enabled", True)
+        self.config.setdefault("igs_hide_quantity_mismatch_warnings", False)
         self.config.setdefault("nested_text_marking_enabled", False)
         self.config.setdefault("nested_text_marking_height_mm", 5.0)
         self.config.setdefault("nested_round_text_head_motion_enabled", True)
@@ -290,6 +291,12 @@ class Api:
 
         updated["nesting_debug_enabled"] = bool(
             payload.get("nesting_debug_enabled", updated.get("nesting_debug_enabled", True))
+        )
+        updated["igs_hide_quantity_mismatch_warnings"] = bool(
+            payload.get(
+                "igs_hide_quantity_mismatch_warnings",
+                updated.get("igs_hide_quantity_mismatch_warnings", False),
+            )
         )
         updated["order_include_low_priority"] = bool(
             payload.get("order_include_low_priority", updated.get("order_include_low_priority", True))
@@ -481,6 +488,22 @@ class Api:
             return {
                 "status": "error",
                 "message": "Errore durante la conversione batch IGS -> ZZX.",
+                "results": [],
+            }
+
+    def convert_missing_igs_files_to_zzx(self, file_paths=None):
+        """Convert only genuinely missing drawings in the active DA FARE tree."""
+        try:
+            return logic.convert_missing_igs_files_to_zzx(
+                self.da_fare_path,
+                file_paths=file_paths,
+            )
+        except Exception:
+            print("--- PYTHON ERROR in convert_missing_igs_files_to_zzx ---")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": "Errore nella conversione dei file IGS mancanti.",
                 "results": [],
             }
 
