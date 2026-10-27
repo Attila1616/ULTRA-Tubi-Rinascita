@@ -261,6 +261,9 @@ class OptimizerItem:
     _straight_pose_redundant: Optional[bool] = field(
         default=None, init=False, repr=False, compare=False,
     )
+    _contour_prefilter_eligible: Optional[bool] = field(
+        default=None, init=False, repr=False, compare=False,
+    )
 
     @property
     def geometry_available(self):
@@ -791,6 +794,38 @@ def _bounded_state_map_add(
         best_by_key[_state_dedupe_key(candidate)] = candidate
 
 
+def _item_may_need_contour_fit(item):
+    """Memoize whether a piece can ever trigger the irregular-cut fitter.
+
+    Ordinary planar jobs take the original fast path without repeatedly
+    posing both ends just to evaluate an unnecessary virtual-plane bound.
+    """
+    cached = item._contour_prefilter_eligible
+    if cached is None:
+        part = item.tube_part or {}
+        cached = False
+        for end in (part.get("ends") or [])[:2]:
+            if not isinstance(end, dict):
+                continue
+            envelope = end.get("perimeter_envelope")
+            if not isinstance(envelope, list) or len(envelope) < 32:
+                continue
+            plane = end.get("plane_z_equals_c_plus_ax_plus_by")
+            residual = end.get("plane_max_residual_mm")
+            try:
+                nonplanar = (
+                    not plane
+                    or (residual is not None and float(residual) > PLANAR_FIT_TOLERANCE_MM)
+                )
+            except (TypeError, ValueError):
+                nonplanar = True
+            if nonplanar:
+                cached = True
+                break
+        item._contour_prefilter_eligible = cached
+    return cached
+
+
 def _append_candidate(
     state,
     item,
@@ -825,28 +860,32 @@ def _append_candidate(
             # bound. Reject only when even this optimistic bound would run
             # beyond the stock end. All accepted candidates still use the
             # full contour/plane fit and ordinary machine safety checks.
-            _, previous_end = posed_ends(
-                previous_item.tube_part, previous_placed.pose
-            )
-            next_start, _ = posed_ends(item.tube_part, pose)
             if (
-                not _plane_fit_is_usable(previous_end)
-                or not _plane_fit_is_usable(next_start)
+                _item_may_need_contour_fit(previous_item)
+                or _item_may_need_contour_fit(item)
             ):
-                necessary_origin = contour_virtual_plane_lower_bound(
-                    previous_item.tube_part,
-                    previous_placed.pose,
-                    item.tube_part,
-                    pose,
-                    gap_mm,
+                _, previous_end = posed_ends(
+                    previous_item.tube_part, previous_placed.pose
                 )
+                next_start, _ = posed_ends(item.tube_part, pose)
                 if (
-                    necessary_origin is not None
-                    and float(previous_placed.origin)
-                        + necessary_origin + item.physical_length
-                        > float(rod_length) + EPS
+                    not _plane_fit_is_usable(previous_end)
+                    or not _plane_fit_is_usable(next_start)
                 ):
-                    return None
+                    necessary_origin = contour_virtual_plane_lower_bound(
+                        previous_item.tube_part,
+                        previous_placed.pose,
+                        item.tube_part,
+                        pose,
+                        gap_mm,
+                    )
+                    if (
+                        necessary_origin is not None
+                        and float(previous_placed.origin)
+                            + necessary_origin + item.physical_length
+                            > float(rod_length) + EPS + 0.0001
+                    ):
+                        return None
             try:
                 (
                     relative_origin,
