@@ -83,6 +83,47 @@ class IndexedRefinementTests(unittest.TestCase):
         ), list(range(len(items))))
         self.assertLessEqual(engine.get_parallel_stats()["edge_refine_trials"], 60)
 
+    def test_refiner_absorbs_a_short_rod_by_geometric_insertion(self):
+        items = instances([
+            ("A", 200, (0., 0.), 2),
+            ("B", 150, (0., 0.), 1),
+        ])
+        initial = [
+            engine._optimize_fixed_item_sequence(
+                items, [0, 1], rod_length=600,
+                dead_zone_mm=0, gap_mm=2,
+            ),
+            engine._optimize_fixed_item_sequence(
+                items, [2], rod_length=600,
+                dead_zone_mm=0, gap_mm=2,
+            ),
+        ]
+        self.assertTrue(all(rod is not None for rod in initial))
+        refined = engine._refine_indexed_planar_rods(
+            items, initial, 600, 0, 2,
+            max_trials=80, time_budget_s=1.0,
+        )
+        self.assertEqual(len(refined), 1)
+        self.assertEqual(sorted(p.item_index for p in refined[0].placed),
+                         [0, 1, 2])
+        self.assertLessEqual(refined[0].used_span, 600)
+
+    def test_physical_tolerance_passes_to_exact_fit(self):
+        items = engine._normalize_items([
+            {
+                "instanceKey": "long",
+                "sourceId": "long",
+                "length": 6000.5,
+                "tubePart": sample_piece("long", 6000.5),
+            },
+        ], 6001)
+        self.assertIsNotNone(
+            engine._optimize_fixed_item_sequence(
+                items, [0], rod_length=6001,
+                dead_zone_mm=400, gap_mm=2,
+            )
+        )
+
     def test_refiner_can_be_disabled_without_changing_plan(self):
         items = instances([("A", 100, (0., 0.), 8)])
         engine._reset_parallel_stats()
