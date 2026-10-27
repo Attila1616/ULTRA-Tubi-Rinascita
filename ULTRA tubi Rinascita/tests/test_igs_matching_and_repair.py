@@ -118,17 +118,57 @@ class IgsMatchingRepairTests(unittest.TestCase):
             self.assertTrue(source.exists())
             batch.assert_not_called()
 
-    def test_refuses_unverified_path_without_modifying_anything(self):
+    def test_manual_conversion_skips_existing_without_relocation(self):
         with tempfile.TemporaryDirectory() as home:
+            folder = Path(home) / "PROD" / "TT"
+            source = put(folder / "PART 1pz.igs")
+            old_zzx = put(folder / "PART 1pz.zzx", "keep-existing")
+            with patch.object(logic, "convert_igs_files_to_zzx") as batch:
+                result = logic.convert_selected_igs_files_to_zzx([str(source)])
+            self.assertEqual(result["existing"], 1)
+            self.assertTrue(source.exists())
+            self.assertEqual(old_zzx.read_text(encoding="utf-8"), "keep-existing")
+            self.assertFalse((folder / "IGS").exists())
+            batch.assert_not_called()
+
+    def test_manual_conversion_preserves_selection_result_order(self):
+        with tempfile.TemporaryDirectory() as home:
+            folder = Path(home) / "PROD"
+            exists = put(folder / "FIRST 1pz.igs")
+            put(folder / "FIRST 1pz.zzx", "do-not-touch")
+            missing = put(folder / "SECOND 1pz.igs")
+            with patch.object(logic, "convert_igs_files_to_zzx", side_effect=self.fake_batch):
+                result = logic.convert_selected_igs_files_to_zzx(
+                    [str(exists), str(missing)]
+                )
+            self.assertEqual(
+                [row["status"] for row in result["results"]],
+                ["exists", "success"],
+            )
+            self.assertEqual(result["converted"], 1)
+            self.assertTrue((folder / "IGS" / "SECOND 1pz.igs").exists())
+
+    def test_explicit_manual_overwrite_uses_requested_target(self):
+        with tempfile.TemporaryDirectory() as home:
+            folder = Path(home) / "PROD"
+            source = put(folder / "IGS" / "SAMPLE 1pz.igs")
+            target = put(folder / "SAMPLE 1pz.zzx", "old")
+            with patch.object(logic, "convert_igs_files_to_zzx", side_effect=self.fake_batch) as batch:
+                result = logic.convert_selected_igs_files_to_zzx(
+                    [str(source)], overwrite=True
+                )
+            self.assertEqual(result["converted"], 1)
+            self.assertEqual(target.read_text(encoding="utf-8"), "zzx-placeholder")
+            self.assertTrue(batch.call_args.kwargs["overwrite"])
+
+    def test_refuses_unverified_path_without_modifying_anything(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as other:
             source = put(Path(home) / "PROD" / "IGS" / "PART 1pz.igs")
-            outside = put(Path(tempfile.gettempdir()) / "ultra-not-in-work-tree.igs")
-            try:
-                result = logic.convert_missing_igs_files_to_zzx(home, [str(source), str(outside)])
-                self.assertEqual(result["status"], "error")
-                self.assertTrue(source.exists())
-                self.assertTrue(outside.exists())
-            finally:
-                outside.unlink(missing_ok=True)
+            outside = put(Path(other) / "ultra-not-in-work-tree.igs")
+            result = logic.convert_missing_igs_files_to_zzx(home, [str(source), str(outside)])
+            self.assertEqual(result["status"], "error")
+            self.assertTrue(source.exists())
+            self.assertTrue(outside.exists())
 
 
 if __name__ == "__main__":
