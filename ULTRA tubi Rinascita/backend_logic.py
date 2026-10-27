@@ -304,12 +304,16 @@ def convert_igs_files_to_zzx(file_paths, overwrite=False, output_paths=None):
 
 
 def convert_igs_file_to_zzx(file_path, overwrite=False):
-    """Convert one IGS/IGES tube to a sibling ZZX file."""
+    """Convert one IGS/IGES tube with the same safe IGS-folder output layout."""
     try:
-        return tubenest_engine.convert_igs_to_zzx(
-            file_path,
-            overwrite=bool(overwrite),
+        batch = convert_selected_igs_files_to_zzx(
+            [file_path], overwrite=overwrite
         )
+        results = batch.get("results") or []
+        return results[0] if results else {
+            "status": "error",
+            "message": batch.get("message") or "Conversione IGS non riuscita.",
+        }
     except Exception as exc:
         print("--- PYTHON ERROR in convert_igs_file_to_zzx ---")
         traceback.print_exc()
