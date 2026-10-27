@@ -38,8 +38,10 @@ class CacheResetTests(unittest.TestCase):
             filename = os.path.join(tempdir, "nesting_cache.json")
             saved_entries = dict(logic._NESTING_GROUP_CACHE)
             try:
-                with patch.object(logic, "NESTING_CACHE_FILE", filename), \\
-                     patch.object(logic, "_NESTING_GROUP_CACHE_LOADED", True):
+                with (
+                    patch.object(logic, "NESTING_CACHE_FILE", filename),
+                    patch.object(logic, "_NESTING_GROUP_CACHE_LOADED", True),
+                ):
                     logic._NESTING_GROUP_CACHE.clear()
                     before = logic._NESTING_CACHE_GENERATION
                     signature = "a" * 64
