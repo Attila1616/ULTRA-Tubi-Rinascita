@@ -8,7 +8,6 @@ from tubenest_engine.optimizer import (
     _next_pose_candidates,
     _pose_branch_estimate,
     _straight_rotation_is_redundant,
-    _rectangle_family,
 )
 
 
