@@ -197,14 +197,19 @@ _TD_CODE_RE = re.compile(r"^T[DA]\d{4}[A-Z]\d{5}$", re.IGNORECASE)
 
 
 def marking_layout_candidates(text):
-    """Return progressively more compact PROD/[TD]/length layouts.
+    """Return physically laid-out marking lines.
 
-    TD/TA is optional. When present it is kept in the first two layouts and
-    split after T(D/A)+4 digits for the most compact layout.
+    New labels have explicit newline separators and each field must remain on
+    its own engraving line, in its original order. The legacy pipe-separated
+    fallback layouts are retained for older callers.
     """
     value = str(text or "").strip()
     if not value:
         return []
+
+    if "\n" in value or "\r" in value:
+        lines = [line.strip() for line in value.splitlines() if line.strip()]
+        return [lines] if lines else []
 
     parts = [part.strip() for part in value.split("|") if part.strip()]
     prod = None
