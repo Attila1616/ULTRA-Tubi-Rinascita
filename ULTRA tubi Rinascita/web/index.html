@@ -6,45 +6,68 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tubi Nesting Manager</title>
     <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="ui-modern.css" />
 </head>
 <body>
     <div class="app-container">
-        <header>
-            <h1>Tubi Nesting Manager</h1>
-            <div class="inventory-search">
-    <div class="search-row">
-        <input id="search-dimensione" type="text" class="search-input" placeholder="Dimensione (es. 100x50 o 60.3)" autocomplete="off">
-        <span class="search-sep">x</span>
-        <input id="search-spessore" type="text" class="search-input search-input-small" placeholder="Spessore" autocomplete="off">
 
-        <select id="search-materiale" class="search-select">
-            <option value="304" selected>304</option>
-            <option value="316">316</option>
-        </select>
-
-        <select id="search-finitura" class="search-select">
-            <option value="2B" selected>2B</option>
-            <option value="BA">BA</option>
-        </select>
-
-        <button id="search-btn" class="action-button">Cerca</button>
-    </div>
-    <div class="folder-row">
-        <span>Cartella corrente: </span><strong id="current-folder-path">Nessuna cartella selezionata</strong>
-    </div>
-</div>
-<div class="view-toggle">
-                <button id="main-view-btn" class="view-btn active">Lavori Attivi</button>
-                <button id="history-view-btn" class="view-btn">Cronologia</button>
-                <button id="database-view-btn" class="view-btn">Database Tubi</button>
+        <header class="app-header">
+            <div class="header-identity">
+                <div class="brand-mark" aria-hidden="true">U</div>
+                <div class="brand-copy">
+                    <span class="eyebrow">PRODUZIONE · TAGLIO LASER TUBI</span>
+                    <h1>ULTRA <span>Tube Manager</span></h1>
+                </div>
+                <div class="folder-row" title="Cartella di lavoro corrente">
+                    <span class="folder-dot" aria-hidden="true"></span>
+                    <span>Cartella corrente</span>
+                    <strong id="current-folder-path">Nessuna cartella selezionata</strong>
+                </div>
             </div>
-            <button id="summary-btn" class="action-button">Genera Riepilogo</button>
-            <button id="tt-docx-btn" class="action-button">Lista TT DOCX</button>
-            <button id="refresh-button">Ricarica Dati</button>
-            <button id="igs-to-zzx-btn" class="action-button">IGS &rarr; ZZX</button>
-            <button id="igs-folder-to-zzx-btn" class="action-button">Cartella IGS &rarr; ZZX</button>
-            <button id="settings-btn" class="action-button">Impostazioni</button>
-            <button id="debug-btn" class="action-button" style="background-color: #ffc107;">Debug</button>
+            <nav class="view-toggle" aria-label="Sezioni principali">
+                <button id="main-view-btn" class="view-btn active" type="button">Lavori attivi</button>
+                <button id="history-view-btn" class="view-btn" type="button">Cronologia</button>
+                <button id="database-view-btn" class="view-btn" type="button">Database tubi</button>
+            </nav>
+            <div class="header-workspace">
+                <div class="inventory-search">
+                    <div class="tool-caption">
+                        <span>Ricerca rapida magazzino</span>
+                        <span class="tool-hint">Cerca una misura senza aprire il database</span>
+                    </div>
+                    <div class="search-row">
+                        <input id="search-dimensione" type="text" class="search-input" placeholder="Misura, es. 100x50 o 60.3" autocomplete="off" aria-label="Misura tubo">
+                        <span class="search-sep" aria-hidden="true">×</span>
+                        <input id="search-spessore" type="text" class="search-input search-input-small" placeholder="Sp." autocomplete="off" aria-label="Spessore">
+                        <select id="search-materiale" class="search-select" aria-label="Materiale">
+                            <option value="304" selected>304</option>
+                            <option value="316">316</option>
+                        </select>
+                        <select id="search-finitura" class="search-select" aria-label="Finitura">
+                            <option value="2B" selected>2B</option>
+                            <option value="BA">BA</option>
+                        </select>
+                        <button id="search-btn" class="action-button button-primary" type="button">Cerca</button>
+                    </div>
+                </div>
+                <div class="header-actions">
+                    <div class="tool-caption"><span>Azioni rapide</span></div>
+                    <div class="header-button-row">
+                        <button id="refresh-button" class="action-button" type="button" title="Aggiorna lavori e nesting">Aggiorna dati</button>
+                        <button id="summary-btn" class="action-button" type="button">Riepilogo</button>
+                        <button id="tt-docx-btn" class="action-button" type="button">Lista TT DOCX</button>
+                        <details class="header-more">
+                            <summary>Altri strumenti</summary>
+                            <div class="header-more-menu">
+                                <button id="igs-to-zzx-btn" class="action-button" type="button">Converti IGS → ZZX</button>
+                                <button id="igs-folder-to-zzx-btn" class="action-button" type="button">Cartella IGS → ZZX</button>
+                                <button id="debug-btn" class="action-button" type="button">Informazioni debug</button>
+                            </div>
+                        </details>
+                        <button id="settings-btn" class="action-button settings-quick-button" type="button">Impostazioni</button>
+                    </div>
+                </div>
+            </div>
         </header>
 
         <!-- Main view for active work -->
@@ -72,85 +95,103 @@
             </div>
         </main>
 
-        <!-- Tube database view -->
+
+        <!-- Tube database view; existing action IDs and Python bindings are unchanged -->
         <main id="tube-database-container" style="display: none;">
-            <section class="database-toolbar">
-                <div class="database-toolbar-section database-filter-section">
-                    <span class="database-toolbar-label">Filtri</span>
+            <div class="database-page-heading">
+                <div>
+                    <span class="eyebrow">MAGAZZINO / INVENTARIO</span>
+                    <h2>Database tubi</h2>
+                    <p>Controlla le giacenze, trova una posizione e gestisci le verghe.</p>
+                </div>
+                <button id="db-refresh-btn" type="button" class="action-button">Aggiorna inventario</button>
+            </div>
+            <section class="database-toolbar" aria-label="Strumenti database">
+                <div class="database-quick-search">
+                    <div class="database-search-field">
+                        <label for="db-quick-search">Cerca in tutto l'inventario <span class="shortcut-hint">/</span></label>
+                        <input id="db-quick-search" class="search-input" type="search" placeholder="Misura, codice, materiale, posizione..." autocomplete="off">
+                    </div>
+                    <label class="db-check-filter"><input id="db-quick-missing" type="checkbox"> Senza codice</label>
+                    <label class="db-check-filter"><input id="db-quick-multi" type="checkbox"> Più posizioni</label>
+                    <button id="db-clear-quick" type="button" class="action-button button-subtle">Azzera ricerca</button>
+                </div>
+                <div class="database-primary-row">
+                    <div class="database-view-toggle" role="group" aria-label="Modalità di visualizzazione">
+                        <button id="db-list-view-btn" class="view-btn active" type="button">Elenco tubi</button>
+                        <button id="db-panel-view-btn" class="view-btn" type="button">Per ubicazione</button>
+                    </div>
+                    <button id="db-add-scaffolding-btn" class="action-button" type="button">+ Scaffalatura</button>
+                    <button id="db-add-code-btn" class="action-button" type="button">+ Codice</button>
+                    <button id="db-order-priorities-btn" class="action-button" type="button">Priorità ordini</button>
+                    <button id="db-order-txt-btn" class="action-button fatto-button" type="button">Genera ordine TXT</button>
+                </div>
+                <details class="db-tools-details" id="db-advanced-filters">
+                    <summary>Filtri avanzati <span>Misura, materiale, finitura, forma, codice</span></summary>
                     <div class="database-filters">
-                        <input id="db-filter-misura" type="text" class="search-input" placeholder="Misura" autocomplete="off">
-                        <input id="db-filter-spessore" type="text" class="search-input search-input-small" placeholder="Spessore" autocomplete="off">
-                        <select id="db-filter-forma" class="search-select">
+                        <input id="db-filter-misura" type="text" class="search-input" placeholder="Misura" autocomplete="off" aria-label="Filtra misura">
+                        <input id="db-filter-spessore" type="text" class="search-input search-input-small" placeholder="Spessore" autocomplete="off" aria-label="Filtra spessore">
+                        <select id="db-filter-forma" class="search-select" aria-label="Forma">
                             <option value="tutti" selected>Tutte le forme</option>
                             <option value="tondo">Tondi</option>
                             <option value="tubolari">Tubolari</option>
                             <option value="quadrato">Quadrati</option>
                             <option value="rettangolare">Rettangolari</option>
                         </select>
-                        <select id="db-filter-materiale" class="search-select">
+                        <select id="db-filter-materiale" class="search-select" aria-label="Materiale">
                             <option value="tutti" selected>Tutti materiali</option>
                             <option value="304">304</option>
                             <option value="316">316</option>
                         </select>
-                        <select id="db-filter-finitura" class="search-select">
+                        <select id="db-filter-finitura" class="search-select" aria-label="Finitura">
                             <option value="tutti" selected>Tutte finiture</option>
                             <option value="2B">2B</option>
                             <option value="BA">BA</option>
                         </select>
-                        <select id="db-filter-codice" class="search-select">
+                        <select id="db-filter-codice" class="search-select" aria-label="Codice">
                             <option value="tutti" selected>Tutti codici</option>
                             <option value="con">Con codice</option>
                             <option value="senza">Senza codice</option>
                         </select>
-                        <button id="db-apply-filters-btn" class="action-button">Filtra</button>
-                        <button id="db-clear-filters-btn" class="action-button">Pulisci</button>
+                        <button id="db-apply-filters-btn" class="action-button button-primary" type="button">Applica</button>
+                        <button id="db-clear-filters-btn" class="action-button" type="button">Pulisci filtri</button>
                     </div>
-                </div>
-                <div class="database-action-groups">
-                    <div class="database-action-group">
-                        <span class="database-action-label">Vista</span>
-                        <div class="database-action-buttons">
-                            <div class="database-view-toggle">
-                                <button id="db-list-view-btn" class="view-btn active">Lista</button>
-                                <button id="db-panel-view-btn" class="view-btn">Pannelli</button>
+                </details>
+                <details class="db-tools-details" id="db-tools-more">
+                    <summary>Gestione e strumenti avanzati <span>Scaffalature, importazioni, esportazioni e stampe</span></summary>
+                    <div class="database-action-groups">
+                        <div class="database-action-group">
+                            <span class="database-action-label">Ubicazioni</span>
+                            <div class="database-action-buttons">
+                                <button id="db-expand-all-scaff-btn" class="action-button" type="button">Espandi scaffalature</button>
+                                <button id="db-collapse-all-scaff-btn" class="action-button" type="button">Comprimi scaffalature</button>
+                                <button id="db-expand-all-ripiani-btn" class="action-button" type="button">Espandi ripiani</button>
+                                <button id="db-collapse-all-ripiani-btn" class="action-button" type="button">Comprimi ripiani</button>
                             </div>
-                            <button id="db-expand-all-scaff-btn" class="action-button">Apri Scaff.</button>
-                            <button id="db-collapse-all-scaff-btn" class="action-button">Chiudi Scaff.</button>
-                            <button id="db-expand-all-ripiani-btn" class="action-button">Apri Ripiani</button>
-                            <button id="db-collapse-all-ripiani-btn" class="action-button">Chiudi Ripiani</button>
+                        </div>
+                        <div class="database-action-group">
+                            <span class="database-action-label">Manutenzione</span>
+                            <div class="database-action-buttons">
+                                <button id="db-import-btn" class="action-button" type="button">Importa Excel</button>
+                                <button id="db-validate-btn" class="action-button" type="button">Valida database</button>
+                                <button id="db-import-codes-btn" class="action-button" type="button">Importa codici</button>
+                            </div>
+                        </div>
+                        <div class="database-action-group">
+                            <span class="database-action-label">Esportazioni</span>
+                            <div class="database-action-buttons">
+                                <button id="db-codes-docx-btn" class="action-button" type="button">Lista codici DOCX</button>
+                                <button id="db-multi-location-docx-btn" class="action-button" type="button">Tubi multi-posizione DOCX</button>
+                                <button id="db-export-xlsx-btn" class="action-button" type="button">Inventario Excel</button>
+                                <button id="adhoc-docx-btn" class="action-button" type="button">Lista ADHOC</button>
+                                <button id="adhoc-reset-btn" class="action-button remove-btn ctrl-shift-required" type="button" title="Richiede Ctrl + Shift">Azzera ADHOC</button>
+                            </div>
                         </div>
                     </div>
-                    <div class="database-action-group">
-                        <span class="database-action-label">Gestione</span>
-                        <div class="database-action-buttons">
-                            <button id="db-add-scaffolding-btn" class="action-button">Aggiungi Scaffalatura</button>
-                            <button id="db-refresh-btn" class="action-button">Ricarica Database</button>
-                            <button id="db-import-btn" class="action-button">Importa Excel</button>
-                            <button id="db-validate-btn" class="action-button">Valida</button>
-                        </div>
-                    </div>
-                    <div class="database-action-group">
-                        <span class="database-action-label">Codici e ordini</span>
-                        <div class="database-action-buttons">
-                            <button id="db-import-codes-btn" class="action-button">Importa Codici</button>
-                            <button id="db-add-code-btn" class="action-button">Aggiungi Codice</button>
-                            <button id="db-order-priorities-btn" class="action-button">Gestisci Priorit&agrave;</button>
-                            <button id="db-order-txt-btn" class="action-button fatto-button">Genera Ordine TXT</button>
-                        </div>
-                    </div>
-                    <div class="database-action-group">
-                        <span class="database-action-label">Esportazioni</span>
-                        <div class="database-action-buttons">
-                            <button id="db-codes-docx-btn" class="action-button">Lista Codici DOCX</button>
-                            <button id="db-multi-location-docx-btn" class="action-button">Tubi Multi-Pos. DOCX</button>
-                            <button id="db-export-xlsx-btn" class="action-button">Inventario Excel</button>
-                            <button id="adhoc-docx-btn" class="action-button">Lista ADHOC</button>
-                            <button id="adhoc-reset-btn" class="action-button remove-btn ctrl-shift-required">Azzera ADHOC</button>
-                        </div>
-                    </div>
-                </div>
+                </details>
             </section>
-            <div id="tube-database-status" class="database-status"></div>
+            <div id="db-overview" class="database-overview" aria-live="polite"></div>
+            <div class="database-results-bar"><div id="tube-database-status" class="database-status" role="status"></div><span class="database-results-hint">Clicca sulle intestazioni per ordinare · Ctrl + Shift per le rimozioni protette</span></div>
             <div id="tube-database-list"></div>
         </main>
     </div>
@@ -532,7 +573,8 @@
     </div>
 </div>
 
-<script src="script.js"></script></div>
+<script src="script.js"></script>
+<script src="ui-improvements.js"></script></div>
 
 </body>
 </html>
