@@ -6,6 +6,7 @@ let lastIgsWarningSignature = '';
 let hideQuantityOnlyIgsWarnings = false;
 let quantityIgsPopupDismissed = false;
 let missingIgsConversionInProgress = false;
+let suppressNextIgsAlert = false;
 let lastZzxWarningSignature = '';
 let nestingRenderSequence = 0;
 let nestingResultCache = new Map();
@@ -2353,6 +2354,12 @@ function showIgsWarningAlertIfNeeded() {
     const signature = missing.map(item => item.filePath).sort().join('|');
     const newMissing = !!signature && signature !== lastIgsWarningSignature;
     lastIgsWarningSignature = signature;
+    // Conversion already shows a detailed result. Refresh the warning list
+    // without immediately opening another native alert about remaining files.
+    if (suppressNextIgsAlert) {
+        suppressNextIgsAlert = false;
+        return;
+    }
 
     const firstQuantityNotice = quantity.length
         && !hideQuantityOnlyIgsWarnings
@@ -2401,6 +2408,7 @@ async function convertMissingIgsEntries(filePaths = null) {
             ).join('\n');
         }
         alert(summary);
+        suppressNextIgsAlert = true;
         await loadTubeData();
     } catch (error) {
         console.error('Conversione IGS mancanti:', error);
