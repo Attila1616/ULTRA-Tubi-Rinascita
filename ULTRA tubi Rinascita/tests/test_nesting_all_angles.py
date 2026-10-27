@@ -86,6 +86,31 @@ class ArbitraryAngleFastChainTests(unittest.TestCase):
         )
         self.assertTrue(fit.common_line)
 
+    def test_angled_rectangle_can_choose_rotated_family_after_square(self):
+        slope = math.tan(math.radians(37))
+        square = part("square", last=(slope, 0), kind="Square")
+        rectangle = part("rectangle", first=(0, slope), kind="Rect")
+        previous, next_item = engine._normalize_items(
+            make_job([("square", square, 1), ("rectangle", rectangle, 1)]),
+            600,
+        )
+        candidates = engine._next_pose_candidates(
+            previous, PartPose(), next_item, None
+        )
+        self.assertEqual(len(candidates), 8)
+        self.assertEqual(
+            {p.axial_rotation_degrees for p in candidates},
+            {0.0, 90.0, 180.0, 270.0},
+        )
+        self.assertEqual(candidates[0], PartPose(270, False))
+        after_family = engine._next_pose_candidates(
+            previous, PartPose(), next_item, 0
+        )
+        self.assertEqual(
+            {p.axial_rotation_degrees for p in after_family},
+            {0.0, 180.0},
+        )
+
     def test_rotated_23_degree_round_end_matches_any_rotation(self):
         slope = math.tan(math.radians(23))
         a = part("a", first=(0, 0), last=(slope, 0), kind="Circle")
