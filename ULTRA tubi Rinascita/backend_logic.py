@@ -1969,17 +1969,21 @@ def _clean_marking_prod_folder(value):
 
 
 def _marking_td_codes(value):
-    """All explicit TD drawings, in source order, shortened to TD.12345.
+    """Find complete TD identifiers in source order (without revision suffixes).
 
-    Keep distinct occurrences: a drawing filename can refer to more than one
-    TD, and these must get separate engraving lines. Do not interpret TA,
-    arbitrary digit groups or the revision inside a TD code as a variant.
+    Keep full identifiers for reliable comparisons: two different drawing
+    identifiers can share the same last five digits. Abbreviate only the
+    filename-only identifiers immediately before building the marking lines.
     """
-    return [f"TD.{match.group(1)}" for match in _TEXT_TD_RE.finditer(str(value or ""))]
+    return [match.group(0).upper() for match in _TEXT_TD_RE.finditer(str(value or ""))]
+
+
+def _abbreviate_marking_td_code(code):
+    return f"TD.{str(code)[-5:]}"
 
 
 def _marking_td_folder_codes(file_path):
-    """TD code(s) from the nearest folder containing a TD identifier."""
+    """Full TD code(s) from the nearest folder containing a TD identifier."""
     parts = os.path.normpath(str(file_path or "")).split(os.path.sep)
     for part in reversed(parts[:-1]):
         codes = _marking_td_codes(part)
@@ -2065,35 +2069,52 @@ def _resolve_nested_marking_font_path():
 
 
 def _build_nested_marking_text(segment, config):
-    """Build one unambiguous engraving line per piece of identifying data.
+    """Build the laser marking in strict PROD / folder TD / file TD / L order.
 
-    Layout, in order:
-      1. PROD folder (shipping month removed by the legacy helper)
-      2. Folder TD(s), shortened to TD.<last five digits>
-      3. Filename TD(s), shortened in the same way; omitted if absent
-      4. L<length> [A/B/C...] when an explicit variant is present
+    Folder TD identifiers are engraved fully. Filename identifiers are short
+    (TD.<last five digits>), except when they match a folder TD exactly:
+    the already engraved full code is enough. Compare full identifiers to
+    avoid confusing distinct codes with the same five-digit suffix.
 
-    No invented TD marker when a drawing name lacks a TD code.
+    Some jobs use a root folder beginning with TD... rather than PROD....
+    That root code is the folder TD; there is no PROD engraving for such jobs.
     """
     file_path = str(segment.get("filePath") or "").strip()
     file_name = str(segment.get("fileName") or os.path.basename(file_path))
 
-    prod = _clean_marking_prod_folder(segment.get("mainFolder"))
-    if not prod:
+    main_folder = str(segment.get("mainFolder") or "").strip()
+    if not main_folder:
         da_fare = str((config or {}).get("da_fare_path") or "").strip()
         if file_path and da_fare:
-            prod = _clean_marking_prod_folder(
-                get_product_folder_name(file_path, da_fare)
-            )
+            main_folder = get_product_folder_name(file_path, da_fare)
 
-    folder_codes = _marking_td_folder_codes(file_path)
-    file_codes = _marking_td_codes(file_name)
+    # A first-level TD job folder replaces PROD and takes priority over any
+    # TD-bearing child folder when determining the folder identifier.
+    root_td = _TEXT_TD_RE.match(main_folder.lstrip())
+    if root_td:
+        prod = ""
+        folder_codes = [root_td.group(0).upper()]
+    else:
+        prod = _clean_marking_prod_folder(main_folder)
+        folder_codes = _marking_td_folder_codes(file_path)
+
+    # Keep the first occurrence of each full code, regardless of whether the
+    # filename repeats itself or repeats the folder TD. Preserve original
+    # ordering of different filename codes.
+    folder_codes = list(dict.fromkeys(folder_codes))
+    file_codes = []
+    seen_codes = set(folder_codes)
+    for code in _marking_td_codes(file_name):
+        if code not in seen_codes:
+            file_codes.append(code)
+            seen_codes.add(code)
+
     length = _format_marking_length(segment.get("length"), file_name)
     variant = _marking_length_variant(file_name, file_path)
 
     missing = []
-    if not prod:
-        missing.append("PROD")
+    if not prod and not folder_codes:
+        missing.append("PROD o TD cartella")
     if not length:
         missing.append("lunghezza")
     if missing:
@@ -2102,7 +2123,9 @@ def _build_nested_marking_text(segment, config):
             f"manca {', '.join(missing)}."
         )
 
-    lines = [prod, *folder_codes, *file_codes]
+    lines = ([prod] if prod else [])
+    lines.extend(folder_codes)
+    lines.extend(_abbreviate_marking_td_code(code) for code in file_codes)
     lines.append(f"L{length}" + (f" {variant}" if variant else ""))
     return "\n".join(lines)
 
