@@ -3462,7 +3462,10 @@ def _uniform_angular_lower_bound(items, rod_length, gap_mm):
     if not items or len({item.type_key for item in items}) != 1:
         return None
     first = items[0]
-    if not first.geometry_available:
+    # For circles, subsequent angles can be continuous and depend on the
+    # preceding pose. The first-pose set cannot certify every transition.
+    # Limit this bound to exhaustive discrete square/rectangle pose families.
+    if not first.geometry_available or _profile_kind(first) not in ("Square", "Rect"):
         return None
     length = float(first.physical_length)
     min_advance = length + float(gap_mm)
