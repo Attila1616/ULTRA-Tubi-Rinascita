@@ -571,7 +571,9 @@ def _pose_branch_estimate(item, *, first):
         if kind == "Square":
             return 2  # Two end-for-end options; one rotation.
         if kind == "Rect":
-            return 4 if first else 2  # Keep the two rectangle families.
+            # Conservatively count both families: when a rectangle follows
+            # squares, its family has not been established yet.
+            return 4
     if kind == "Square":
         return 8
     if kind == "Rect":
