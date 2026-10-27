@@ -404,6 +404,11 @@
                     <input id="settings-nesting-gap-mm" type="number" min="0" step="0.1" value="2" class="search-input search-input-small">
                     <span>mm di distanza minima tra superfici non common-line</span>
                 </div>
+                <div class="settings-threshold-grid">
+                    <label for="settings-nesting-rod-tolerance-mm">Tolleranza lunghezza verga</label>
+                    <input id="settings-nesting-rod-tolerance-mm" type="number" min="0" max="50" step="0.1" value="1" class="search-input search-input-small">
+                    <span>mm oltre i 6000 nominali ammessi nel calcolo (predefinito +1 mm). Controlla la lunghezza reale prima di tagliare.</span>
+                </div>
                 <label class="settings-checkbox-row">
                     <input id="settings-nesting-rotation-visualization-enabled" type="checkbox">
                     <span>Mostra rotazioni provate e rotazione scelta sulle verghe</span>
