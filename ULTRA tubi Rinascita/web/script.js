@@ -3,6 +3,9 @@
 // --- Global State & Element Refs ---
 let expandedState = {}, daFareOverrides = {}, allTubeData = [], unmatchedIgsFiles = [], zzxValidationIssues = [];
 let lastIgsWarningSignature = '';
+let hideQuantityOnlyIgsWarnings = false;
+let quantityIgsPopupDismissed = false;
+let missingIgsConversionInProgress = false;
 let lastZzxWarningSignature = '';
 let nestingRenderSequence = 0;
 let nestingResultCache = new Map();
@@ -439,6 +442,7 @@ async function openSettingsModal() {
             ? Math.min(100, Math.max(1, Number(config.nested_round_tip_marking_length_mm)))
             : 20;
         document.getElementById('settings-order-include-low-priority').checked = config.order_include_low_priority !== false;
+        document.getElementById('settings-igs-hide-quantity-mismatches').checked = !!config.igs_hide_quantity_mismatch_warnings;
         settingsIgnoredFolders = Array.isArray(config.ignore_folders) ? [...config.ignore_folders] : [];
         settingsIgnoreInput.value = '';
         renderIgnoredFolders();
@@ -565,6 +569,7 @@ async function saveSettings() {
             nesting_algorithm: 'current',
             nesting_rotation_visualization_enabled: document.getElementById('settings-nesting-rotation-visualization-enabled').checked,
             nesting_debug_enabled: document.getElementById('settings-nesting-debug-enabled').checked,
+            igs_hide_quantity_mismatch_warnings: document.getElementById('settings-igs-hide-quantity-mismatches').checked,
             nested_text_marking_enabled: document.getElementById('settings-nested-text-marking-enabled').checked,
             nested_round_text_head_motion_enabled: document.getElementById('settings-round-text-head-motion-enabled').checked,
             nested_text_marking_height_mm: Math.min(
@@ -597,6 +602,7 @@ async function saveSettings() {
         nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}|algorithm:current`;
         nestingRotationVisualizationEnabled = !!response.config?.nesting_rotation_visualization_enabled;
         nestingDebugEnabled = response.config?.nesting_debug_enabled !== false;
+        hideQuantityOnlyIgsWarnings = !!response.config?.igs_hide_quantity_mismatch_warnings;
         invalidateNestingCache();
         document.getElementById('current-folder-path').textContent = response.config?.da_fare_path || 'Non impostato';
         await loadTubeData();
@@ -742,6 +748,7 @@ async function initialize() {
             nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}|algorithm:current`;
             nestingRotationVisualizationEnabled = !!configResponse.config?.nesting_rotation_visualization_enabled;
             nestingDebugEnabled = configResponse.config?.nesting_debug_enabled !== false;
+            hideQuantityOnlyIgsWarnings = !!configResponse.config?.igs_hide_quantity_mismatch_warnings;
         }
         
         const initialData = await window.pywebview.api.get_initial_data();
@@ -2265,56 +2272,143 @@ async function renderUI() {
         setTimeout(() => ensureGroupNesting(tubeType), 0);
     });
 }
+function missingIgsEntries() {
+    return (unmatchedIgsFiles || []).filter(item => item.type !== 'quantity_mismatch');
+}
+
+function quantityOnlyIgsEntries() {
+    return (unmatchedIgsFiles || []).filter(item => item.type === 'quantity_mismatch');
+}
+
+function appendIgsWarningRow(list, item, isMissing) {
+    const row = document.createElement('li');
+    const text = document.createElement('span');
+    text.textContent = isMissing
+        ? `${item.relativePath}  →  manca ${item.expectedZzxName}`
+        : `${item.relativePath}  →  già presente: ${item.matchedZzxName} (solo quantità diversa)`;
+    const actions = document.createElement('span');
+    actions.className = 'igs-warning-actions';
+    const open = document.createElement('button');
+    open.className = 'action-button igs-open-button';
+    open.dataset.action = 'open-igs-file';
+    open.dataset.filePath = item.filePath;
+    open.textContent = 'Apri';
+    actions.appendChild(open);
+    if (isMissing) {
+        const convert = document.createElement('button');
+        convert.className = 'action-button igs-open-button button-primary';
+        convert.dataset.action = 'convert-missing-igs';
+        convert.dataset.filePath = item.filePath;
+        convert.textContent = 'Converti ZZX';
+        convert.disabled = missingIgsConversionInProgress;
+        actions.appendChild(convert);
+    }
+    row.append(text, actions);
+    list.appendChild(row);
+}
+
 function renderIgsWarningBanner() {
-    if (!unmatchedIgsFiles || unmatchedIgsFiles.length === 0) return;
+    const missing = missingIgsEntries();
+    const quantity = quantityOnlyIgsEntries();
+    if (!missing.length && (!quantity.length || hideQuantityOnlyIgsWarnings)) return;
 
     const banner = document.createElement('div');
     banner.className = 'igs-warning-banner';
 
-    const title = document.createElement('div');
-    title.className = 'igs-warning-title';
-    title.textContent = `Attenzione: ${unmatchedIgsFiles.length} file IGS senza ZZX corrispondente`;
-    banner.appendChild(title);
-
-    const list = document.createElement('ul');
-    unmatchedIgsFiles.slice(0, 25).forEach(item => {
-        const li = document.createElement('li');
-        const text = document.createElement('span');
-        text.textContent = `${item.relativePath}  ->  manca ${item.expectedZzxName}`;
-
-        const button = document.createElement('button');
-        button.className = 'action-button igs-open-button';
-        button.dataset.action = 'open-igs-file';
-        button.dataset.filePath = item.filePath;
-        button.textContent = 'Apri';
-
-        li.appendChild(text);
-        li.appendChild(button);
-        list.appendChild(li);
-    });
-    banner.appendChild(list);
-
-    if (unmatchedIgsFiles.length > 25) {
-        const more = document.createElement('div');
-        more.className = 'igs-warning-more';
-        more.textContent = `Altri ${unmatchedIgsFiles.length - 25} file non mostrati.`;
-        banner.appendChild(more);
+    if (missing.length) {
+        const heading = document.createElement('div');
+        heading.className = 'igs-warning-title';
+        heading.textContent = `Attenzione: ${missing.length} file IGS senza ZZX corrispondente`;
+        const all = document.createElement('button');
+        all.className = 'action-button button-primary';
+        all.textContent = `Converti tutti i ${missing.length} IGS mancanti`;
+        all.dataset.action = 'convert-all-missing-igs';
+        all.disabled = missingIgsConversionInProgress;
+        banner.append(heading, all);
+        const list = document.createElement('ul');
+        missing.forEach(item => appendIgsWarningRow(list, item, true));
+        banner.appendChild(list);
     }
 
+    if (quantity.length && !hideQuantityOnlyIgsWarnings) {
+        const details = document.createElement('details');
+        details.className = 'igs-quantity-differences';
+        const summary = document.createElement('summary');
+        summary.textContent = `${quantity.length} differenze solo nella quantità (non sono ZZX mancanti)`;
+        details.appendChild(summary);
+        const help = document.createElement('p');
+        help.textContent = 'Questi file corrispondono nel nome, eccetto Npz. Puoi nascondere permanentemente questi avvisi nelle Impostazioni → Interfaccia.';
+        details.appendChild(help);
+        const list = document.createElement('ul');
+        quantity.forEach(item => appendIgsWarningRow(list, item, false));
+        details.appendChild(list);
+        banner.appendChild(details);
+    }
     mainContainer.appendChild(banner);
 }
-function showIgsWarningAlertIfNeeded() {
-    const signature = (unmatchedIgsFiles || []).map(item => item.filePath).sort().join('|');
-    if (!signature) {
-        lastIgsWarningSignature = '';
-        return;
-    }
-    if (signature === lastIgsWarningSignature) return;
 
+function showIgsWarningAlertIfNeeded() {
+    const missing = missingIgsEntries();
+    const quantity = quantityOnlyIgsEntries();
+    const signature = missing.map(item => item.filePath).sort().join('|');
+    const newMissing = !!signature && signature !== lastIgsWarningSignature;
     lastIgsWarningSignature = signature;
-    const preview = unmatchedIgsFiles.slice(0, 10).map(item => `- ${item.relativePath}`).join('\n');
-    const extra = unmatchedIgsFiles.length > 10 ? `\n...e altri ${unmatchedIgsFiles.length - 10}` : '';
-    alert(`Attenzione: ci sono ${unmatchedIgsFiles.length} file IGS senza ZZX corrispondente.\n\n${preview}${extra}`);
+
+    const firstQuantityNotice = quantity.length
+        && !hideQuantityOnlyIgsWarnings
+        && !quantityIgsPopupDismissed;
+
+    if (!newMissing && !firstQuantityNotice) return;
+    const lines = [];
+    if (newMissing) {
+        const shown = missing.slice(0, 10).map(item => `- ${item.relativePath}`).join('\n');
+        lines.push(`${missing.length} file IGS senza ZZX corrispondente:\n${shown}${missing.length > 10 ? '\n...' : ''}`);
+    }
+    if (firstQuantityNotice) {
+        lines.push(`${quantity.length} differenze soltanto nella quantità (es. 1pz / 10pz). Non sono considerate file mancanti e non verranno convertite automaticamente. Puoi nasconderle dalle Impostazioni.`);
+        // Dismissed for the entire application session, including later refreshes.
+        quantityIgsPopupDismissed = true;
+    }
+    alert('Confronto IGS / ZZX:\n\n' + lines.join('\n\n'));
+}
+
+async function convertMissingIgsEntries(filePaths = null) {
+    if (missingIgsConversionInProgress) return;
+    const missing = missingIgsEntries();
+    const selected = filePaths ? missing.filter(item => filePaths.includes(item.filePath)) : missing;
+    if (!selected.length) return;
+
+    const prompt = selected.length === 1
+        ? `Convertire in ZZX?\n${selected[0].relativePath}\n\nIl file IGS sarà spostato nella cartella IGS se non è già lì. Il ZZX verrà creato accanto a quella cartella, senza sovrascrivere file esistenti.`
+        : `Convertire ${selected.length} file IGS mancanti?\n\nSe necessario, verranno creati i rispettivi sottogruppi IGS e i sorgenti spostati al loro interno. I nuovi ZZX verranno creati fuori dalla cartella IGS. Nessun ZZX esistente sarà sovrascritto.`;
+    if (!confirm(prompt)) return;
+
+    missingIgsConversionInProgress = true;
+    await renderUI();
+    try {
+        const result = await window.pywebview.api.convert_missing_igs_files_to_zzx(
+            filePaths ? selected.map(item => item.filePath) : null
+        );
+        if (!result || result.status !== 'success') {
+            throw new Error(result?.message || 'Conversione IGS non riuscita.');
+        }
+        const errors = (result.results || []).filter(row => row.status === 'error');
+        const existing = (result.results || []).filter(row => row.status === 'exists');
+        let summary = `ZZX creati: ${result.converted || 0}\nGià esistenti (non sovrascritti): ${existing.length}\nErrori: ${errors.length}`;
+        if (errors.length) {
+            summary += '\n\n' + errors.slice(0, 15).map(row =>
+                `- ${row.originalSourcePath || row.sourcePath || '?'}: ${row.message || 'Errore'}`
+            ).join('\n');
+        }
+        alert(summary);
+        await loadTubeData();
+    } catch (error) {
+        console.error('Conversione IGS mancanti:', error);
+        alert(error.message || 'Errore nella conversione IGS.');
+    } finally {
+        missingIgsConversionInProgress = false;
+        await renderUI();
+    }
 }
 
 function renderZzxWarningBanner() {
@@ -2931,6 +3025,12 @@ async function handleContainerClick(event) {
             case 'open-folder': if (pieceId) openFolder(pieceId); break;
             case 'open-file-path': if (actionTarget.dataset.filePath) openFilePath(actionTarget.dataset.filePath); break;
             case 'open-igs-file': if (actionTarget.dataset.filePath) openFilePath(actionTarget.dataset.filePath); break;
+            case 'convert-missing-igs':
+                if (actionTarget.dataset.filePath) await convertMissingIgsEntries([actionTarget.dataset.filePath]);
+                break;
+            case 'convert-all-missing-igs':
+                await convertMissingIgsEntries();
+                break;
             case 'open-zzx-validation-file': if (actionTarget.dataset.filePath) openFilePath(actionTarget.dataset.filePath); break;
             case 'search-tube-location':
                 await showTubeLocation(actionTarget.dataset.tubeType);
