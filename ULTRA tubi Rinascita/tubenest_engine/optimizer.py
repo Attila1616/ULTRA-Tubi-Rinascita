@@ -354,7 +354,7 @@ def _rectangle_family(rotation):
 
 def _straight_rotation_is_redundant(item):
     """Memoized straight-cut symmetry, shared by all beam-search branches."""
-    cached = item._straight_pose_redundant
+    cached = getattr(item, "_straight_pose_redundant", None)
     if cached is None:
         cached = _compute_straight_rotation_is_redundant(item)
         item._straight_pose_redundant = cached
@@ -2913,7 +2913,7 @@ def diagnose_items_dict(
     lines.append(f"Tipi candidati per livello: {DEFAULT_MAX_CANDIDATE_TYPES}")
     lines.append(
         "Taglio dritto: pose assiali ridotte per "
-        f"{get_parallel_stats().get('straight_rotation_reduced_parts', 0)} "
+        f"{sum(_straight_rotation_is_redundant(item) for item in normalized)} "
         f"pezzi su {len(normalized)} (ribaltamento sempre valutato)"
     )
     cpu_stats = get_parallel_stats()
