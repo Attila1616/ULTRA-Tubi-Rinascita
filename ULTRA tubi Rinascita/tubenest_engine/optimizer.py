@@ -559,8 +559,14 @@ def _next_pose_candidates(previous_item, previous_pose, item, rectangle_family):
                 else (0.0,) if rectangle_family == 0 else (90.0,)
             )
         else:
-            base = 0.0 if rectangle_family in (None, 0) else 90.0
-            rotations = (base, base + 180.0)
+            # When a rectangle follows square pieces there is no established
+            # rectangle family yet. Both 0/180 and 90/270 families must be
+            # considered, including for rotated 30/45/60-degree end cuts.
+            if rectangle_family is None:
+                rotations = (0.0, 90.0, 180.0, 270.0)
+            else:
+                base = 0.0 if rectangle_family == 0 else 90.0
+                rotations = (base, base + 180.0)
         for reversed_flag in (False, True):
             for rotation in rotations:
                 poses.append(PartPose(rotation, reversed_flag))
