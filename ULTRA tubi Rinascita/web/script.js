@@ -15,7 +15,7 @@ let nestingActiveGenerationByTube = new Map();
 let nestingErrorByTube = new Map();
 let nestingRodToleranceMm = 1.0;
 let nestingCacheResetEpoch = 0;
-let nestingSettingsKey = 'gap:2|tolerance:1|algorithm:current|fast-refine-v2';
+let nestingSettingsKey = 'gap:2|tolerance:1|algorithm:current|full-rod-v3';
 let uiPreferences = {
     sorting: {},
     columnWidths: {},
@@ -609,7 +609,7 @@ async function saveSettings() {
         closeSettingsModal();
         applyLockColors(response.config?.lock_unlocked_color, response.config?.lock_locked_color);
         nestingRodToleranceMm = Number(response.config?.nesting_rod_tolerance_mm ?? 1);
-        nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}|tolerance:${nestingRodToleranceMm}|algorithm:current|fast-refine-v2`;
+        nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}|tolerance:${nestingRodToleranceMm}|algorithm:current|full-rod-v3`;
         nestingRotationVisualizationEnabled = !!response.config?.nesting_rotation_visualization_enabled;
         nestingDebugEnabled = response.config?.nesting_debug_enabled !== false;
         hideQuantityOnlyIgsWarnings = !!response.config?.igs_hide_quantity_mismatch_warnings;
@@ -756,7 +756,7 @@ async function initialize() {
         if (configResponse?.status === 'success') {
             applyLockColors(configResponse.config?.lock_unlocked_color, configResponse.config?.lock_locked_color);
             nestingRodToleranceMm = Number(configResponse.config?.nesting_rod_tolerance_mm ?? 1);
-            nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}|tolerance:${nestingRodToleranceMm}|algorithm:current|fast-refine-v2`;
+            nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}|tolerance:${nestingRodToleranceMm}|algorithm:current|full-rod-v3`;
             nestingRotationVisualizationEnabled = !!configResponse.config?.nesting_rotation_visualization_enabled;
             nestingDebugEnabled = configResponse.config?.nesting_debug_enabled !== false;
             hideQuantityOnlyIgsWarnings = !!configResponse.config?.igs_hide_quantity_mismatch_warnings;
@@ -2095,7 +2095,7 @@ function buildClientNestingSignature(group, piecesToNest) {
     }).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
 
     return JSON.stringify([
-        'optimizer-cache-v7',
+        'optimizer-cache-v8',
         nestingSettingsKey,
         group?.tubeType || '',
         compact
