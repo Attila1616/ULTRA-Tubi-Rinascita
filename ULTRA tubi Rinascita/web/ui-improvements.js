@@ -173,6 +173,42 @@
         window.renderTubeDatabase(tubeDatabaseDebug);
     }
 
+    // A single real input is shared between all three views; moving its parent
+    // keeps the value, input events, and current database filter state intact.
+    function isDatabaseVisible() {
+        const database = byId('tube-database-container');
+        return !!database && database.style.display !== 'none';
+    }
+
+    function placeSharedDatabaseSearch() {
+        const searchGroup = byId('db-shared-search');
+        const destination = byId(isDatabaseVisible()
+            ? 'db-search-database-slot'
+            : 'db-search-header-slot');
+        if (!searchGroup || !destination) return;
+        if (searchGroup.parentElement !== destination) {
+            destination.appendChild(searchGroup);
+        }
+        const header = document.querySelector('.app-header');
+        header?.classList.toggle('database-active', isDatabaseVisible());
+    }
+
+    async function submitSharedDatabaseSearch() {
+        if (isDatabaseVisible()) {
+            refreshVisibleDatabase();
+            return;
+        }
+        // Navigation uses the existing database route and its Python-backed load.
+        // The query is already in #db-quick-search, so no translation or separate
+        // search implementation is necessary.
+        placeSharedDatabaseSearch();
+        try {
+            await window.showTubeDatabaseView();
+        } finally {
+            placeSharedDatabaseSearch();
+        }
+    }
+
 
     // Filtering here is strictly visual: it never reorders pieces, modifies rods,
     // invokes the nesting engine or changes a saved lock.
@@ -262,6 +298,31 @@
 
     window.addEventListener('pywebviewready', () => {
         const search = byId('db-quick-search');
+        const submit = byId('db-search-submit');
+        const databaseContainer = byId('tube-database-container');
+        placeSharedDatabaseSearch();
+        // The original script registers navigation before this improvement layer.
+        // Clicking its tabs therefore updates the visible view first.
+        ['main-view-btn', 'history-view-btn', 'database-view-btn'].forEach(id => {
+            byId(id)?.addEventListener('click', placeSharedDatabaseSearch);
+        });
+        // Also cover programmatic navigation (e.g. undoing history items).
+        if (databaseContainer && typeof MutationObserver !== 'undefined') {
+            const navObserver = new MutationObserver(placeSharedDatabaseSearch);
+            navObserver.observe(databaseContainer, { attributes: true, attributeFilter: ['style'] });
+        }
+        submit?.addEventListener('click', () => {
+            submitSharedDatabaseSearch().catch(error =>
+                console.error('Errore durante la ricerca nel database', error)
+            );
+        });
+        search?.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            submitSharedDatabaseSearch().catch(error =>
+                console.error('Errore durante la ricerca nel database', error)
+            );
+        });
         const clear = byId('db-clear-quick');
         const missing = byId('db-quick-missing');
         const multi = byId('db-quick-multi');
@@ -269,8 +330,12 @@
         let searchTimer = 0;
 
         search?.addEventListener('input', () => {
+            // Outside the database, typing prepares the query. Enter or the
+            // Search button opens the database. Inside, results update live.
             clearTimeout(searchTimer);
-            searchTimer = setTimeout(refreshVisibleDatabase, 110);
+            if (isDatabaseVisible()) {
+                searchTimer = setTimeout(refreshVisibleDatabase, 110);
+            }
         });
         [missing, multi, location].forEach(input =>
             input?.addEventListener('change', refreshVisibleDatabase)
@@ -284,17 +349,15 @@
             search?.focus();
         });
 
-        // "/" focuses the database search while no input or modal is active.
+        // "/" always focuses the same database search in any main tab.
         document.addEventListener('keydown', event => {
             if (event.key !== '/' || event.ctrlKey || event.altKey || event.metaKey) return;
             if (document.querySelector('.modal-overlay[style*="display: flex"]')) return;
             const tag = document.activeElement?.tagName;
             if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.activeElement?.isContentEditable) return;
-            const databaseOpen = byId('tube-database-container')?.style.display !== 'none';
-            const target = databaseOpen ? search : byId('active-profile-search');
-            if (!target || (!databaseOpen && byId('tube-list-container')?.style.display === 'none')) return;
+            if (!search) return;
             event.preventDefault();
-            target.focus();
+            search.focus();
         });
 
         // Close only the optional header tools popover when clicking elsewhere.
