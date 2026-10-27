@@ -3789,7 +3789,7 @@ def _indexed_planar_chain(
 
 def _refine_indexed_planar_rods(
     items, rods, rod_length, dead_zone_mm, gap_mm,
-    *, max_trials=120, time_budget_s=1.8,
+    *, max_trials=220, time_budget_s=2.25,
 ):
     """Bounded local improvement, never the combinatorial beam search.
 
@@ -3798,7 +3798,9 @@ def _refine_indexed_planar_rods(
     inserting their pieces before/after an existing rod's end piece.
     All trial sequences use the exact fixed-order pose solver, including
     true common lines, chuck clearance and the 6000-mm stock limit.
-    The original plan is retained if nothing improves.
+    The original plan is retained if nothing improves. Partial transfers
+    between rods can also improve total geometric use without eliminating a
+    rod, while a donor-absorption attempt can remove one entirely.
     """
     rods = list(rods)
     if not rods:
@@ -3842,7 +3844,6 @@ def _refine_indexed_planar_rods(
         if len(sequence) < 4 or len(sequence) > 24:
             continue
         best = state
-        best_sequence = sequence
         # Move only interior pieces: both first and last stay as endpoints.
         positions = sorted(set((1, len(sequence)//2, len(sequence)-1)))
         for source_index in range(1, min(len(sequence)-1, 9)):
@@ -3860,7 +3861,7 @@ def _refine_indexed_planar_rods(
                         and candidate.common_lines > best.common_lines
                     )
                 ):
-                    best, best_sequence = candidate, attempt
+                    best = candidate
             # Reserve most of the refinement budget for emptying short
             # rods; otherwise large assemblies consume every trial on
             # interior permutations that are unlikely to save stock.
@@ -3869,6 +3870,90 @@ def _refine_indexed_planar_rods(
         rods[ri] = best
         if trials >= max(1, max_trials // 3):
             break
+
+    # Cross-rod compaction: an angled piece on a short rod can fill the
+    # interior of a fuller rod even when its nominal length exceeds the
+    # unoccupied length. Test actual optimized sequences, never nominal sums.
+    # Keep the change only if total occupied stock across the rods decreases.
+    for _pass in range(2):
+        if trials >= max_trials or time.perf_counter() >= deadline:
+            break
+        proposal = None
+        donor_indices = sorted(
+            range(len(rods)),
+            key=lambda i: (rods[i].used_span, rods[i].piece_count),
+        )[:min(6, len(rods))]
+        for donor_i in donor_indices:
+            donor = rods[donor_i]
+            if donor.piece_count < 2 or donor.piece_count > 14:
+                continue
+            donor_seq = [p.item_index for p in donor.placed]
+            # A last-piece clamp can be preserved by trying the earlier
+            # movable pieces first; both ends remain available as needed.
+            for source_pos in sorted(
+                range(len(donor_seq)),
+                key=lambda i: (i == len(donor_seq)-1, i),
+            )[:min(5, len(donor_seq))]:
+                piece_idx = donor_seq[source_pos]
+                donor_after = donor_seq[:source_pos] + donor_seq[source_pos+1:]
+                donor_fit = fit(donor_after)
+                if donor_fit is None:
+                    continue
+                target_indices = sorted(
+                    (i for i in range(len(rods)) if i != donor_i),
+                    key=lambda i: (
+                        abs(rod_length-rods[i].used_span-items[piece_idx].physical_length),
+                        i,
+                    ),
+                )[:min(5, len(rods)-1)]
+                for dest_i in target_indices:
+                    target = rods[dest_i]
+                    target_seq = [p.item_index for p in target.placed]
+                    n = len(target_seq)
+                    positions = sorted(set((0, 1, n//2, max(0, n-1), n)))
+                    for insert_pos in positions:
+                        target_fit = fit(
+                            target_seq[:insert_pos]
+                            + [piece_idx]
+                            + target_seq[insert_pos:]
+                        )
+                        if target_fit is None:
+                            continue
+                        before = donor.used_span + target.used_span
+                        after = donor_fit.used_span + target_fit.used_span
+                        gained_common = (
+                            donor_fit.common_lines+target_fit.common_lines
+                            - donor.common_lines-target.common_lines
+                        )
+                        # A reduction in total used length yields more
+                        # reusable stock; a shared cut can break an exact tie.
+                        if (
+                            after < before-0.05
+                            or (abs(after-before) <= 0.05 and gained_common > 0)
+                        ):
+                            candidate_score = (
+                                round(after-before, 5), -gained_common,
+                                donor_i, dest_i, source_pos, insert_pos,
+                            )
+                            if proposal is None or candidate_score < proposal[0]:
+                                proposal = (
+                                    candidate_score,
+                                    donor_i, donor_fit,
+                                    dest_i, target_fit,
+                                )
+                        if trials >= max_trials or time.perf_counter() >= deadline:
+                            break
+                    if trials >= max_trials or time.perf_counter() >= deadline:
+                        break
+                if trials >= max_trials or time.perf_counter() >= deadline:
+                    break
+            if trials >= max_trials or time.perf_counter() >= deadline:
+                break
+        if proposal is None:
+            break
+        _, donor_i, donor_state, dest_i, target_state = proposal
+        rods[donor_i] = donor_state
+        rods[dest_i] = target_state
 
     # Try distributing all pieces of a short rod onto existing longer rods.
     # Commit only if the donor is completely absorbed: this improves the rod
@@ -3879,7 +3964,7 @@ def _refine_indexed_planar_rods(
         if time.perf_counter() >= deadline:
             break
         donor = rods[donor_index]
-        if donor.piece_count > 4 or len(rods) <= 1:
+        if donor.piece_count > 7 or len(rods) <= 1:
             continue
         recipients = {
             i: rods[i] for i in range(len(rods)) if i != donor_index
