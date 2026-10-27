@@ -3455,8 +3455,10 @@ async function buildSummaryPlanFromCurrentView() {
                 if (!segment.done && segment.instanceKey) lockedKeys.add(segment.instanceKey);
             });
             if (!rod.done && (rod.segments || []).length > 0) {
-                const used = rod.segments.reduce((sum, segment) => sum + (parseInt(segment.length, 10) || 0), 0);
-                rods.push({ remaining: Math.max(0, 6000 - used), pieces: [] });
+                const used = getRodUsedMm(rod.segments);
+                // A locked rod with no geometric placements must be
+                // recalculated before its free stock can be trusted.
+                rods.push({ remaining: used == null ? 0 : Math.max(0, 6000 - used), pieces: [] });
             }
         });
 
