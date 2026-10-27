@@ -148,6 +148,11 @@ def _reset_parallel_stats():
         fast_best_fit_insertion_attempts=0,
         fast_best_fit_consolidation_attempts=0,
         fast_best_fit_rods=0,
+        edge_chain_attempted=False,
+        edge_chain_accepted=False,
+        edge_chain_rods=0,
+        edge_chain_lower_bound=0,
+        edge_classes=0,
         straight_rotation_reduced_parts=0,
         straight_rotation_total_parts=0,
     )
@@ -3063,6 +3068,13 @@ def diagnose_items_dict(
     lines.append(f"Verghe risultanti: {rod_count}")
     lines.append(f"Gap: {float(gap_mm):g} mm")
     lines.append(f"Beam normale: {DEFAULT_BEAM_WIDTH}")
+    lines.append(
+        "Gruppi tagli indicizzati: "
+        f"{get_parallel_stats().get('edge_classes', 0)}, "
+        f"catena rapida usata: {get_parallel_stats().get('edge_chain_accepted', False)}, "
+        f"verghe: {get_parallel_stats().get('edge_chain_rods', 0)}, "
+        f"limite inferiore: {get_parallel_stats().get('edge_chain_lower_bound', 0)}"
+    )
     lines.append(f"Tipi candidati per livello: {DEFAULT_MAX_CANDIDATE_TYPES}")
     lines.append(
         "Ottimizzazione nuovi bordi: priorita a tagli planari "
@@ -3339,6 +3351,282 @@ def diagnose_items_dict(
     }
 
 
+def _end_cut_class(part, end):
+    """Scan an end once into a conservative, rotation-invariant candidate key.
+
+    Matching keys mean *possibly* shareable, not necessarily identical cuts.
+    The normal machine-safety and full geometric fit remains authoritative.
+    The class ignores the cut's direction but retains its angle magnitude;
+    square/rectangle rotation and end reversal are validated later.
+    """
+    if not isinstance(part, dict) or not isinstance(end, dict):
+        return None
+    profile = part.get("profile") or {}
+    plane = end.get("plane_z_equals_c_plus_ax_plus_by")
+    if not isinstance(plane, (list, tuple)) or len(plane) != 3:
+        return None
+    try:
+        sx, sy = float(plane[1]), float(plane[2])
+        if not (math.isfinite(sx) and math.isfinite(sy)):
+            return None
+        if end.get("plane_max_residual_mm") is None or (
+            float(end["plane_max_residual_mm"]) >
+            COMMON_LINE_RESIDUAL_TOLERANCE_MM
+        ):
+            return None
+        if end.get("operation_layer") != 1:
+            return None
+        if (
+            end.get("work_flags") is None
+            or int(end["work_flags"]) & 2
+            or end.get("curve_flags") is None
+            or not (int(end["curve_flags"]) & 32)
+            or not end.get("boundary_signature")
+            or not end.get("process_signature")
+        ):
+            return None
+        normal = end.get("curve_normal")
+        if not isinstance(normal, (list, tuple)) or len(normal) != 3:
+            return None
+        nx, ny, nz = map(float, normal)
+        if not all(math.isfinite(v) for v in (nx, ny, nz)):
+            return None
+        return (
+            str(profile.get("kind") or ""),
+            round(float(profile.get("outside_width") or 0), 4),
+            round(float(profile.get("outside_height") or 0), 4),
+            round(float(profile.get("outside_diameter") or 0), 4),
+            round(float(profile.get("corner_radius") or 0), 4),
+            round(float(profile.get("thickness") or 0), 4),
+            str(end["boundary_signature"]),
+            str(end["process_signature"]),
+            int(end["curve_flags"]),
+            round(math.hypot(sx, sy), 5),
+            round(math.hypot(nx, ny), 5),
+            round(abs(nz), 5),
+        )
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _item_cut_classes(item):
+    part = item.tube_part or {}
+    ends = part.get("ends") or []
+    if len(ends) < 2:
+        return (None, None)
+    return (
+        _end_cut_class(part, ends[0]),
+        _end_cut_class(part, ends[1]),
+    )
+
+
+def _has_noninterlocking_straight_ends(item):
+    """Certify that each straight-cut piece consumes its full axial length.
+
+    Only when both end planes coincide with z=0 and z=length can the sum of
+    lengths divided by stock length prove a rod-count lower bound.
+    """
+    if not item.geometry_available:
+        return False
+    starts = (item.tube_part or {}).get("ends") or []
+    if len(starts) < 2:
+        return False
+    length = float(item.physical_length)
+    for index, end in enumerate(starts[:2]):
+        plane = end.get("plane_z_equals_c_plus_ax_plus_by")
+        if not isinstance(plane, (list, tuple)) or len(plane) != 3:
+            return False
+        try:
+            c, sx, sy = map(float, plane)
+            residual = float(end.get("plane_max_residual_mm") or 0)
+        except (ValueError, TypeError, OverflowError):
+            return False
+        if (
+            not all(map(math.isfinite, (c, sx, sy, residual)))
+            or residual > PLANAR_FIT_TOLERANCE_MM
+            or math.hypot(sx, sy) > STRAIGHT_SLOPE_EPS
+            or abs(c - (0.0 if index == 0 else length)) > 1e-4
+        ):
+            return False
+    return True
+
+
+def _uniform_angular_lower_bound(items, rod_length, gap_mm):
+    """Provable rod-count lower bound for repeated copies of one drawing.
+
+    Among all legal pairings compute the *smallest* possible axial advance
+    of an identical piece. No arrangement can exceed the resulting maximum
+    number of pieces on a rod. A conservative fallback advance (L + gap)
+    is also considered, since the normal engine permits it when fitting fails.
+    """
+    if not items or len({item.type_key for item in items}) != 1:
+        return None
+    first = items[0]
+    if not first.geometry_available:
+        return None
+    length = float(first.physical_length)
+    min_advance = length + float(gap_mm)
+    for previous_pose in _first_pose_candidates(first):
+        family = (
+            _rectangle_family(previous_pose.axial_rotation_degrees)
+            if _profile_kind(first) == "Rect" else None
+        )
+        for next_pose in _next_pose_candidates(
+            first, previous_pose, first, family
+        ):
+            try:
+                relative_origin, *_ = _cached_pairwise_fit(
+                    first, previous_pose, first, next_pose, gap_mm
+                )
+                min_advance = min(min_advance, float(relative_origin))
+            except (ValueError, TypeError, OverflowError):
+                continue
+    if min_advance <= EPS:
+        return None
+    max_per_rod = max(
+        1, 1 + int(math.floor(
+            (float(rod_length) - length + 1e-6) / min_advance
+        )),
+    )
+    return int(math.ceil(len(items) / max_per_rod))
+
+
+def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
+    """Fast O(pieces x unique drawings x legal poses) adjacency-first plan.
+
+    Identical cut classes are scanned once and tried first. All actual
+    placements still pass _append_candidate: no unsafe common line is
+    inferred from equal angles or from a matching signature alone.
+
+    Return a plan ONLY when its stock count is provably minimal (one rod,
+    complete non-interlocking straight cuts, or a homogeneous repeated
+    drawing with a certified minimal pair advance). Otherwise the complete
+    beam/merge/refine optimizer runs unchanged.
+    """
+    if len(items) < 6 or any(not item.geometry_available for item in items):
+        return None
+    _PARALLEL_STATS["edge_chain_attempted"] = True
+    remaining = {}
+    for item in items:
+        remaining.setdefault(item.type_key, []).append(item.index)
+    cut_class_by_type = {
+        key: _item_cut_classes(items[indices[0]])
+        for key, indices in remaining.items()
+    }
+    _PARALLEL_STATS["edge_classes"] = len({
+        cls for pair in cut_class_by_type.values() for cls in pair
+        if cls is not None
+    })
+    legal_pose_cache = {}
+    rods = []
+    limit = float(rod_length) - float(dead_zone_mm)
+    while remaining:
+        state = RodSearchState()
+        while not state.tail_used:
+            preceding = (
+                items[state.placed[-1].item_index]
+                if state.placed else None
+            )
+            preceding_pose = state.placed[-1].pose if state.placed else None
+            preceding_class = None
+            if preceding is not None:
+                pair = cut_class_by_type[preceding.type_key]
+                preceding_class = pair[
+                    0 if preceding_pose.reversed_end_for_end else 1
+                ]
+
+            # Search one representative of each drawing, never one candidate
+            # per duplicate physical piece. Matching ends are examined first.
+            keys = sorted(
+                remaining,
+                key=lambda key: (
+                    0 if preceding_class is not None and
+                    preceding_class in cut_class_by_type[key] else 1,
+                    -items[remaining[key][0]].physical_length,
+                    str(key),
+                ),
+            )
+            best = None
+            for key in keys:
+                item = items[remaining[key][0]]
+                cache_key = (
+                    preceding.type_key if preceding is not None else None,
+                    None if preceding_pose is None else (
+                        round(_normalize_angle(
+                            preceding_pose.axial_rotation_degrees
+                        ), 6),
+                        bool(preceding_pose.reversed_end_for_end),
+                    ),
+                    item.type_key,
+                    state.rectangle_family,
+                )
+                poses = legal_pose_cache.get(cache_key)
+                if poses is None:
+                    poses = (
+                        _next_pose_candidates(
+                            preceding, preceding_pose, item,
+                            state.rectangle_family,
+                        )
+                        if preceding is not None
+                        else _first_pose_candidates(item)
+                    )
+                    legal_pose_cache[cache_key] = poses
+                for pose in poses:
+                    candidate = _append_candidate(
+                        state, item, pose, items,
+                        rod_length=rod_length,
+                        accessible_limit=limit,
+                        dead_zone_mm=dead_zone_mm,
+                        gap_mm=gap_mm,
+                    )
+                    if candidate is None:
+                        continue
+                    just_placed = candidate.placed[-1]
+                    # Avoid entering the dead zone while further pieces may fit.
+                    # Otherwise favor validated co-edges, longer pieces and
+                    # tighter nesting with a deterministic tie-break.
+                    score = (
+                        bool(candidate.tail_used),
+                        not bool(just_placed.common_line_before)
+                            if state.placed else False,
+                        -float(item.physical_length),
+                        round(float(candidate.used_span), 6),
+                        str(key),
+                        round(float(pose.axial_rotation_degrees), 6),
+                        bool(pose.reversed_end_for_end),
+                    )
+                    if best is None or score < best[0]:
+                        best = (score, key, candidate)
+            if best is None:
+                break
+            _score, chosen_key, state = best
+            remaining[chosen_key].pop()
+            if not remaining[chosen_key]:
+                del remaining[chosen_key]
+        if not state.placed:
+            return None
+        rods.append(state)
+
+    _PARALLEL_STATS["edge_chain_rods"] = len(rods)
+    if len(rods) == 1:
+        lower_bound = 1
+    elif all(_has_noninterlocking_straight_ends(item) for item in items):
+        lower_bound = int(math.ceil(
+            sum(item.physical_length for item in items)
+            / float(rod_length) - 1e-9
+        ))
+    else:
+        lower_bound = _uniform_angular_lower_bound(
+            items, rod_length, gap_mm
+        )
+    _PARALLEL_STATS["edge_chain_lower_bound"] = lower_bound or 0
+    if lower_bound is not None and len(rods) == lower_bound:
+        _PARALLEL_STATS["edge_chain_accepted"] = True
+        _PARALLEL_STATS["strategy"] = "certified_cut_class_chain"
+        return rods
+    return None
+
+
 def _optimize_normalized(
     normalized,
     rod_length,
@@ -3349,6 +3637,19 @@ def _optimize_normalized(
     configured_workers = nesting_cpu_worker_count()
     unique_types = _unique_type_count(normalized)
     contour_heavy = _contains_contour_fit_geometry(normalized)
+
+    # A validated chain with the minimum possible number of rods does not
+    # benefit from the combinatorial beam/merge search. Most repeat-heavy
+    # straight and compatible-angle jobs can stop here.
+    chain = _certified_edge_chain_plan(
+        normalized, rod_length, dead_zone_mm, gap_mm
+    )
+    if chain is not None:
+        _PARALLEL_STATS["item_count"] = len(normalized)
+        _PARALLEL_STATS["unique_type_count"] = unique_types
+        _PARALLEL_STATS["workers_used"] = 1
+        _PARALLEL_STATS["total_seconds"] = time.perf_counter() - total_started
+        return chain
 
     seeded_catalog = None
     if contour_heavy:
