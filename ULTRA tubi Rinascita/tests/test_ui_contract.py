@@ -15,7 +15,7 @@ NEW_IDS = {
     "db-quick-search", "db-quick-missing", "db-quick-multi",
     "db-location-filter", "db-clear-quick", "db-overview",
     "db-search-header-slot", "db-search-database-slot", "db-shared-search",
-    "db-search-submit",
+    "db-search-submit", "settings-nesting-rod-tolerance-mm",
 }
 REPLACED_QUICK_SEARCH_IDS = {
     "search-dimensione", "search-spessore", "search-materiale",
@@ -100,6 +100,22 @@ class ModernUIContractTests(unittest.TestCase):
             "return null; // Never mistake a sum of angled nominal lengths",
             self.script,
         )
+
+    def test_nesting_cache_button_clears_backend_and_client(self):
+        self.assertIn('data-action="clear-nesting-cache"', self.script)
+        self.assertIn("async function clearCachedNestings()", self.script)
+        self.assertIn("pywebview.api.clear_nesting_result_cache()", self.script)
+        self.assertIn("nestingLoadingGroups.clear()", self.script)
+        self.assertIn("nestingActiveGenerationByTube.clear()", self.script)
+        self.assertIn("nestingCacheResetEpoch++", self.script)
+        self.assertIn("await saveUiState()", self.script)
+
+    def test_tolerance_setting_and_rod_geometry_display(self):
+        self.assertIn('id="settings-nesting-rod-tolerance-mm"', self.index)
+        self.assertIn("nesting_rod_tolerance_mm:", self.script)
+        self.assertIn("function nestingAllowedLengthMm()", self.script)
+        self.assertIn("totalUsed > nestingAllowedLengthMm()", self.script)
+        self.assertIn("used > nestingAllowedLengthMm()", self.script)
 
     def test_light_only_presentation(self):
         self.assertIn("color-scheme: light", self.css)
