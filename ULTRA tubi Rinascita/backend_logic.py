@@ -58,6 +58,7 @@ _NESTING_GROUP_CACHE = {}
 _NESTING_GROUP_CACHE_LIMIT = 128
 _NESTING_CACHE_VERSION = 7
 _NESTING_GROUP_CACHE_LOADED = False
+_NESTING_CACHE_GENERATION = 0
 _NESTING_CACHE_LOCK = threading.RLock()
 _NESTING_VALIDATION_CACHE = {}
 _NESTING_VALIDATION_CACHE_LIMIT = 4096
@@ -513,9 +514,13 @@ def _save_persistent_nesting_cache():
             )
 
 
-def _cache_nesting_group(signature, rods):
+def _cache_nesting_group(signature, rods, generation=None):
     _load_persistent_nesting_cache()
     with _NESTING_CACHE_LOCK:
+        if generation is not None and generation != _NESTING_CACHE_GENERATION:
+            # A manual cache reset happened during this calculation.
+            # Never reintroduce its stale result after the user clears it.
+            return
         # Refresh insertion order for recently calculated results.
         _NESTING_GROUP_CACHE.pop(signature, None)
         while len(_NESTING_GROUP_CACHE) >= _NESTING_GROUP_CACHE_LIMIT:
@@ -526,15 +531,16 @@ def _cache_nesting_group(signature, rods):
 
 def clear_nesting_result_cache():
     """Clear in-memory and persisted calculated rods, never locked UI rods."""
-    global _NESTING_GROUP_CACHE_LOADED
+    global _NESTING_GROUP_CACHE_LOADED, _NESTING_CACHE_GENERATION
     with _NESTING_CACHE_LOCK:
-        # Load first to accurately report all cached entries, then replace
-        # the disk file atomically with an empty valid cache payload.
         _load_persistent_nesting_cache()
         removed = len(_NESTING_GROUP_CACHE)
+        # Check disk deletion first: a failure must be visible to the user.
+        if os.path.isfile(NESTING_CACHE_FILE):
+            os.remove(NESTING_CACHE_FILE)
         _NESTING_GROUP_CACHE.clear()
+        _NESTING_CACHE_GENERATION += 1
         _NESTING_GROUP_CACHE_LOADED = True
-        _save_persistent_nesting_cache()
     return {"status": "success", "removed": removed}
 
 
@@ -1861,6 +1867,7 @@ def nest_piece_groups(groups, rod_length=6000):
                 algorithm=nesting_algorithm,
             )
             cached = signature in _NESTING_GROUP_CACHE
+            cache_generation = _NESTING_CACHE_GENERATION
             optimizer_seconds = 0.0
             parallel_stats = None
             if cached:
@@ -1882,7 +1889,7 @@ def nest_piece_groups(groups, rod_length=6000):
                 )
                 optimizer_seconds = time.perf_counter() - optimizer_started
                 parallel_stats = tubenest_engine.get_parallel_stats()
-                _cache_nesting_group(signature, rods)
+                _cache_nesting_group(signature, rods, generation=cache_generation)
 
             total_seconds = time.perf_counter() - group_started
             perf = {
