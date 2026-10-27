@@ -78,6 +78,29 @@ class ModernUIContractTests(unittest.TestCase):
         self.assertIn('id="db-search-database-slot"', self.index)
         self.assertIn("#db-search-database-slot #db-search-submit { display: none; }", self.css)
 
+    def test_locked_rod_drag_uses_geometry_not_nominal_sum(self):
+        self.assertIn("async function solveLockedRodDraft(", self.script)
+        self.assertIn("await window.pywebview.api.nest_locked_rod_sequence(", self.script)
+        self.assertIn("const targetPlacements = await solveLockedRodDraft(", self.script)
+        self.assertIn("const sourcePlacements = sourceDraft?.length", self.script)
+        self.assertIn("targetRod.segments = targetDraft.map(", self.script)
+        self.assertIn("targetRod.segments.map(s => s.instanceKey).join('|')", self.script)
+        self.assertNotIn(
+            "if (used + (parseInt(segment.length, 10) || 0) > 6000)",
+            self.script,
+        )
+
+    def test_locked_rod_label_uses_optimized_placement_span(self):
+        self.assertIn("function optimizedRodProgress(segments)", self.script)
+        self.assertIn("Math.max(0, end - endReached)", self.script)
+        self.assertIn("Rimasto da tagliare", self.script)
+        self.assertIn("(ottimizzati)", self.script)
+        self.assertIn("Posizioni da ricalcolare", self.script)
+        self.assertIn(
+            "return null; // Never mistake a sum of angled nominal lengths",
+            self.script,
+        )
+
     def test_light_only_presentation(self):
         self.assertIn("color-scheme: light", self.css)
         self.assertNotIn("prefers-color-scheme: dark", self.css)
