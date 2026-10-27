@@ -157,6 +157,8 @@ def _reset_parallel_stats():
         edge_catalog_entries=0,
         edge_catalog_hits=0,
         edge_chain_alternative_runs=0,
+        edge_refine_trials=0,
+        edge_refine_rods=0,
         straight_rotation_reduced_parts=0,
         straight_rotation_total_parts=0,
     )
@@ -3784,6 +3786,153 @@ def _indexed_planar_chain(
     return rods
 
 
+def _refine_indexed_planar_rods(
+    items, rods, rod_length, dead_zone_mm, gap_mm,
+    *, max_trials=120, time_budget_s=1.8,
+):
+    """Bounded local improvement, never the combinatorial beam search.
+
+    First optimize the *interior* of each existing rod while keeping the
+    first and last physical pieces anchored. Then try to empty short rods by
+    inserting their pieces before/after an existing rod's end piece.
+    All trial sequences use the exact fixed-order pose solver, including
+    true common lines, chuck clearance and the 6000-mm stock limit.
+    The original plan is retained if nothing improves.
+    """
+    rods = list(rods)
+    if not rods:
+        return rods
+    deadline = time.perf_counter() + max(0.0, float(time_budget_s))
+    trials = 0
+    fits = {}
+
+    def fit(sequence):
+        nonlocal trials
+        sequence = tuple(sequence)
+        if sequence in fits:
+            return fits[sequence]
+        if trials >= max_trials or time.perf_counter() >= deadline:
+            return None
+        trials += 1
+        fitted = _optimize_fixed_item_sequence(
+            items, sequence,
+            rod_length=rod_length,
+            dead_zone_mm=dead_zone_mm,
+            gap_mm=gap_mm,
+        )
+        fits[sequence] = fitted
+        return fitted
+
+    def score(states):
+        return (
+            len(states),
+            round(sum(float(rod.used_span) for rod in states), 5),
+            -sum(rod.common_lines for rod in states),
+        )
+
+    # A fixed last piece acts as the right-hand boundary. Inserting or moving
+    # other pieces before it exploits angle overlaps without shifting it to a
+    # non-terminal position in the chuck/dead zone.
+    for ri in range(len(rods)):
+        if time.perf_counter() >= deadline:
+            break
+        state = rods[ri]
+        sequence = [p.item_index for p in state.placed]
+        if len(sequence) < 4 or len(sequence) > 24:
+            continue
+        best = state
+        best_sequence = sequence
+        # Move only interior pieces: both first and last stay as endpoints.
+        positions = sorted(set((1, len(sequence)//2, len(sequence)-1)))
+        for source_index in range(1, min(len(sequence)-1, 9)):
+            reduced = sequence[:source_index] + sequence[source_index+1:]
+            for destination in positions:
+                position = max(1, min(destination, len(reduced)-1))
+                attempt = reduced[:position] + [sequence[source_index]] + reduced[position:]
+                if attempt == sequence:
+                    continue
+                candidate = fit(attempt)
+                if candidate is not None and (
+                    candidate.used_span < best.used_span - 0.01
+                    or (
+                        abs(candidate.used_span - best.used_span) <= 0.01
+                        and candidate.common_lines > best.common_lines
+                    )
+                ):
+                    best, best_sequence = candidate, attempt
+            if trials >= max_trials or time.perf_counter() >= deadline:
+                break
+        rods[ri] = best
+
+    # Try distributing all pieces of a short rod onto existing longer rods.
+    # Commit only if the donor is completely absorbed: this improves the rod
+    # count without leaving a new, fragmented half-filled rod.
+    for donor_index in sorted(
+        range(len(rods)), key=lambda i: (rods[i].piece_count, rods[i].used_span)
+    )[:min(5, len(rods))]:
+        if time.perf_counter() >= deadline:
+            break
+        donor = rods[donor_index]
+        if donor.piece_count > 4 or len(rods) <= 1:
+            continue
+        recipients = {
+            i: rods[i] for i in range(len(rods)) if i != donor_index
+        }
+        # Hardest/longest donor piece first improves feasibility.
+        to_move = sorted(
+            (p.item_index for p in donor.placed),
+            key=lambda i: -items[i].physical_length,
+        )
+        success = True
+        for piece in to_move:
+            possible = None
+            for index in sorted(
+                recipients,
+                key=lambda i: (recipients[i].used_span, i)
+            ):
+                target = recipients[index]
+                sequence = [p.item_index for p in target.placed]
+                count = len(sequence)
+                slots = sorted(set(
+                    (0, 1, count//2, max(0, count-1), count)
+                ))
+                for position in slots:
+                    candidate = fit(
+                        sequence[:position] + [piece] + sequence[position:]
+                    )
+                    if candidate is None:
+                        continue
+                    key = (
+                        round(candidate.used_span-target.used_span, 5),
+                        -candidate.common_lines,
+                        index,
+                    )
+                    if possible is None or key < possible[0]:
+                        possible = (key, index, candidate)
+                    if trials >= max_trials or time.perf_counter() >= deadline:
+                        break
+                if trials >= max_trials or time.perf_counter() >= deadline:
+                    break
+            if possible is None:
+                success = False
+                break
+            _, target_index, updated = possible
+            recipients[target_index] = updated
+
+        if success:
+            merged = [
+                recipients[i] for i in range(len(rods))
+                if i != donor_index
+            ]
+            if score(merged) < score(rods):
+                rods = merged
+                break
+
+    _PARALLEL_STATS["edge_refine_trials"] = trials
+    _PARALLEL_STATS["edge_refine_rods"] = len(rods)
+    return rods
+
+
 def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
     """Fast angle-agnostic nesting of all reliably planar cut geometries.
 
@@ -3844,6 +3993,9 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
         if second is not None and quality(second) < quality(selected):
             selected = second
 
+    selected = _refine_indexed_planar_rods(
+        items, selected, rod_length, dead_zone_mm, gap_mm,
+    )
     _PARALLEL_STATS["edge_chain_rods"] = len(selected)
     if len(selected) == 1:
         lower_bound = 1
