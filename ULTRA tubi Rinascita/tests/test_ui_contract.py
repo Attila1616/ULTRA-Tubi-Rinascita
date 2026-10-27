@@ -14,6 +14,12 @@ LEGACY_IDS = set(["search-dimensione","search-spessore","search-materiale","sear
 NEW_IDS = {
     "db-quick-search", "db-quick-missing", "db-quick-multi",
     "db-location-filter", "db-clear-quick", "db-overview",
+    "db-search-header-slot", "db-search-database-slot", "db-shared-search",
+    "db-search-submit",
+}
+REPLACED_QUICK_SEARCH_IDS = {
+    "search-dimensione", "search-spessore", "search-materiale",
+    "search-finitura", "search-btn",
 }
 
 class ModernUIContractTests(unittest.TestCase):
@@ -27,8 +33,14 @@ class ModernUIContractTests(unittest.TestCase):
     def test_preserves_all_original_element_ids(self):
         present = re.findall(r'\bid="([^"]+)"', self.index)
         self.assertEqual(len(present), len(set(present)), "Duplicate HTML IDs")
-        self.assertFalse(LEGACY_IDS - set(present), "An original element ID was removed")
+        # Only the superseded five-field header lookup was intentionally removed.
+        self.assertFalse((LEGACY_IDS - REPLACED_QUICK_SEARCH_IDS) - set(present),
+                         "An unrelated original element ID was removed")
+        self.assertFalse(REPLACED_QUICK_SEARCH_IDS & set(present),
+                         "The obsolete search UI is still present")
         self.assertTrue(NEW_IDS.issubset(set(present)))
+        self.assertEqual(present.count("db-quick-search"), 1,
+                         "One shared database search input must serve all tabs")
 
     def test_original_scripts_and_styles_still_loaded_in_order(self):
         self.assertIn('href="style.css"', self.index)
@@ -53,6 +65,18 @@ class ModernUIContractTests(unittest.TestCase):
             with self.subTest(action=action):
                 self.assertIn('data-db-action="' + action + '"', self.script)
         self.assertIn("updateGuardedButtonStates()", self.modern)
+
+    def test_cross_tab_database_search_contract(self):
+        # The control must be moved, rather than cloned or reimplemented.
+        self.assertIn("destination.appendChild(searchGroup)", self.modern)
+        self.assertIn("await window.showTubeDatabaseView()", self.modern)
+        self.assertIn("if (event.key !== 'Enter') return;", self.modern)
+        self.assertIn("search.focus()", self.modern)
+        self.assertIn("searchTimer = setTimeout(refreshVisibleDatabase", self.modern)
+        self.assertIn('id="db-shared-search"', self.index)
+        self.assertIn('id="db-search-header-slot"', self.index)
+        self.assertIn('id="db-search-database-slot"', self.index)
+        self.assertIn("#db-search-database-slot #db-search-submit { display: none; }", self.css)
 
     def test_light_only_presentation(self):
         self.assertIn("color-scheme: light", self.css)
