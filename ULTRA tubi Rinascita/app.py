@@ -491,6 +491,22 @@ class Api:
                 "results": [],
             }
 
+    def convert_selected_igs_files_to_zzx(self, file_paths, overwrite=False):
+        """Convert chosen IGS files, placing ZZX alongside their IGS folder."""
+        try:
+            return logic.convert_selected_igs_files_to_zzx(
+                file_paths or [],
+                overwrite=bool(overwrite),
+            )
+        except Exception:
+            print("--- PYTHON ERROR in convert_selected_igs_files_to_zzx ---")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": "Errore durante la conversione organizzata IGS -> ZZX.",
+                "results": [],
+            }
+
     def convert_missing_igs_files_to_zzx(self, file_paths=None):
         """Convert only genuinely missing drawings in the active DA FARE tree."""
         try:
