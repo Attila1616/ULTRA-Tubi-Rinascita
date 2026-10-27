@@ -4015,10 +4015,10 @@ def _refine_indexed_planar_rods(
         if trials >= max(1, max_trials // 3):
             break
 
-    # Cross-rod compaction: an angled piece on a short rod can fill the
-    # interior of a fuller rod even when its nominal length exceeds the
-    # unoccupied length. Test actual optimized sequences, never nominal sums.
-    # Keep the change only if total occupied stock across the rods decreases.
+    # Secondary cross-rod compaction: try additional insertion positions
+    # after the high-priority end-anchored fill. Test actual optimized
+    # sequences, never nominal sums, and retain the same concentration
+    # objective so this pass cannot undo good near-full rods.
     for _pass in range(2):
         if trials >= max_trials or time.perf_counter() >= deadline:
             break
@@ -4069,13 +4069,22 @@ def _refine_indexed_planar_rods(
                             donor_fit.common_lines+target_fit.common_lines
                             - donor.common_lines-target.common_lines
                         )
-                        # A reduction in total used length yields more
-                        # reusable stock; a shared cut can break an exact tie.
+                        # Same primary objective as the focused interior
+                        # fill: move material onto already fuller rods.
+                        # An unchanged total span is perfectly acceptable;
+                        # expensive extra material is not.
+                        previous_concentration = (
+                            donor.used_span**2 + target.used_span**2
+                        )
+                        new_concentration = (
+                            donor_fit.used_span**2 + target_fit.used_span**2
+                        )
                         if (
-                            after < before-0.05
-                            or (abs(after-before) <= 0.05 and gained_common > 0)
+                            new_concentration > previous_concentration + 0.1
+                            and after <= before + max(2.0, gap_mm*2.0)
                         ):
                             candidate_score = (
+                                -round(new_concentration-previous_concentration, 4),
                                 round(after-before, 5), -gained_common,
                                 donor_i, dest_i, source_pos, insert_pos,
                             )
