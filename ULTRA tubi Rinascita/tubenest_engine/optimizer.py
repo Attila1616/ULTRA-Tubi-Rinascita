@@ -3612,7 +3612,10 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
             if best is None:
                 break
             _score, chosen_key, state = best
-            remaining[chosen_key].pop()
+            # We placed the *first* representative (remaining[key][0]);
+            # remove that exact instance, not the tail of the group.
+            # Otherwise the same instance could be reused on a rod.
+            remaining[chosen_key].pop(0)
             if not remaining[chosen_key]:
                 del remaining[chosen_key]
         if not state.placed:
