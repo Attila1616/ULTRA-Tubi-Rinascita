@@ -12,7 +12,9 @@ let nestingRenderSequence = 0;
 let nestingResultCache = new Map();
 let nestingLoadingGroups = new Set();
 let nestingErrorByTube = new Map();
-let nestingSettingsKey = 'gap:2|algorithm:current|manual-locked-v1';
+let nestingRodToleranceMm = 1.0;
+let nestingCacheResetEpoch = 0;
+let nestingSettingsKey = 'gap:2|tolerance:1|algorithm:current|fast-refine-v2';
 let uiPreferences = {
     sorting: {},
     columnWidths: {},
@@ -428,6 +430,9 @@ async function openSettingsModal() {
         document.getElementById('settings-order-medium-quantity').value = parseNonNegativeInteger(config.order_priority_medium_quantity, 3);
         document.getElementById('settings-order-high-quantity').value = parseNonNegativeInteger(config.order_priority_high_quantity, 5);
         document.getElementById('settings-nesting-gap-mm').value = Number.isFinite(Number(config.nesting_gap_mm)) ? Number(config.nesting_gap_mm) : 2;
+        document.getElementById('settings-nesting-rod-tolerance-mm').value =
+            Number.isFinite(Number(config.nesting_rod_tolerance_mm))
+                ? Math.max(0, Math.min(50, Number(config.nesting_rod_tolerance_mm))) : 1;
         document.getElementById('settings-nesting-rotation-visualization-enabled').checked = !!config.nesting_rotation_visualization_enabled;
         document.getElementById('settings-nesting-debug-enabled').checked = config.nesting_debug_enabled !== false;
         document.getElementById('settings-nested-text-marking-enabled').checked = !!config.nested_text_marking_enabled;
@@ -567,6 +572,8 @@ async function saveSettings() {
             order_priority_high_quantity: parseNonNegativeInteger(document.getElementById('settings-order-high-quantity').value, 5),
             order_include_low_priority: document.getElementById('settings-order-include-low-priority').checked,
             nesting_gap_mm: Math.max(0, Number(document.getElementById('settings-nesting-gap-mm').value) || 0),
+            nesting_rod_tolerance_mm: Math.max(0, Math.min(50,
+                Number(document.getElementById('settings-nesting-rod-tolerance-mm').value) || 0)),
             nesting_algorithm: 'current',
             nesting_rotation_visualization_enabled: document.getElementById('settings-nesting-rotation-visualization-enabled').checked,
             nesting_debug_enabled: document.getElementById('settings-nesting-debug-enabled').checked,
@@ -600,7 +607,8 @@ async function saveSettings() {
         }
         closeSettingsModal();
         applyLockColors(response.config?.lock_unlocked_color, response.config?.lock_locked_color);
-        nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}|algorithm:current`;
+        nestingRodToleranceMm = Number(response.config?.nesting_rod_tolerance_mm ?? 1);
+        nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}|tolerance:${nestingRodToleranceMm}|algorithm:current|fast-refine-v2`;
         nestingRotationVisualizationEnabled = !!response.config?.nesting_rotation_visualization_enabled;
         nestingDebugEnabled = response.config?.nesting_debug_enabled !== false;
         hideQuantityOnlyIgsWarnings = !!response.config?.igs_hide_quantity_mismatch_warnings;
@@ -746,7 +754,8 @@ async function initialize() {
         const configResponse = await window.pywebview.api.get_config_settings();
         if (configResponse?.status === 'success') {
             applyLockColors(configResponse.config?.lock_unlocked_color, configResponse.config?.lock_locked_color);
-            nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}|algorithm:current`;
+            nestingRodToleranceMm = Number(configResponse.config?.nesting_rod_tolerance_mm ?? 1);
+            nestingSettingsKey = `gap:${Number(configResponse.config?.nesting_gap_mm ?? 2)}|tolerance:${nestingRodToleranceMm}|algorithm:current|fast-refine-v2`;
             nestingRotationVisualizationEnabled = !!configResponse.config?.nesting_rotation_visualization_enabled;
             nestingDebugEnabled = configResponse.config?.nesting_debug_enabled !== false;
             hideQuantityOnlyIgsWarnings = !!configResponse.config?.igs_hide_quantity_mismatch_warnings;
@@ -2085,7 +2094,7 @@ function buildClientNestingSignature(group, piecesToNest) {
     }).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
 
     return JSON.stringify([
-        'optimizer-cache-v6',
+        'optimizer-cache-v7',
         nestingSettingsKey,
         group?.tubeType || '',
         compact
@@ -2111,6 +2120,7 @@ async function ensureGroupNesting(tubeType) {
     const signature = buildClientNestingSignature(group, context.piecesToNest);
     const cached = nestingResultCache.get(tubeType);
     if (cached && cached.signature === signature) return cached.rods || [];
+    const requestEpoch = nestingCacheResetEpoch;
 
     nestingLoadingGroups.add(tubeType);
     nestingErrorByTube.delete(tubeType);
@@ -2128,7 +2138,7 @@ async function ensureGroupNesting(tubeType) {
         if (latestGroup) {
             const latestContext = buildGroupNestingContext(latestGroup);
             const latestSignature = buildClientNestingSignature(latestGroup, latestContext.piecesToNest);
-            if (latestSignature === signature) {
+            if (latestSignature === signature && requestEpoch === nestingCacheResetEpoch) {
                 nestingResultCache.set(tubeType, {
                     signature,
                     rods: result.rods || [],
@@ -2707,8 +2717,8 @@ function formatRotationAttemptSummary(segment) {
 function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked, isDone, isEmptyPlaceholder, nestRod = null }) {
     const optimizedProgress = isLocked ? optimizedRodProgress(segments) : null;
     const totalUsed = getRodUsedMm(segments, nestRod);
-    const usedPercent = totalUsed == null ? '—' : (totalUsed / 6000 * 100).toFixed(1);
-    const overfull = totalUsed != null && totalUsed > 6000 + 1e-6;
+    const usedPercent = totalUsed == null ? '—' : (totalUsed / nestingAllowedLengthMm() * 100).toFixed(1);
+    const overfull = totalUsed != null && totalUsed > nestingAllowedLengthMm() + 1e-6;
     const formatMm = value => Number(value).toFixed(1).replace(/\\.0$/, '');
     const remainingLabel = !isLocked ? '' : optimizedProgress
         ? ` - Rimasto da tagliare ${formatMm(optimizedProgress.remaining)}/${formatMm(optimizedProgress.used)}mm (ottimizzati)`
@@ -2721,7 +2731,7 @@ function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked,
 
     let html = `<div class="rod-entry ${kind}-rod${isDone ? ' rod-complete' : ''}${overfull ? ' rod-overfull' : ''}" data-rod-entry="${escapeAttr(rodId)}">
         <div class="rod-body">
-            <p class="rod-label"><strong>${escapeHtml(label)}:</strong> ${usedLabel}${remainingLabel}${overfull ? ' - oltre 6000mm' : ''}</p>
+            <p class="rod-label"><strong>${escapeHtml(label)}:</strong> ${usedLabel}${remainingLabel}${overfull ? ' - oltre ' + nestingAllowedLengthMm() + 'mm' : ''}</p>
             <div class="rod-bar" data-drop-zone="rod" data-rod-kind="${escapeAttr(kind)}" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}">
                 <div class="rod-chuck-dead-zone" title="Ultimi 400mm: zona non tagliabile senza strategia di ribaltamento"></div>`;
 
@@ -2772,8 +2782,8 @@ function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked,
 }
 
 function renderRodSegmentHTML(segment, kind, rodId, tubeType, startMm, endMm) {
-    const leftPercent = Math.max(0, startMm / 6000 * 100);
-    const widthPercent = Math.max(0, (endMm - startMm) / 6000 * 100);
+    const leftPercent = Math.max(0, startMm / nestingAllowedLengthMm() * 100);
+    const widthPercent = Math.max(0, (endMm - startMm) / nestingAllowedLengthMm() * 100);
     const filePath = segment.currentFilePath || segment.filePath || '';
     const doneClass = segment.done ? ' done' : '';
     const draggable = kind === 'locked' && segment.done ? 'false' : 'true';
@@ -3103,6 +3113,9 @@ async function handleContainerClick(event) {
             case 'toggle-unlocked-rods':
                 toggleUnlockedRodsForTube(actionTarget.dataset.tubeType);
                 break;
+            case 'clear-nesting-cache':
+                await clearCachedNestings();
+                break;
             case 'toggle-all-unlocked-rods':
                 toggleAllUnlockedRods();
                 break;
@@ -3378,12 +3391,34 @@ function sortTubeGroups(groups) {
     });
 }
 
+async function clearCachedNestings() {
+    if (!confirm('Svuotare la cache dei nesting e ricalcolare le verghe libere? Le verghe bloccate e la cronologia rimarranno intatte.')) return;
+    try {
+        const response = await window.pywebview.api.clear_nesting_result_cache();
+        if (response?.status !== 'success') {
+            throw new Error(response?.message || 'Impossibile svuotare la cache.');
+        }
+        nestingCacheResetEpoch++;
+        invalidateNestingCache();
+        await saveUiState();
+        await renderUI();
+    } catch (error) {
+        console.error('[TubeNest CACHE] Reset failed', error);
+        alert(error?.message || 'Errore durante lo svuotamento della cache.');
+    }
+}
+
+function nestingAllowedLengthMm() {
+    return 6000 + Math.max(0, Math.min(50, Number(nestingRodToleranceMm) || 0));
+}
+
 function renderNestingGlobalControls() {
     const allVisible = uiPreferences.showUnlockedRodsDefault !== false;
     return `<div class="nesting-global-controls">
         <button class="action-button" data-action="toggle-all-unlocked-rods">${allVisible ? 'Nascondi tutte le verghe libere' : 'Mostra tutte le verghe libere'}</button>
         <button class="action-button" data-action="lock-all-rods">Blocca tutte le verghe</button>
         <button class="action-button" data-action="unlock-all-rods">Sblocca tutte le verghe</button>
+        <button class="action-button" data-action="clear-nesting-cache" title="Cancella nesting salvati e ricalcola le verghe libere, senza toccare quelle bloccate">Ricalcola nesting (svuota cache)</button>
         <label class="tube-group-sort-label" for="tube-group-sort">Ordina tubi:</label>
         <select id="tube-group-sort" class="tube-group-sort-select" aria-label="Ordina gruppi tubi">
             ${[['name-asc','Nome A-Z'],['name-desc','Nome Z-A'],['size-asc','Dimensione crescente'],['size-desc','Dimensione decrescente'],['pieces-desc','Pezzi da tagliare: più prima'],['pieces-asc','Pezzi da tagliare: meno prima'],['length-desc','Metri da tagliare: più prima'],['length-asc','Metri da tagliare: meno prima'],['locked-desc','Verghe bloccate: più prima']].map(([value,label]) => `<option value="${value}"${(uiPreferences.tubeGroupSort || 'name-asc') === value ? ' selected' : ''}>${label}</option>`).join('')}
@@ -3459,7 +3494,7 @@ async function buildSummaryPlanFromCurrentView() {
                 const used = getRodUsedMm(rod.segments);
                 // A locked rod with no geometric placements must be
                 // recalculated before its free stock can be trusted.
-                rods.push({ remaining: used == null ? 0 : Math.max(0, 6000 - used), pieces: [] });
+                rods.push({ remaining: used == null ? 0 : Math.max(0, nestingAllowedLengthMm() - used), pieces: [] });
             }
         });
 
@@ -3772,8 +3807,8 @@ async function solveLockedRodDraft(tubeType, rodId, segments) {
         throw new Error('Il backend ha restituito pezzi o ordine diversi.');
     }
     const used = Number(response.rod?.used);
-    if (!Number.isFinite(used) || used > 6000 + 1e-5) {
-        throw new Error('La disposizione ottimizzata supera 6000mm.');
+    if (!Number.isFinite(used) || used > nestingAllowedLengthMm() + 1e-5) {
+        throw new Error(`La disposizione ottimizzata supera ${nestingAllowedLengthMm()}mm.`);
     }
     return placements;
 }
