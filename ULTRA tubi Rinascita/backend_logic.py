@@ -56,7 +56,7 @@ NESTING_CACHE_FILE = runtime_paths.NESTING_CACHE_FILE
 
 _NESTING_GROUP_CACHE = {}
 _NESTING_GROUP_CACHE_LIMIT = 128
-_NESTING_CACHE_VERSION = 6
+_NESTING_CACHE_VERSION = 7
 _NESTING_GROUP_CACHE_LOADED = False
 _NESTING_CACHE_LOCK = threading.RLock()
 _NESTING_VALIDATION_CACHE = {}
@@ -522,6 +522,32 @@ def _cache_nesting_group(signature, rods):
             _NESTING_GROUP_CACHE.pop(next(iter(_NESTING_GROUP_CACHE)))
         _NESTING_GROUP_CACHE[signature] = rods
         _save_persistent_nesting_cache()
+
+
+def clear_nesting_result_cache():
+    """Clear in-memory and persisted calculated rods, never locked UI rods."""
+    global _NESTING_GROUP_CACHE_LOADED
+    with _NESTING_CACHE_LOCK:
+        # Load first to accurately report all cached entries, then replace
+        # the disk file atomically with an empty valid cache payload.
+        _load_persistent_nesting_cache()
+        removed = len(_NESTING_GROUP_CACHE)
+        _NESTING_GROUP_CACHE.clear()
+        _NESTING_GROUP_CACHE_LOADED = True
+        _save_persistent_nesting_cache()
+    return {"status": "success", "removed": removed}
+
+
+def configured_nesting_rod_length(config=None, rod_length=6000.0):
+    """Nominal tube length plus configurable fitting allowance (mm)."""
+    config = config if config is not None else (load_config(silent=True) or {})
+    try:
+        tolerance = float(config.get("nesting_rod_tolerance_mm", 1.0))
+        if not math.isfinite(tolerance):
+            tolerance = 1.0
+    except (TypeError, ValueError):
+        tolerance = 1.0
+    return float(rod_length) + max(0.0, min(50.0, tolerance))
 
 
 def load_config(silent=False):
@@ -1778,6 +1804,7 @@ def nest_piece_groups(groups, rod_length=6000):
             gap_mm = 2.0
 
         nesting_algorithm = "current"
+        rod_length = configured_nesting_rod_length(config, rod_length)
 
         _load_persistent_nesting_cache()
 
@@ -1915,6 +1942,7 @@ def debug_nesting_group(group, rods, rod_length=6000, focus_rod_number=None):
         except (TypeError, ValueError):
             gap_mm = 2.0
 
+        rod_length = configured_nesting_rod_length(config, rod_length)
         pieces = []
         validation_cache = {}
         for raw_piece in (group or {}).get("pieces") or []:
@@ -2159,7 +2187,9 @@ def nest_locked_rod_sequence(payload):
         gap = max(0.0, float(config.get("nesting_gap_mm", 2.0)))
         rod = tubenest_engine.optimize_locked_sequence_dict(
             pieces,
-            rod_length=float((payload or {}).get("rodLength") or 6000.0),
+            rod_length=configured_nesting_rod_length(
+                config, float((payload or {}).get("rodLength") or 6000.0)
+            ),
             gap_mm=gap,
             dead_zone_mm=400.0,
         )
@@ -2254,7 +2284,9 @@ def export_locked_rod_zzx(payload):
             output_dir,
             tube_type=str((payload or {}).get("tubeType") or "Tube"),
             rod_id=str((payload or {}).get("rodId") or "rod"),
-            rod_length=float((payload or {}).get("rodLength") or 6000.0),
+            rod_length=configured_nesting_rod_length(
+                config, float((payload or {}).get("rodLength") or 6000.0)
+            ),
             gap_mm=gap_mm,
             text_marking_enabled=text_marking_enabled,
             text_marking_height_mm=text_marking_height_mm,
