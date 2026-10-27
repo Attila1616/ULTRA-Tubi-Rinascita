@@ -3860,9 +3860,14 @@ def _refine_indexed_planar_rods(
                     )
                 ):
                     best, best_sequence = candidate, attempt
-            if trials >= max_trials or time.perf_counter() >= deadline:
+            # Reserve most of the refinement budget for emptying short
+            # rods; otherwise large assemblies consume every trial on
+            # interior permutations that are unlikely to save stock.
+            if trials >= max(1, max_trials // 3) or time.perf_counter() >= deadline:
                 break
         rods[ri] = best
+        if trials >= max(1, max_trials // 3):
+            break
 
     # Try distributing all pieces of a short rod onto existing longer rods.
     # Commit only if the donor is completely absorbed: this improves the rod
