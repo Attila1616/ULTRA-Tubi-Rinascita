@@ -153,6 +153,10 @@ def _reset_parallel_stats():
         edge_chain_rods=0,
         edge_chain_lower_bound=0,
         edge_classes=0,
+        edge_chain_certified=False,
+        edge_catalog_entries=0,
+        edge_catalog_hits=0,
+        edge_chain_alternative_runs=0,
         straight_rotation_reduced_parts=0,
         straight_rotation_total_parts=0,
     )
@@ -3073,7 +3077,10 @@ def diagnose_items_dict(
         f"{get_parallel_stats().get('edge_classes', 0)}, "
         f"catena rapida usata: {get_parallel_stats().get('edge_chain_accepted', False)}, "
         f"verghe: {get_parallel_stats().get('edge_chain_rods', 0)}, "
-        f"limite inferiore: {get_parallel_stats().get('edge_chain_lower_bound', 0)}"
+        f"limite inferiore: {get_parallel_stats().get('edge_chain_lower_bound', 0)}, "
+        f"ottimo certificato: {get_parallel_stats().get('edge_chain_certified', False)}, "
+        f"transizioni in cache: {get_parallel_stats().get('edge_catalog_entries', 0)}"
+        f" (riusi: {get_parallel_stats().get('edge_catalog_hits', 0)})"
     )
     lines.append(f"Tipi candidati per livello: {DEFAULT_MAX_CANDIDATE_TYPES}")
     lines.append(
@@ -3494,136 +3501,258 @@ def _uniform_angular_lower_bound(items, rod_length, gap_mm):
     return int(math.ceil(len(items) / max_per_rod))
 
 
-def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
-    """Fast O(pieces x unique drawings x legal poses) adjacency-first plan.
+def _planar_fast_path_eligible(item):
+    """Any reliable planar end angle can use the indexed packing path.
 
-    Identical cut classes are scanned once and tried first. All actual
-    placements still pass _append_candidate: no unsafe common line is
-    inferred from equal angles or from a matching signature alone.
-
-    Return a plan ONLY when its stock count is provably minimal (one rod,
-    complete non-interlocking straight cuts, or a homogeneous repeated
-    drawing with a certified minimal pair advance). Otherwise the complete
-    beam/merge/refine optimizer runs unchanged.
+    This includes perpendicular, oblique and rotated planar end cuts on
+    square, rectangular and round profiles. Non-planar contour geometry
+    continues through the exact contour search instead.
     """
-    if len(items) < 6 or any(not item.geometry_available for item in items):
-        return None
-    # A broad search over dozens of unrelated shapes would add work before
-    # the original beam search. This path is for repeat-heavy *planar* jobs.
-    # Nonplanar parts stay with the exact contour optimizer, not the quick
-    # planar co-edge grouping.
-    if (
-        len({item.type_key for item in items}) > 12
-        or any(_item_may_need_contour_fit(item) for item in items)
-    ):
-        return None
-    _PARALLEL_STATS["edge_chain_attempted"] = True
-    remaining = {}
-    for item in items:
-        remaining.setdefault(item.type_key, []).append(item.index)
-    cut_class_by_type = {
-        key: _item_cut_classes(items[indices[0]])
-        for key, indices in remaining.items()
-    }
-    _PARALLEL_STATS["edge_classes"] = len({
-        cls for pair in cut_class_by_type.values() for cls in pair
-        if cls is not None
-    })
-    legal_pose_cache = {}
+    if not item.geometry_available:
+        return False
+    ends = (item.tube_part or {}).get("ends") or []
+    if len(ends) < 2:
+        return False
+    for end in ends[:2]:
+        if not isinstance(end, dict):
+            return False
+        plane = end.get("plane_z_equals_c_plus_ax_plus_by")
+        if not isinstance(plane, (list, tuple)) or len(plane) != 3:
+            return False
+        try:
+            residual = float(end.get("plane_max_residual_mm") or 0.0)
+            if (
+                not all(math.isfinite(float(x)) for x in plane)
+                or not math.isfinite(residual)
+                or residual < 0
+                or residual > PLANAR_FIT_TOLERANCE_MM
+            ):
+                return False
+        except (TypeError, ValueError, OverflowError):
+            return False
+    return True
+
+
+def _indexed_planar_chain(
+    items, rod_length, dead_zone_mm, gap_mm, groups, cut_classes,
+    transition_catalog, *, packing_first=False,
+):
+    """Build rods from cached *verified* connections between drawing types.
+
+    The catalog records all legal poses and their precise fitted relative
+    offsets just once per (previous type/pose, next type) transition. Every
+    actual placement is still rechecked by _append_candidate for chuck
+    clearance, rectangle orientation, tail flips and material limits.
+    """
+    remaining = {key: list(indices) for key, indices in groups.items()}
     rods = []
-    limit = float(rod_length) - float(dead_zone_mm)
+    accessible_limit = float(rod_length) - float(dead_zone_mm)
+
+    def candidate_keys(last_item, last_pose):
+        if last_item is None:
+            return sorted(
+                remaining,
+                key=lambda key: (
+                    -items[remaining[key][0]].physical_length, str(key)
+                ),
+            )
+        previous_classes = cut_classes[last_item.type_key]
+        end_class = previous_classes[
+            0 if last_pose.reversed_end_for_end else 1
+        ]
+        return sorted(
+            remaining,
+            key=lambda key: (
+                0 if end_class is not None and
+                end_class in cut_classes[key] else 1,
+                -items[remaining[key][0]].physical_length,
+                str(key),
+            ),
+        )
+
     while remaining:
         state = RodSearchState()
         while not state.tail_used:
-            preceding = (
-                items[state.placed[-1].item_index]
-                if state.placed else None
+            previous_placement = state.placed[-1] if state.placed else None
+            previous_item = (
+                items[previous_placement.item_index]
+                if previous_placement is not None else None
             )
-            preceding_pose = state.placed[-1].pose if state.placed else None
-            preceding_class = None
-            if preceding is not None:
-                pair = cut_class_by_type[preceding.type_key]
-                preceding_class = pair[
-                    0 if preceding_pose.reversed_end_for_end else 1
-                ]
-
-            # Search one representative of each drawing, never one candidate
-            # per duplicate physical piece. Matching ends are examined first.
-            keys = sorted(
-                remaining,
-                key=lambda key: (
-                    0 if preceding_class is not None and
-                    preceding_class in cut_class_by_type[key] else 1,
-                    -items[remaining[key][0]].physical_length,
-                    str(key),
-                ),
+            previous_pose = (
+                previous_placement.pose
+                if previous_placement is not None else None
             )
             best = None
+            keys = candidate_keys(previous_item, previous_pose)
             for key in keys:
                 item = items[remaining[key][0]]
-                cache_key = (
-                    preceding.type_key if preceding is not None else None,
-                    None if preceding_pose is None else (
+                if previous_item is None:
+                    candidates = [
+                        (pose, None, False)
+                        for pose in _first_pose_candidates(item)
+                    ]
+                else:
+                    catalog_key = (
+                        previous_item.type_key,
                         round(_normalize_angle(
-                            preceding_pose.axial_rotation_degrees
+                            previous_pose.axial_rotation_degrees
                         ), 6),
-                        bool(preceding_pose.reversed_end_for_end),
-                    ),
-                    item.type_key,
-                    state.rectangle_family,
-                )
-                poses = legal_pose_cache.get(cache_key)
-                if poses is None:
-                    poses = (
-                        _next_pose_candidates(
-                            preceding, preceding_pose, item,
-                            state.rectangle_family,
-                        )
-                        if preceding is not None
-                        else _first_pose_candidates(item)
+                        bool(previous_pose.reversed_end_for_end),
+                        key,
+                        state.rectangle_family,
                     )
-                    legal_pose_cache[cache_key] = poses
-                for pose in poses:
+                    candidates = transition_catalog.get(catalog_key)
+                    if candidates is None:
+                        candidates = []
+                        for pose in _next_pose_candidates(
+                            previous_item, previous_pose, item,
+                            state.rectangle_family,
+                        ):
+                            try:
+                                relative_origin, _actual_gap, common_line, _, _ = (
+                                    _cached_pairwise_fit(
+                                        previous_item, previous_pose,
+                                        item, pose, gap_mm,
+                                    )
+                                )
+                                candidates.append((
+                                    pose, float(relative_origin),
+                                    bool(common_line),
+                                ))
+                            except (ValueError, TypeError, OverflowError):
+                                # The original optimizer falls back to an
+                                # ordinary gap if detailed fitting fails.
+                                # Preserve that possibility.
+                                candidates.append((pose, None, False))
+                        transition_catalog[catalog_key] = candidates
+                        _PARALLEL_STATS["edge_catalog_entries"] += 1
+                    else:
+                        _PARALLEL_STATS["edge_catalog_hits"] += 1
+
+                for pose, relative_origin, expected_common in candidates:
+                    if relative_origin is not None:
+                        origin = (
+                            float(previous_placement.origin)
+                            + float(relative_origin)
+                        )
+                        projected_end = origin + item.physical_length
+                        if (
+                            origin < -EPS
+                            or projected_end > float(rod_length) + EPS
+                        ):
+                            continue
+
                     candidate = _append_candidate(
                         state, item, pose, items,
                         rod_length=rod_length,
-                        accessible_limit=limit,
+                        accessible_limit=accessible_limit,
                         dead_zone_mm=dead_zone_mm,
                         gap_mm=gap_mm,
                     )
                     if candidate is None:
                         continue
-                    just_placed = candidate.placed[-1]
-                    # Avoid entering the dead zone while further pieces may fit.
-                    # Otherwise favor validated co-edges, longer pieces and
-                    # tighter nesting with a deterministic tie-break.
-                    score = (
-                        bool(candidate.tail_used),
-                        not bool(just_placed.common_line_before)
-                            if state.placed else False,
-                        -float(item.physical_length),
-                        round(float(candidate.used_span), 6),
+
+                    placed = candidate.placed[-1]
+                    # Expected shared edges are hints, never an override of
+                    # the verified cut supplied by _append_candidate.
+                    confirmed_common = bool(placed.common_line_before)
+                    if packing_first:
+                        preference = (
+                            bool(candidate.tail_used),
+                            -item.physical_length,
+                            not confirmed_common,
+                            round(candidate.used_span, 6),
+                        )
+                    else:
+                        preference = (
+                            bool(candidate.tail_used),
+                            not confirmed_common,
+                            -item.physical_length,
+                            round(candidate.used_span, 6),
+                        )
+                    score = preference + (
                         str(key),
-                        round(float(pose.axial_rotation_degrees), 6),
+                        round(_normalize_angle(
+                            pose.axial_rotation_degrees
+                        ), 6),
                         bool(pose.reversed_end_for_end),
                     )
                     if best is None or score < best[0]:
                         best = (score, key, candidate)
+
             if best is None:
                 break
-            _score, chosen_key, state = best
-            # We placed the *first* representative (remaining[key][0]);
-            # remove that exact instance, not the tail of the group.
-            # Otherwise the same instance could be reused on a rod.
-            remaining[chosen_key].pop(0)
-            if not remaining[chosen_key]:
-                del remaining[chosen_key]
+
+            _score, selected_key, state = best
+            # The selected instance was groups[key][0], so pop that one.
+            remaining[selected_key].pop(0)
+            if not remaining[selected_key]:
+                del remaining[selected_key]
+
         if not state.placed:
             return None
         rods.append(state)
+    return rods
 
-    _PARALLEL_STATS["edge_chain_rods"] = len(rods)
-    if len(rods) == 1:
+
+def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
+    """Fast angle-agnostic nesting of all reliably planar cut geometries.
+
+    Equal end angles from any legal rotation become candidate connections.
+    Actual co-edge permission is verified and cached once for each distinct
+    type and pose. The resulting rod sequence is safe but not necessarily
+    the global minimum: favor interactive speed on planar jobs over repeated
+    beam/merge/refine searches. Non-planar jobs use the original engine.
+    """
+    if len(items) < 2 or not all(
+        _planar_fast_path_eligible(item) for item in items
+    ):
+        return None
+
+    _PARALLEL_STATS["edge_chain_attempted"] = True
+    groups = {}
+    for item in items:
+        groups.setdefault(item.type_key, []).append(item.index)
+    classes = {
+        key: _item_cut_classes(items[indices[0]])
+        for key, indices in groups.items()
+    }
+    _PARALLEL_STATS["edge_classes"] = len({
+        cls for pair in classes.values() for cls in pair
+        if cls is not None
+    })
+    transitions = {}
+
+    # Co-edge-first and stock-packing-first are two inexpensive, deterministic
+    # orderings over the SAME verified connection catalog. Compare only rod
+    # count, then total length and common-line count; never run a beam search
+    # just because a lower-bound certificate is unavailable.
+    first = _indexed_planar_chain(
+        items, rod_length, dead_zone_mm, gap_mm,
+        groups, classes, transitions, packing_first=False,
+    )
+    if first is None:
+        return None
+
+    def quality(rods):
+        return (
+            len(rods),
+            round(sum(rod.used_span for rod in rods), 6),
+            -sum(rod.common_lines for rod in rods),
+        )
+
+    selected = first
+    if len(groups) > 1 and len(first) > 1:
+        _PARALLEL_STATS["edge_chain_alternative_runs"] += 1
+        second = _indexed_planar_chain(
+            items, rod_length, dead_zone_mm, gap_mm,
+            groups, classes, transitions, packing_first=True,
+        )
+        if second is not None and quality(second) < quality(selected):
+            selected = second
+
+    _PARALLEL_STATS["edge_chain_rods"] = len(selected)
+    if len(selected) == 1:
         lower_bound = 1
     elif all(_has_noninterlocking_straight_ends(item) for item in items):
         lower_bound = int(math.ceil(
@@ -3635,11 +3764,12 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
             items, rod_length, gap_mm
         )
     _PARALLEL_STATS["edge_chain_lower_bound"] = lower_bound or 0
-    if lower_bound is not None and len(rods) == lower_bound:
-        _PARALLEL_STATS["edge_chain_accepted"] = True
-        _PARALLEL_STATS["strategy"] = "certified_cut_class_chain"
-        return rods
-    return None
+    _PARALLEL_STATS["edge_chain_certified"] = bool(
+        lower_bound is not None and len(selected) == lower_bound
+    )
+    _PARALLEL_STATS["edge_chain_accepted"] = True
+    _PARALLEL_STATS["strategy"] = "indexed_any_planar_angle"
+    return selected
 
 
 def _optimize_normalized(
