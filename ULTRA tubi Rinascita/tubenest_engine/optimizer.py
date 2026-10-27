@@ -481,7 +481,10 @@ def _prioritize_matching_planar_ends(previous_item, previous_pose, item, poses):
     """
     if not (previous_item.geometry_available and item.geometry_available):
         return poses
-    _, previous_end = posed_ends(previous_item.tube_part, previous_pose)
+    try:
+        _, previous_end = posed_ends(previous_item.tube_part, previous_pose)
+    except (ValueError, TypeError, OverflowError):
+        return poses
     if not _plane_fit_is_usable(previous_end):
         return poses
     if previous_end.slope_magnitude <= STRAIGHT_SLOPE_EPS:
@@ -489,26 +492,31 @@ def _prioritize_matching_planar_ends(previous_item, previous_pose, item, poses):
 
     def candidate_score(pair):
         index, candidate = pair
-        next_start, _ = posed_ends(item.tube_part, candidate)
-        if not _plane_fit_is_usable(next_start):
-            return (2, math.inf, index)
-        slope_difference = math.hypot(
-            previous_end.slope_x - next_start.slope_x,
-            previous_end.slope_vertical - next_start.slope_vertical,
-        )
-        metadata_compatible = (
-            slope_difference <= PLANE_EPS
-            and float(previous_end.residual_mm or 0.0)
-                <= COMMON_LINE_RESIDUAL_TOLERANCE_MM
-            and float(next_start.residual_mm or 0.0)
-                <= COMMON_LINE_RESIDUAL_TOLERANCE_MM
-            and previous_end.operation_layer == next_start.operation_layer == 1
-            and _common_line_boundary_compatible(
-                previous_item.tube_part, previous_end,
-                item.tube_part, next_start,
+        try:
+            next_start, _ = posed_ends(item.tube_part, candidate)
+            if not _plane_fit_is_usable(next_start):
+                return (2, math.inf, index)
+            slope_difference = math.hypot(
+                previous_end.slope_x - next_start.slope_x,
+                previous_end.slope_vertical - next_start.slope_vertical,
             )
-        )
-        return (0 if metadata_compatible else 1, slope_difference, index)
+            metadata_compatible = (
+                slope_difference <= PLANE_EPS
+                and float(previous_end.residual_mm or 0.0)
+                    <= COMMON_LINE_RESIDUAL_TOLERANCE_MM
+                and float(next_start.residual_mm or 0.0)
+                    <= COMMON_LINE_RESIDUAL_TOLERANCE_MM
+                and previous_end.operation_layer == next_start.operation_layer == 1
+                and _common_line_boundary_compatible(
+                    previous_item.tube_part, previous_end,
+                    item.tube_part, next_start,
+                )
+            )
+            return (0 if metadata_compatible else 1, slope_difference, index)
+        except (ValueError, TypeError, OverflowError):
+            # Keep the candidate legal and leave any error to the original
+            # exact-fit validator, which has its own conservative fallback.
+            return (2, math.inf, index)
 
     return [pose for _, pose in sorted(
         enumerate(poses), key=candidate_score
@@ -872,13 +880,19 @@ def _append_candidate(
                     not _plane_fit_is_usable(previous_end)
                     or not _plane_fit_is_usable(next_start)
                 ):
-                    necessary_origin = contour_virtual_plane_lower_bound(
-                        previous_item.tube_part,
-                        previous_placed.pose,
-                        item.tube_part,
-                        pose,
-                        gap_mm,
-                    )
+                    try:
+                        necessary_origin = contour_virtual_plane_lower_bound(
+                            previous_item.tube_part,
+                            previous_placed.pose,
+                            item.tube_part,
+                            pose,
+                            gap_mm,
+                        )
+                    except (ValueError, TypeError, OverflowError):
+                        # A malformed/unsupported envelope must never turn
+                        # an optimization into a nesting failure. Let the
+                        # existing exact-fit/fallback logic handle it.
+                        necessary_origin = None
                     if (
                         necessary_origin is not None
                         and float(previous_placed.origin)
