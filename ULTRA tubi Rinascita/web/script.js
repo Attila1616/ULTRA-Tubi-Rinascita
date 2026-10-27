@@ -2628,18 +2628,36 @@ function getSegmentPreviewGeometry(segment) {
     };
 }
 
+function validOptimizedRodLayout(segments) {
+    return (segments || []).every(segment => {
+        const placement = segment?.nestPlacement;
+        return placement
+            && Number.isFinite(Number(placement.z_start))
+            && Number.isFinite(Number(placement.z_end))
+            && Number(placement.z_end) > Number(placement.z_start);
+    });
+}
+
 function getRodUsedMm(segments, nestRod = null) {
     const backendUsed = Number(nestRod?.used);
-    if (Number.isFinite(backendUsed)) return backendUsed;
-
-    const placedEnds = (segments || [])
-        .map(segment => Number(segment?.nestPlacement?.z_end))
-        .filter(Number.isFinite);
-    if (placedEnds.length === (segments || []).length && placedEnds.length > 0) {
-        return Math.max(...placedEnds);
+    if (nestRod && Number.isFinite(backendUsed)) return backendUsed;
+    if (validOptimizedRodLayout(segments) && (segments || []).length) {
+        return Math.max(...segments.map(segment => Number(segment.nestPlacement.z_end)));
     }
+    return null; // Never mistake a sum of angled nominal lengths for rod usage.
+}
 
-    return (segments || []).reduce((sum, segment) => sum + (Number(segment.length) || 0), 0);
+function optimizedRodProgress(segments) {
+    if (!validOptimizedRodLayout(segments)) return null;
+    let endReached = 0;
+    let left = 0;
+    for (const segment of segments) {
+        const end = Number(segment.nestPlacement.z_end);
+        const increase = Math.max(0, end - endReached);
+        if (!segment.done) left += increase;
+        endReached = Math.max(endReached, end);
+    }
+    return { used: endReached, remaining: left };
 }
 
 function segmentLayoutMm(segments) {
@@ -2686,20 +2704,23 @@ function formatRotationAttemptSummary(segment) {
 }
 
 function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked, isDone, isEmptyPlaceholder, nestRod = null }) {
+    const optimizedProgress = isLocked ? optimizedRodProgress(segments) : null;
     const totalUsed = getRodUsedMm(segments, nestRod);
-    const remainingToCut = (segments || []).reduce((sum, segment) => {
-        return segment.done ? sum : sum + (Number(segment.length) || 0);
-    }, 0);
-    const nominalLockedTotal = (segments || []).reduce((sum, segment) => sum + (Number(segment.length) || 0), 0);
-    const usedPercent = (totalUsed / 6000 * 100).toFixed(1);
-    const overfull = totalUsed > 6000 + 1e-6;
-    const remainingLabel = isLocked ? ` - Rimasto da tagliare ${remainingToCut}/${nominalLockedTotal}mm` : '';
+    const usedPercent = totalUsed == null ? '—' : (totalUsed / 6000 * 100).toFixed(1);
+    const overfull = totalUsed != null && totalUsed > 6000 + 1e-6;
+    const formatMm = value => Number(value).toFixed(1).replace(/\\.0$/, '');
+    const remainingLabel = !isLocked ? '' : optimizedProgress
+        ? ` - Rimasto da tagliare ${formatMm(optimizedProgress.remaining)}/${formatMm(optimizedProgress.used)}mm (ottimizzati)`
+        : ` - Da ricalcolare · ${(segments || []).filter(segment => !segment.done).length}/${(segments || []).length} pezzi`;
+    const usedLabel = totalUsed == null
+        ? 'Posizioni da ricalcolare'
+        : `Usati ${totalUsed.toFixed(totalUsed % 1 ? 1 : 0)}mm (${usedPercent}%)`;
     const rodPieceIds = JSON.stringify((segments || []).map(segment => segment.sourceId || segment.id).filter(Boolean));
     const segmentKeys = JSON.stringify((segments || []).map(segment => segment.instanceKey).filter(Boolean));
 
     let html = `<div class="rod-entry ${kind}-rod${isDone ? ' rod-complete' : ''}${overfull ? ' rod-overfull' : ''}" data-rod-entry="${escapeAttr(rodId)}">
         <div class="rod-body">
-            <p class="rod-label"><strong>${escapeHtml(label)}:</strong> Usati ${totalUsed.toFixed(totalUsed % 1 ? 1 : 0)}mm (${usedPercent}%)${remainingLabel}${overfull ? ' - oltre 6000mm' : ''}</p>
+            <p class="rod-label"><strong>${escapeHtml(label)}:</strong> ${usedLabel}${remainingLabel}${overfull ? ' - oltre 6000mm' : ''}</p>
             <div class="rod-bar" data-drop-zone="rod" data-rod-kind="${escapeAttr(kind)}" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}">
                 <div class="rod-chuck-dead-zone" title="Ultimi 400mm: zona non tagliabile senza strategia di ribaltamento"></div>`;
 
@@ -3660,11 +3681,8 @@ function insertSegmentIntoLockedRod(tubeType, rodId, segment, insertIndex = null
     const rod = getLockedRod(tubeType, rodId);
     if (!rod || !segment || segment.done) return false;
     if ((rod.segments || []).some(item => item.instanceKey === segment.instanceKey)) return true;
-    const used = rod.segments.reduce((sum, item) => sum + (parseInt(item.length, 10) || 0), 0);
-    if (used + (parseInt(segment.length, 10) || 0) > 6000) {
-        alert('Questa verga supererebbe 6000mm.');
-        return false;
-    }
+    // No nominal-length veto: angled cuts can interlock. The drop handler
+    // must validate the proposed complete sequence with the geometric solver.
     clearLockedRodPlacements(rod);
     const cleanSegment = { ...segment, done: false };
     delete cleanSegment.nestPlacement;
@@ -3715,83 +3733,163 @@ function handleRodDragOver(event) {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
 }
-function handleRodDrop(event) {
-    if (!draggedSegment) return;
+// Validate new placement before changing any locked-rod contents.
+// If a piece cannot fit the rod, the drag is rejected without losing its
+// original position or invalidating the free-piece cache.
+let lockedRodDropInProgress = false;
+
+async function solveLockedRodDraft(tubeType, rodId, segments) {
+    if (!segments.length) return [];
+    const pieceSources = {};
+    const pieces = segments.map(segment => {
+        const source = findPieceById(segment.sourceId);
+        pieceSources[segment.sourceId] = {
+            sourceId: segment.sourceId,
+            tubePart: source?.tubePart || null,
+            filePath: source?.filePath || segment.filePath || '',
+            fileName: source?.fileName || segment.fileName || ''
+        };
+        return {
+            instanceKey: segment.instanceKey,
+            sourceId: segment.sourceId,
+            length: segment.length
+        };
+    });
+    const response = await window.pywebview.api.nest_locked_rod_sequence({
+        tubeType, rodId, rodLength: 6000,
+        segments: pieces, sources: pieceSources,
+    });
+    if (response?.status !== 'success') {
+        throw new Error(response?.message || 'Nesting geometrico della verga non riuscito.');
+    }
+    const placements = response.rod?.placements || [];
+    if (placements.length !== segments.length ||
+        placements.some((placement, index) =>
+            placement.instance_key !== segments[index].instanceKey)) {
+        throw new Error('Il backend ha restituito pezzi o ordine diversi.');
+    }
+    const used = Number(response.rod?.used);
+    if (!Number.isFinite(used) || used > 6000 + 1e-5) {
+        throw new Error('La disposizione ottimizzata supera 6000mm.');
+    }
+    return placements;
+}
+
+async function handleRodDrop(event) {
+    if (!draggedSegment || lockedRodDropInProgress) return;
     const rodBar = event.target.closest('[data-drop-zone="rod"]');
     if (!rodBar) return;
     event.preventDefault();
 
-    const targetKind = rodBar.dataset.rodKind;
-    const targetRodId = rodBar.dataset.rodId;
-    const targetTubeType = rodBar.dataset.tubeType;
-    if (targetTubeType !== draggedSegment.tubeType) {
-        alert('Puoi spostare pezzi solo dentro lo stesso tipo tubo.');
-        clearSegmentDragState();
-        return;
-    }
-
-    let moved = false;
-    if (targetKind === 'unlocked') {
-        if (draggedSegment.sourceKind === 'locked') {
-            moved = !!removeSegmentFromLockedRod(draggedSegment.tubeType, draggedSegment.sourceRodId, draggedSegment.instanceKey);
-            if (moved) {
-                // This piece has re-entered the free pool, so the previous
-                // remaining-rod solution is no longer the same problem.
-                invalidateNestingCache(draggedSegment.tubeType);
-            }
-        }
-        clearSegmentDragState();
-        if (moved) {
-            saveUiState();
-            renderUI();
-        }
-        return;
-    }
-
-    if (targetKind !== 'locked') {
-        clearSegmentDragState();
-        return;
-    }
-    const targetSegment = event.target.closest('.rod-segment');
-    const targetRod = getLockedRod(targetTubeType, targetRodId);
-    let insertIndex = null;
-    if (targetRod && targetSegment) {
-        const baseIndex = Math.max(0, targetRod.segments.findIndex(segment => segment.instanceKey === targetSegment.dataset.segmentKey));
-        const rect = targetSegment.getBoundingClientRect();
-        insertIndex = event.clientX > rect.left + rect.width / 2 ? baseIndex + 1 : baseIndex;
-    }
-
-    let segmentToMove = null;
-    if (draggedSegment.sourceKind === 'locked') {
-        const sourceRod = getLockedRod(draggedSegment.tubeType, draggedSegment.sourceRodId);
-        segmentToMove = sourceRod?.segments?.find(segment => segment.instanceKey === draggedSegment.instanceKey);
-        if (!segmentToMove) {
-            clearSegmentDragState();
-            return;
-        }
-        if (draggedSegment.sourceRodId === targetRodId) {
-            if ((sourceRod.segments || []).length <= 1) {
-                clearSegmentDragState();
-                return;
-            }
-            const oldIndex = sourceRod.segments.findIndex(segment => segment.instanceKey === draggedSegment.instanceKey);
-            const adjustedIndex = oldIndex >= 0 && insertIndex !== null && oldIndex < insertIndex ? insertIndex - 1 : insertIndex;
-            removeSegmentFromLockedRod(draggedSegment.tubeType, draggedSegment.sourceRodId, draggedSegment.instanceKey);
-            moved = insertSegmentIntoLockedRod(targetTubeType, targetRodId, segmentToMove, adjustedIndex);
-        } else if (insertSegmentIntoLockedRod(targetTubeType, targetRodId, segmentToMove, insertIndex)) {
-            removeSegmentFromLockedRod(draggedSegment.tubeType, draggedSegment.sourceRodId, draggedSegment.instanceKey);
-            moved = true;
-        }
-    } else {
-        segmentToMove = availableSegmentMap.get(draggedSegment.instanceKey);
-        moved = insertSegmentIntoLockedRod(targetTubeType, targetRodId, segmentToMove, insertIndex);
-    }
+    const dragged = { ...draggedSegment };
     clearSegmentDragState();
-    if (moved) {
-        saveUiState();
-        renderUI();
+    const tubeType = rodBar.dataset.tubeType;
+    const rodId = rodBar.dataset.rodId;
+    const kind = rodBar.dataset.rodKind;
+    if (tubeType !== dragged.tubeType) {
+        alert('Puoi spostare pezzi solo dentro lo stesso tipo tubo.');
+        return;
+    }
+    if (kind === 'unlocked') {
+        if (dragged.sourceKind === 'locked') {
+            const moved = removeSegmentFromLockedRod(
+                tubeType, dragged.sourceRodId, dragged.instanceKey
+            );
+            if (moved) {
+                invalidateNestingCache(tubeType);
+                await saveUiState();
+                await renderUI();
+            }
+        }
+        return;
+    }
+    if (kind !== 'locked') return;
+
+    const targetRod = getLockedRod(tubeType, rodId);
+    const sourceRod = dragged.sourceKind === 'locked'
+        ? getLockedRod(tubeType, dragged.sourceRodId) : null;
+    if (!targetRod || targetRod.done || (sourceRod && sourceRod.done)) return;
+    const item = sourceRod
+        ? sourceRod.segments.find(s => s.instanceKey === dragged.instanceKey)
+        : availableSegmentMap.get(dragged.instanceKey);
+    if (!item || item.done) return;
+
+    const targetPiece = event.target.closest('.rod-segment');
+    const currentIndex = targetRod.segments.findIndex(
+        s => s.instanceKey === targetPiece?.dataset?.segmentKey
+    );
+    let insertAt = targetRod.segments.length;
+    if (currentIndex >= 0) {
+        const rect = targetPiece.getBoundingClientRect();
+        insertAt = currentIndex + (
+            event.clientX > rect.left + rect.width / 2 ? 1 : 0
+        );
+    }
+    const sameRod = sourceRod && sourceRod.rodId === targetRod.rodId;
+    let originalIndex = -1;
+    let targetDraft = [...targetRod.segments];
+    if (sameRod) {
+        originalIndex = targetDraft.findIndex(
+            s => s.instanceKey === dragged.instanceKey
+        );
+        if (originalIndex < 0 || targetDraft.length <= 1) return;
+        targetDraft.splice(originalIndex, 1);
+        if (originalIndex < insertAt) insertAt--;
+    }
+    if (!sameRod && targetDraft.some(s => s.instanceKey === dragged.instanceKey)) return;
+    insertAt = Math.max(0, Math.min(insertAt, targetDraft.length));
+    targetDraft.splice(insertAt, 0, item);
+    if (sameRod && originalIndex === insertAt) return;
+
+    const sourceDraft = sourceRod && !sameRod
+        ? sourceRod.segments.filter(s => s.instanceKey !== dragged.instanceKey)
+        : null;
+    const targetSnapshot = targetRod.segments.map(s => s.instanceKey).join('|');
+    const sourceSnapshot = sourceRod?.segments.map(s => s.instanceKey).join('|');
+
+    lockedRodDropInProgress = true;
+    try {
+        const targetPlacements = await solveLockedRodDraft(
+            tubeType, rodId, targetDraft
+        );
+        const sourcePlacements = sourceDraft?.length
+            ? await solveLockedRodDraft(tubeType, sourceRod.rodId, sourceDraft)
+            : [];
+        if (
+            targetSnapshot !== targetRod.segments.map(s => s.instanceKey).join('|')
+            || (sourceRod && sourceSnapshot !==
+                sourceRod.segments.map(s => s.instanceKey).join('|'))
+        ) {
+            throw new Error('La composizione della verga è cambiata. Riprovare.');
+        }
+        targetRod.segments = targetDraft.map((segment, index) => ({
+            ...segment, nestPlacement: targetPlacements[index]
+        }));
+        targetRod.done = false;
+        targetRod.historyLogged = false;
+        targetRod.inventoryDecrementDone = false;
+        if (sourceDraft) {
+            if (sourceDraft.length) {
+                sourceRod.segments = sourceDraft.map((segment, index) => ({
+                    ...segment, nestPlacement: sourcePlacements[index]
+                }));
+                sourceRod.done = sourceRod.segments.every(s => s.done);
+            } else {
+                lockedRods[tubeType] = (lockedRods[tubeType] || [])
+                    .filter(r => r.rodId !== sourceRod.rodId);
+            }
+        }
+        if (!sourceRod) invalidateNestingCache(tubeType);
+        await saveUiState();
+        await renderUI();
+    } catch (error) {
+        console.error('Geometric rod drag rejected:', error);
+        alert(error?.message || 'Il pezzo non entra nella verga dopo il nesting geometrico.');
+    } finally {
+        lockedRodDropInProgress = false;
     }
 }
+
 async function markLockedSegmentFatto(tubeType, rodId, instanceKey) {
     const rod = getLockedRod(tubeType, rodId);
     const segment = rod?.segments?.find(item => item.instanceKey === instanceKey);
