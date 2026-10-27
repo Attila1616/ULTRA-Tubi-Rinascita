@@ -23,6 +23,11 @@ from .fit import (
     tail_flip_eligibility,
     PLANAR_FIT_TOLERANCE_MM,
     STRAIGHT_SLOPE_EPS,
+    PLANE_EPS,
+    COMMON_LINE_RESIDUAL_TOLERANCE_MM,
+    _plane_fit_is_usable,
+    _common_line_boundary_compatible,
+    contour_virtual_plane_lower_bound,
 )
 
 
@@ -459,6 +464,49 @@ def _first_pose_candidates(item):
     return _dedupe_poses(poses)
 
 
+def _prioritize_matching_planar_ends(previous_item, previous_pose, item, poses):
+    """Put geometrically co-edge-capable orientations first without pruning.
+
+    A matching slope/angle is necessary, but not sufficient, for a real
+    common-line cut. Check machining metadata as well, and leave the exact
+    geometry verifier to decide. Every legal orientation is still explored.
+    """
+    if not (previous_item.geometry_available and item.geometry_available):
+        return poses
+    _, previous_end = posed_ends(previous_item.tube_part, previous_pose)
+    if not _plane_fit_is_usable(previous_end):
+        return poses
+    if previous_end.slope_magnitude <= STRAIGHT_SLOPE_EPS:
+        return poses
+
+    def candidate_score(pair):
+        index, candidate = pair
+        next_start, _ = posed_ends(item.tube_part, candidate)
+        if not _plane_fit_is_usable(next_start):
+            return (2, math.inf, index)
+        slope_difference = math.hypot(
+            previous_end.slope_x - next_start.slope_x,
+            previous_end.slope_vertical - next_start.slope_vertical,
+        )
+        metadata_compatible = (
+            slope_difference <= PLANE_EPS
+            and float(previous_end.residual_mm or 0.0)
+                <= COMMON_LINE_RESIDUAL_TOLERANCE_MM
+            and float(next_start.residual_mm or 0.0)
+                <= COMMON_LINE_RESIDUAL_TOLERANCE_MM
+            and previous_end.operation_layer == next_start.operation_layer == 1
+            and _common_line_boundary_compatible(
+                previous_item.tube_part, previous_end,
+                item.tube_part, next_start,
+            )
+        )
+        return (0 if metadata_compatible else 1, slope_difference, index)
+
+    return [pose for _, pose in sorted(
+        enumerate(poses), key=candidate_score
+    )]
+
+
 def _next_pose_candidates(previous_item, previous_pose, item, rectangle_family):
     if not item.geometry_available:
         return [PartPose()]
@@ -473,7 +521,9 @@ def _next_pose_candidates(previous_item, previous_pose, item, rectangle_family):
         for reversed_flag in (False, True):
             for rotation in rotations:
                 poses.append(PartPose(rotation, reversed_flag))
-        return _dedupe_poses(poses)
+        return _prioritize_matching_planar_ends(
+            previous_item, previous_pose, item, _dedupe_poses(poses)
+        )
 
     if kind == "Rect":
         if _straight_rotation_is_redundant(item):
@@ -489,7 +539,9 @@ def _next_pose_candidates(previous_item, previous_pose, item, rectangle_family):
         for reversed_flag in (False, True):
             for rotation in rotations:
                 poses.append(PartPose(rotation, reversed_flag))
-        return _dedupe_poses(poses)
+        return _prioritize_matching_planar_ends(
+            previous_item, previous_pose, item, _dedupe_poses(poses)
+        )
 
     if kind == "Circle" and previous_item.geometry_available:
         _, previous_end = posed_ends(previous_item.tube_part, previous_pose)
@@ -763,6 +815,33 @@ def _append_candidate(
         previous_item = items[previous_placed.item_index]
 
         if previous_item.geometry_available and item.geometry_available:
+            # Irregular end contours require expensive perimeter comparisons.
+            # Four sampled "virtual planes" provide a necessary clearance
+            # bound. Reject only when even this optimistic bound would run
+            # beyond the stock end. All accepted candidates still use the
+            # full contour/plane fit and ordinary machine safety checks.
+            _, previous_end = posed_ends(
+                previous_item.tube_part, previous_placed.pose
+            )
+            next_start, _ = posed_ends(item.tube_part, pose)
+            if (
+                not _plane_fit_is_usable(previous_end)
+                or not _plane_fit_is_usable(next_start)
+            ):
+                necessary_origin = contour_virtual_plane_lower_bound(
+                    previous_item.tube_part,
+                    previous_placed.pose,
+                    item.tube_part,
+                    pose,
+                    gap_mm,
+                )
+                if (
+                    necessary_origin is not None
+                    and float(previous_placed.origin)
+                        + necessary_origin + item.physical_length
+                        > float(rod_length) + EPS
+                ):
+                    return None
             try:
                 (
                     relative_origin,
