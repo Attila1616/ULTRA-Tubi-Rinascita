@@ -64,7 +64,8 @@ _NESTING_VALIDATION_CACHE_LIMIT = 4096
 
 def _convert_igs_worker(payload):
     """Process-pool worker for one independent IGS conversion."""
-    file_path, overwrite = payload
+    file_path, overwrite, *optional_output = payload
+    output_path = optional_output[0] if optional_output else None
     started = time.perf_counter()
     file_name = os.path.basename(str(file_path))
     pid = os.getpid()
@@ -75,6 +76,7 @@ def _convert_igs_worker(payload):
     try:
         result = tubenest_engine.convert_igs_to_zzx(
             file_path,
+            output_path=output_path,
             overwrite=bool(overwrite),
         )
         result = dict(result or {})
@@ -166,7 +168,7 @@ def find_igs_files_in_folder(folder_path):
     }
 
 
-def convert_igs_files_to_zzx(file_paths, overwrite=False):
+def convert_igs_files_to_zzx(file_paths, overwrite=False, output_paths=None):
     """Convert independent IGS files in parallel processes.
 
     OpenCascade work dominates conversion time. Running separate files in
@@ -193,9 +195,15 @@ def convert_igs_files_to_zzx(file_paths, overwrite=False):
         f"workers={workers} overwrite={bool(overwrite)}",
         flush=True,
     )
+    if output_paths is not None and len(output_paths) != len(paths):
+        return {
+            "status": "error",
+            "message": "Numero destinazioni ZZX diverso dal numero file IGS.",
+            "results": [],
+        }
     payloads = [
-        (path, bool(overwrite))
-        for path in paths
+        (path, bool(overwrite), (output_paths[index] if output_paths is not None else None))
+        for index, path in enumerate(paths)
     ]
 
     if workers <= 1:
@@ -2278,11 +2286,23 @@ def find_zzx_validation_issues(da_fare_path):
 def _normalized_cut_stem(filename):
     return _stable_cut_stem(filename)
 
+
+def _quantity_independent_stem(filename):
+    """Preserve all drawing identifiers except explicit Npz quantity tokens."""
+    stem = _normalized_cut_stem(filename)
+    return re.sub(r"(?<![a-z0-9])\d+\s*pz\b", "{qty}pz", stem, flags=re.IGNORECASE)
+
+
+def _quantity_tokens(filename):
+    return tuple(re.findall(r"(?<![a-z0-9])(\d+)\s*pz\b", _normalized_cut_stem(filename), flags=re.IGNORECASE))
+
+
 def _expected_zzx_name_for_igs(filename):
     name_part, _ = os.path.splitext(os.path.basename(filename))
     if name_part.lower().endswith(".zzx"):
         return name_part
     return f"{name_part}.zzx"
+
 
 def _product_scope_for_path(file_path, base_path):
     try:
@@ -2295,53 +2315,201 @@ def _product_scope_for_path(file_path, base_path):
         return os.path.normpath(base_path)
     return os.path.normpath(os.path.join(base_path, first_part))
 
+
 def _is_fatto_folder_name(name):
     normalized = re.sub(r"\s+", " ", str(name or "").strip().lower())
     return normalized == "fatto" or normalized.endswith(" - fatto")
+
 
 def _path_contains_fatto_folder(path):
     parts = os.path.normpath(str(path or "")).split(os.path.sep)
     return any(_is_fatto_folder_name(part) for part in parts)
 
+
 def find_unmatched_igs_files(da_fare_path):
+    """Return real missing ZZX and nonblocking quantity-only name differences.
+
+    A quantity-only difference is detected only when *all other filename
+    characters* are identical after whitespace normalization. Matches never
+    escape the existing product scope. A quantity-different ZZX is NOT an
+    invitation to overwrite or automatically regenerate it.
+    """
     if not da_fare_path or not os.path.isdir(da_fare_path):
         return []
     if _path_contains_fatto_folder(da_fare_path):
         return []
 
     zzx_by_stem = defaultdict(list)
+    zzx_by_quantity_independent_stem = defaultdict(list)
     igs_files = []
 
     for root, dirs, files in os.walk(da_fare_path):
         in_fatto_branch = _path_contains_fatto_folder(root)
+        if in_fatto_branch:
+            dirs[:] = []
+            continue
         for file in files:
             lower_file = file.lower()
-            file_path = os.path.join(root, file)
+            file_path = os.path.normpath(os.path.join(root, file))
             if lower_file.endswith(".zzx"):
-                zzx_by_stem[_normalized_cut_stem(file)].append(os.path.normpath(file_path))
-            elif lower_file.endswith(".igs") and not in_fatto_branch:
-                igs_files.append(os.path.normpath(file_path))
+                zzx_by_stem[_normalized_cut_stem(file)].append(file_path)
+                zzx_by_quantity_independent_stem[_quantity_independent_stem(file)].append(file_path)
+            elif lower_file.endswith((".igs", ".iges")):
+                igs_files.append(file_path)
 
     unmatched = []
     for igs_path in igs_files:
         stem = _normalized_cut_stem(igs_path)
         scope = _product_scope_for_path(igs_path, da_fare_path)
-        candidates = zzx_by_stem.get(stem, [])
-        has_match = any(
-            os.path.commonpath([scope, candidate]) == scope
-            for candidate in candidates
-        )
-        if not has_match:
-            unmatched.append({
-                "filePath": igs_path,
-                "fileName": os.path.basename(igs_path),
-                "relativePath": os.path.relpath(igs_path, da_fare_path),
-                "mainFolder": get_product_folder_name(igs_path, da_fare_path),
-                "expectedZzxName": _expected_zzx_name_for_igs(igs_path),
-            })
+        in_product = lambda candidate: os.path.commonpath([scope, candidate]) == scope
+        if any(in_product(candidate) for candidate in zzx_by_stem.get(stem, [])):
+            continue
 
-    unmatched.sort(key=lambda item: item["relativePath"].lower())
+        quantity_matches = [
+            candidate
+            for candidate in zzx_by_quantity_independent_stem.get(
+                _quantity_independent_stem(igs_path), []
+            )
+            if in_product(candidate)
+            and _quantity_tokens(candidate)
+            and _quantity_tokens(igs_path)
+            and _quantity_tokens(candidate) != _quantity_tokens(igs_path)
+        ]
+        item = {
+            "filePath": igs_path,
+            "fileName": os.path.basename(igs_path),
+            "relativePath": os.path.relpath(igs_path, da_fare_path),
+            "mainFolder": get_product_folder_name(igs_path, da_fare_path),
+            "expectedZzxName": _expected_zzx_name_for_igs(igs_path),
+        }
+        if quantity_matches:
+            candidate = sorted(quantity_matches, key=str.casefold)[0]
+            item.update({
+                "type": "quantity_mismatch",
+                "matchedZzxPath": candidate,
+                "matchedZzxName": os.path.basename(candidate),
+                "message": "Solo la quantità (NpZ) nel nome è diversa.",
+            })
+        else:
+            item["type"] = "missing"
+        unmatched.append(item)
+
+    unmatched.sort(key=lambda item: (item["relativePath"].casefold(), item["type"]))
     return unmatched
+
+
+def _igs_conversion_destination(igs_path):
+    """Return (destination ZZX, required IGS source path).
+
+    When not already directly inside a folder named IGS, create/use a sibling
+    IGS folder and relocate only the explicitly selected source file.
+    """
+    from pathlib import Path
+
+    source = Path(igs_path)
+    folder = source.parent
+    if folder.name.casefold() == "igs":
+        return folder.parent / (source.stem + ".zzx"), source
+    existing = next(
+        (entry for entry in folder.iterdir() if entry.is_dir() and entry.name.casefold() == "igs"),
+        None,
+    )
+    igs_dir = existing if existing is not None else folder / "IGS"
+    return folder / (source.stem + ".zzx"), igs_dir / source.name
+
+
+def convert_missing_igs_files_to_zzx(da_fare_path, file_paths=None):
+    """Convert missing drawings in bulk, with safe folder layout and rollback.
+
+    Only scanner-confirmed missing sources beneath the active work tree are
+    eligible. Never overwrite any destination or overwrite an existing IGS.
+    A failed conversion restores the original source if it was moved.
+    """
+    root = os.path.abspath(str(da_fare_path or ""))
+    if not os.path.isdir(root):
+        return {"status": "error", "message": "Cartella DA FARE non disponibile.", "results": []}
+
+    missing = {
+        os.path.normcase(os.path.abspath(item["filePath"])): item
+        for item in find_unmatched_igs_files(root)
+        if item.get("type") == "missing"
+    }
+    requested = list(file_paths) if file_paths is not None else [
+        item["filePath"] for item in missing.values()
+    ]
+    # Explicit selection may come from the browser; never trust arbitrary paths.
+    if file_paths is not None and any(
+        os.path.normcase(os.path.abspath(str(path))) not in missing
+        for path in requested
+    ):
+        return {"status": "error", "message": "Uno o più IGS non sono più tra i file mancanti.", "results": []}
+
+    results = []
+    pending = []
+    seen_source = set()
+    seen_output = set()
+    for name in requested:
+        source = os.path.abspath(str(name))
+        key = os.path.normcase(source)
+        if key in seen_source:
+            continue
+        seen_source.add(key)
+        try:
+            if not os.path.isfile(source):
+                raise FileNotFoundError(source)
+            destination, moved_source = _igs_conversion_destination(source)
+            dest_key = os.path.normcase(os.path.abspath(str(destination)))
+            if dest_key in seen_output:
+                raise FileExistsError(f"Due IGS producono lo stesso ZZX: {destination}")
+            seen_output.add(dest_key)
+            if destination.exists():
+                results.append({
+                    "status": "exists", "sourcePath": source,
+                    "outputPath": str(destination),
+                    "message": "ZZX già presente, nessun file spostato o sovrascritto.",
+                })
+                continue
+            if os.path.normcase(os.path.abspath(str(moved_source))) != key:
+                if moved_source.exists():
+                    raise FileExistsError(f"IGS già presente nella cartella di destinazione: {moved_source}")
+                moved_source.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(source, str(moved_source))
+            pending.append((source, str(moved_source), str(destination)))
+        except Exception as exc:
+            results.append({"status": "error", "sourcePath": source, "message": str(exc)})
+
+    if pending:
+        batch = convert_igs_files_to_zzx(
+            [entry[1] for entry in pending],
+            overwrite=False,
+            output_paths=[entry[2] for entry in pending],
+        )
+        converted = batch.get("results") or []
+        for index, (original, igs_path, destination) in enumerate(pending):
+            result = dict(converted[index] or {}) if index < len(converted) else {
+                "status": "error", "message": batch.get("message") or "Nessun risultato dal convertitore.",
+            }
+            result["originalSourcePath"] = original
+            result["sourcePath"] = igs_path
+            result["outputPath"] = destination
+            if result.get("status") != "success" and os.path.normcase(original) != os.path.normcase(igs_path):
+                try:
+                    if os.path.exists(original):
+                        raise FileExistsError("Percorso originale già occupato: rollback manuale necessario.")
+                    shutil.move(igs_path, original)
+                    result["sourcePath"] = original
+                    result["sourceRestored"] = True
+                except Exception as exc:
+                    result["message"] = f'{result.get("message", "Conversione fallita")} (Ripristino IGS fallito: {exc})'
+            results.append(result)
+
+    return {
+        "status": "success",
+        "results": results,
+        "converted": sum(1 for r in results if r.get("status") == "success"),
+        "existing": sum(1 for r in results if r.get("status") == "exists"),
+        "errors": sum(1 for r in results if r.get("status") == "error"),
+    }
 
 # --- File System Logic ---
 def _rename_with_final_count(file_path, new_count):
