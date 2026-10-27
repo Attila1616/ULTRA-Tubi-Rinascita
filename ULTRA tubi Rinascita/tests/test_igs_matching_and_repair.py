@@ -59,6 +59,88 @@ class IgsMatchingRepairTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["type"], "missing")
 
+    def test_completed_zzx_in_fatto_matches_active_igs(self):
+        with tempfile.TemporaryDirectory() as home:
+            tube = Path(home) / "PROD 123" / "TT" / "TD1905A00318" / "tubolare 50x50x2"
+            igs = put(tube / "IGS" / "TD1905A00318 L250 10pz.igs")
+            completed = put(tube / "fatto" / "TD1905A00318 L250 10pz (fatti 10).zzx")
+            self.assertEqual(logic.find_unmatched_igs_files(home), [])
+            self.assertTrue(igs.exists())
+            self.assertTrue(completed.exists())
+
+    def test_partially_completed_zzx_in_fatto_also_matches(self):
+        with tempfile.TemporaryDirectory() as home:
+            folder = Path(home) / "PROD" / "TT"
+            put(folder / "IGS" / "PART L500 10pz.iges")
+            put(folder / "FATTO" / "PART L500 10pz (FATTI 3).ZZX")
+            self.assertEqual(logic.find_unmatched_igs_files(home), [])
+
+    def test_archived_nested_fatto_paths_are_indexed(self):
+        with tempfile.TemporaryDirectory() as home:
+            job = Path(home) / "PROD" / "TT"
+            put(job / "TD123" / "tubolare" / "IGS" / "PART L450 10pz.igs")
+            put(job / "fatto" / "TD123" / "tubolare" / "fatto"
+                / "PART L450 10pz (fatti 10).zzx")
+            self.assertEqual(logic.find_unmatched_igs_files(home), [])
+
+    def test_archived_zzx_quantity_difference_remains_information_only(self):
+        with tempfile.TemporaryDirectory() as home:
+            folder = Path(home) / "PROD" / "TT"
+            put(folder / "IGS" / "TD001 L600 1pz.igs")
+            completed = put(folder / "fatto" / "TD001 L600 10pz (fatti 10).zzx")
+            issues = logic.find_unmatched_igs_files(home)
+            self.assertEqual(len(issues), 1)
+            self.assertEqual(issues[0]["type"], "quantity_mismatch")
+            self.assertEqual(issues[0]["matchedZzxPath"], str(completed))
+
+    def test_completed_zzx_in_another_prod_must_not_match(self):
+        with tempfile.TemporaryDirectory() as home:
+            put(Path(home) / "PROD A" / "TT" / "IGS" / "PART 1pz.igs")
+            put(Path(home) / "PROD B" / "TT" / "fatto"
+                / "PART 1pz (fatti 1).zzx")
+            issues = logic.find_unmatched_igs_files(home)
+            self.assertEqual(len(issues), 1)
+            self.assertEqual(issues[0]["type"], "missing")
+
+    def test_genuinely_missing_zzx_still_reported_next_to_archived_zzx(self):
+        with tempfile.TemporaryDirectory() as home:
+            folder = Path(home) / "PROD" / "TT"
+            put(folder / "IGS" / "HAS MATCH 1pz.igs")
+            put(folder / "IGS" / "ACTUALLY MISSING 1pz.igs")
+            put(folder / "fatto" / "HAS MATCH 1pz (fatti 1).zzx")
+            issues = logic.find_unmatched_igs_files(home)
+            self.assertEqual(len(issues), 1)
+            self.assertEqual(issues[0]["fileName"], "ACTUALLY MISSING 1pz.igs")
+            self.assertEqual(issues[0]["type"], "missing")
+
+    def test_archived_igs_are_never_reported_as_missing(self):
+        with tempfile.TemporaryDirectory() as home:
+            folder = Path(home) / "PROD" / "TT"
+            put(folder / "fatto" / "TD123" / "IGS" / "ARCHIVED 1pz.igs")
+            put(Path(home) / "PROD2" / "TT - Fatto" / "IGS" / "FINISHED 1pz.iges")
+            self.assertEqual(logic.find_unmatched_igs_files(home), [])
+
+    def test_completed_zzx_does_not_trigger_bulk_reconversion(self):
+        with tempfile.TemporaryDirectory() as home:
+            folder = Path(home) / "PROD" / "TT"
+            source = put(folder / "IGS" / "PART 10pz.igs")
+            put(folder / "fatto" / "PART 10pz (fatti 10).zzx")
+            with patch.object(logic, "convert_igs_files_to_zzx") as converter:
+                result = logic.convert_missing_igs_files_to_zzx(home)
+            self.assertEqual(result["converted"], 0)
+            self.assertEqual(result["results"], [])
+            self.assertTrue(source.exists())
+            converter.assert_not_called()
+
+    def test_archive_check_accepts_matching_completed_zzx(self):
+        with tempfile.TemporaryDirectory() as home:
+            folder = Path(home) / "PROD" / "TT"
+            put(folder / "IGS" / "PART 2pz.igs")
+            put(folder / "fatto" / "PART 2pz (fatti 2).zzx")
+            self.assertTrue(logic._is_folder_completed(str(folder), home))
+            put(folder / "IGS" / "MISSING 1pz.igs")
+            self.assertFalse(logic._is_folder_completed(str(folder), home))
+
     @staticmethod
     def fake_batch(paths, overwrite=False, output_paths=None):
         results = []
