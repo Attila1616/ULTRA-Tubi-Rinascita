@@ -1948,7 +1948,7 @@ def debug_nesting_group(group, rods, rod_length=6000, focus_rod_number=None):
 
 # A TD drawing identifier is T + D + 4 digits + one revision letter
 # + the final five digits. Only the final five are engraved.
-_TEXT_TD_RE = re.compile(r"(?i)TD\d{4}[A-Z](\d{5})(?!\d)")
+_TEXT_TD_RE = re.compile(r"(?i)(?<![A-Z0-9])TD\d{4}[A-Z](\d{5})(?!\d)")
 _TEXT_LENGTH_VARIANT_RE = re.compile(
     r"(?i)(?<![A-Z0-9])L\d+(?:[.,]\d+)?[ \t._-]*([A-Z])(?![A-Z0-9])"
 )
