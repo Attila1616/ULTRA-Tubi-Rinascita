@@ -1,6 +1,7 @@
 import webview
 import backend_logic as logic
 import os
+import math
 import multiprocessing
 import re
 import subprocess
@@ -164,6 +165,7 @@ class Api:
     def get_config_settings(self):
         self.config = logic.load_config() or {}
         self.config.setdefault("nesting_gap_mm", 2.0)
+        self.config.setdefault("nesting_rod_tolerance_mm", 1.0)
         self.config["nesting_algorithm"] = "current"
         self.config.setdefault("nesting_rotation_visualization_enabled", False)
         self.config.setdefault("nesting_debug_enabled", True)
@@ -211,6 +213,15 @@ class Api:
             updated["nesting_gap_mm"] = max(0.0, float(payload.get("nesting_gap_mm", 2.0)))
         except (TypeError, ValueError):
             updated["nesting_gap_mm"] = 2.0
+
+        try:
+            tolerance = float(payload.get("nesting_rod_tolerance_mm", 1.0))
+            updated["nesting_rod_tolerance_mm"] = (
+                max(0.0, min(50.0, tolerance))
+                if math.isfinite(tolerance) else 1.0
+            )
+        except (TypeError, ValueError):
+            updated["nesting_rod_tolerance_mm"] = 1.0
 
         updated["nesting_algorithm"] = "current"
         updated["nesting_rotation_visualization_enabled"] = bool(
@@ -563,6 +574,13 @@ class Api:
             print("--- PYTHON ERROR in nest_piece_instances ---")
             traceback.print_exc()
             return {"status": "error", "message": "Errore durante il nesting backend.", "rods": []}
+
+    def clear_nesting_result_cache(self):
+        try:
+            return logic.clear_nesting_result_cache()
+        except Exception as exc:
+            print("[TubeNest CACHE] Failed to clear:", str(exc), flush=True)
+            return {"status": "error", "message": str(exc)}
 
     def nest_piece_groups(self, groups, rod_length=6000):
         try:
