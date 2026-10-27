@@ -30,26 +30,8 @@
                 <button id="database-view-btn" class="view-btn" type="button">Database tubi</button>
             </nav>
             <div class="header-workspace">
-                <div class="inventory-search">
-                    <div class="tool-caption">
-                        <span>Ricerca rapida magazzino</span>
-                        <span class="tool-hint">Cerca una misura senza aprire il database</span>
-                    </div>
-                    <div class="search-row">
-                        <input id="search-dimensione" type="text" class="search-input" placeholder="Misura, es. 100x50 o 60.3" autocomplete="off" aria-label="Misura tubo">
-                        <span class="search-sep" aria-hidden="true">×</span>
-                        <input id="search-spessore" type="text" class="search-input search-input-small" placeholder="Sp." autocomplete="off" aria-label="Spessore">
-                        <select id="search-materiale" class="search-select" aria-label="Materiale">
-                            <option value="304" selected>304</option>
-                            <option value="316">316</option>
-                        </select>
-                        <select id="search-finitura" class="search-select" aria-label="Finitura">
-                            <option value="2B" selected>2B</option>
-                            <option value="BA">BA</option>
-                        </select>
-                        <button id="search-btn" class="action-button button-primary" type="button">Cerca</button>
-                    </div>
-                </div>
+                <!-- The same database search control is moved here outside the database tab. -->
+                <div id="db-search-header-slot" class="header-database-search" role="search" aria-label="Cerca nel database tubi"></div>
                 <div class="header-actions">
                     <div class="tool-caption"><span>Azioni rapide</span></div>
                     <div class="header-button-row">
@@ -108,9 +90,14 @@
             </div>
             <section class="database-toolbar" aria-label="Strumenti database">
                 <div class="database-quick-search">
-                    <div class="database-search-field">
-                        <label for="db-quick-search">Cerca in tutto l'inventario <span class="shortcut-hint">/</span></label>
-                        <input id="db-quick-search" class="search-input" type="search" placeholder="Misura, codice, materiale, posizione..." autocomplete="off">
+                    <div id="db-search-database-slot" class="db-search-slot">
+                        <div id="db-shared-search" class="database-search-field">
+                            <label for="db-quick-search">Cerca in tutto l'inventario <span class="shortcut-hint">/</span></label>
+                            <div class="shared-search-input-row">
+                                <input id="db-quick-search" class="search-input" type="search" placeholder="Misura, codice, materiale, posizione..." autocomplete="off" aria-label="Cerca in tutto l'inventario">
+                                <button id="db-search-submit" type="button" class="action-button button-primary">Cerca nel database</button>
+                            </div>
+                        </div>
                     </div>
                     <label class="db-check-filter"><input id="db-quick-missing" type="checkbox"> Senza codice</label>
                     <label class="db-check-filter"><input id="db-quick-multi" type="checkbox"> Più posizioni</label>
