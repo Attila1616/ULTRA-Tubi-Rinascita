@@ -182,7 +182,7 @@ class ContourVirtualPlaneTests(unittest.TestCase):
         # it to (+1,0), exactly matching the previous far end.
         self.assertEqual(poses[0], PartPose(270.0, False))
 
-    def test_matching_angle_does_not_fake_shared_cut(self):
+    def test_matching_angle_with_compatible_metadata_allows_common_line(self):
         previous = angled_part(near=(0, 0), far=(1, 0), source="a")
         next_piece = angled_part(near=(0, 1), far=(0, 0), source="b")
         # Exact fitting decides whether the boundary metadata and
