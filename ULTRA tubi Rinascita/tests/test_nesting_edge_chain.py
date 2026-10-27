@@ -91,6 +91,16 @@ class IndexedCutChainTests(unittest.TestCase):
         self.assertEqual(
             sum(len(rod.placed) for rod in rods), 45
         )
+        used_indices = [
+            placement.item_index
+            for rod in rods for placement in rod.placed
+        ]
+        self.assertEqual(len(set(used_indices)), 45)
+        self.assertEqual(set(used_indices), set(range(45)))
+        self.assertTrue(all(
+            rod.used_mask.bit_count() == len(rod.placed)
+            for rod in rods
+        ))
         self.assertTrue(all(rod.used_span <= 600 for rod in rods))
         self.assertGreater(
             sum(rod.common_lines for rod in rods), 0
@@ -124,6 +134,10 @@ class IndexedCutChainTests(unittest.TestCase):
         self.assertIsNotNone(states)
         self.assertEqual(len(states), 4)
         self.assertEqual(sum(len(rod.placed) for rod in states), 24)
+        self.assertEqual({
+            placement.item_index
+            for rod in states for placement in rod.placed
+        }, set(range(24)))
         self.assertGreater(sum(rod.common_lines for rod in states), 0)
 
     def test_rotated_matching_angles_still_get_common_line_after_real_fit(self):
