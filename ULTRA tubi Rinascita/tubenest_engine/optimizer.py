@@ -3088,7 +3088,8 @@ def diagnose_items_dict(
         f"limite inferiore: {get_parallel_stats().get('edge_chain_lower_bound', 0)}, "
         f"ottimo certificato: {get_parallel_stats().get('edge_chain_certified', False)}, "
         f"transizioni in cache: {get_parallel_stats().get('edge_catalog_entries', 0)}"
-        f" (riusi: {get_parallel_stats().get('edge_catalog_hits', 0)})"
+        f" (riusi: {get_parallel_stats().get('edge_catalog_hits', 0)}), "
+        f"refine mirato: {get_parallel_stats().get('edge_refine_trials', 0)} verifiche"
     )
     lines.append(f"Tipi candidati per livello: {DEFAULT_MAX_CANDIDATE_TYPES}")
     lines.append(
