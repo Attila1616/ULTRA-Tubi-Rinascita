@@ -3508,6 +3508,15 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
     """
     if len(items) < 6 or any(not item.geometry_available for item in items):
         return None
+    # A broad search over dozens of unrelated shapes would add work before
+    # the original beam search. This path is for repeat-heavy *planar* jobs.
+    # Nonplanar parts stay with the exact contour optimizer, not the quick
+    # planar co-edge grouping.
+    if (
+        len({item.type_key for item in items}) > 12
+        or any(_item_may_need_contour_fit(item) for item in items)
+    ):
+        return None
     _PARALLEL_STATS["edge_chain_attempted"] = True
     remaining = {}
     for item in items:
