@@ -3422,6 +3422,51 @@ def _end_cut_class(part, end):
         return None
 
 
+def _end_angle_bucket(part, end):
+    """Rotation-independent geometric hint, even without cut metadata.
+
+    Same-angle groups only prioritize work. Machine-safe shared cuts still
+    require an exact fit with matching toolpath signatures.
+    """
+    if not isinstance(part, dict) or not isinstance(end, dict):
+        return None
+    plane = end.get("plane_z_equals_c_plus_ax_plus_by")
+    if not isinstance(plane, (list, tuple)) or len(plane) != 3:
+        return None
+    try:
+        sx, sy = float(plane[1]), float(plane[2])
+        residual = float(end.get("plane_max_residual_mm") or 0.0)
+        if (
+            not all(math.isfinite(v) for v in (sx, sy, residual))
+            or residual < 0 or residual > PLANAR_FIT_TOLERANCE_MM
+        ):
+            return None
+        profile = part.get("profile") or {}
+        return (
+            str(profile.get("kind") or ""),
+            round(float(profile.get("outside_width") or 0.0), 3),
+            round(float(profile.get("outside_height") or 0.0), 3),
+            round(float(profile.get("outside_diameter") or 0.0), 3),
+            round(float(profile.get("thickness") or 0.0), 3),
+            # Group by actual planar slope magnitude, independent of angle
+            # in degrees and cut azimuth. All angles share one mechanism.
+            round(math.hypot(sx, sy), 4),
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _item_angle_buckets(item):
+    part = item.tube_part or {}
+    ends = part.get("ends") or []
+    if len(ends) < 2:
+        return (None, None)
+    return (
+        _end_angle_bucket(part, ends[0]),
+        _end_angle_bucket(part, ends[1]),
+    )
+
+
 def _item_cut_classes(item):
     part = item.tube_part or {}
     ends = part.get("ends") or []
@@ -3541,7 +3586,7 @@ def _planar_fast_path_eligible(item):
 
 def _indexed_planar_chain(
     items, rod_length, dead_zone_mm, gap_mm, groups, cut_classes,
-    transition_catalog, *, packing_first=False,
+    angle_buckets, transition_catalog, *, packing_first=False,
 ):
     """Build rods from cached *verified* connections between drawing types.
 
@@ -3561,20 +3606,39 @@ def _indexed_planar_chain(
                 key=lambda key: (
                     -items[remaining[key][0]].physical_length, str(key)
                 ),
-            )
-        previous_classes = cut_classes[last_item.type_key]
-        end_class = previous_classes[
-            0 if last_pose.reversed_end_for_end else 1
-        ]
-        return sorted(
+            )[:6], None
+
+        output_index = 0 if last_pose.reversed_end_for_end else 1
+        exact_class = cut_classes[last_item.type_key][output_index]
+        angle_class = angle_buckets[last_item.type_key][output_index]
+
+        def category(key):
+            if (
+                exact_class is not None
+                and exact_class in cut_classes[key]
+            ):
+                return 0
+            if (
+                angle_class is not None
+                and angle_class in angle_buckets[key]
+            ):
+                return 1
+            return 2
+
+        keys = sorted(
             remaining,
             key=lambda key: (
-                0 if end_class is not None and
-                end_class in cut_classes[key] else 1,
+                category(key),
                 -items[remaining[key][0]].physical_length,
                 str(key),
             ),
         )
+        # Examine a bounded number of geometrically promising drawings.
+        # When a matching cut actually fits, we can avoid searching all
+        # unrelated drawings. A small fallback set maintains packing options.
+        matches = [key for key in keys if category(key) < 2][:20]
+        others = [key for key in keys if category(key) == 2]
+        return matches, others
 
     while remaining:
         state = RodSearchState()
@@ -3589,8 +3653,27 @@ def _indexed_planar_chain(
                 if previous_placement is not None else None
             )
             best = None
-            keys = candidate_keys(previous_item, previous_pose)
+            matching_keys, fallback_keys = candidate_keys(
+                previous_item, previous_pose
+            )
+            if previous_item is None:
+                keys = matching_keys
+            else:
+                # If there are no usable matching cuts, try the longest
+                # remaining unrelated pieces. The limited fallback keeps
+                # the calculation near-linear for diverse production jobs.
+                keys = matching_keys + fallback_keys[:8]
             for key in keys:
+                # The co-edge-first pass skips unrelated rotations as soon
+                # as it has a legal matching candidate. The packing-first
+                # pass still compares a few longer alternatives.
+                if (
+                    previous_item is not None
+                    and best is not None
+                    and not packing_first
+                    and key not in matching_keys
+                ):
+                    break
                 item = items[remaining[key][0]]
                 if previous_item is None:
                     candidates = [
@@ -3723,6 +3806,10 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
         key: _item_cut_classes(items[indices[0]])
         for key, indices in groups.items()
     }
+    angle_buckets = {
+        key: _item_angle_buckets(items[indices[0]])
+        for key, indices in groups.items()
+    }
     _PARALLEL_STATS["edge_classes"] = len({
         cls for pair in classes.values() for cls in pair
         if cls is not None
@@ -3735,7 +3822,7 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
     # just because a lower-bound certificate is unavailable.
     first = _indexed_planar_chain(
         items, rod_length, dead_zone_mm, gap_mm,
-        groups, classes, transitions, packing_first=False,
+        groups, classes, angle_buckets, transitions, packing_first=False,
     )
     if first is None:
         return None
@@ -3752,7 +3839,7 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
         _PARALLEL_STATS["edge_chain_alternative_runs"] += 1
         second = _indexed_planar_chain(
             items, rod_length, dead_zone_mm, gap_mm,
-            groups, classes, transitions, packing_first=True,
+            groups, classes, angle_buckets, transitions, packing_first=True,
         )
         if second is not None and quality(second) < quality(selected):
             selected = second
