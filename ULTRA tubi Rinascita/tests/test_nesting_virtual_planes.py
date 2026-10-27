@@ -197,6 +197,25 @@ class ContourVirtualPlaneTests(unittest.TestCase):
         # Signatures in this synthetic case describe equal machining.
         self.assertTrue(fit.common_line)
 
+    def test_equal_angles_without_compatible_cut_metadata_keep_gap(self):
+        previous = angled_part(near=(0, 0), far=(1, 0), source="a")
+        next_piece = angled_part(near=(0, 1), far=(0, 0), source="b")
+        next_piece.tube_part["ends"][0]["boundary_signature"] = "different"
+        poses = _next_pose_candidates(previous, PartPose(), next_piece, None)
+        self.assertEqual(len(poses), 8)
+        matching = next(
+            pose for pose in poses
+            if pose.axial_rotation_degrees == 270.0
+            and not pose.reversed_end_for_end
+        )
+        fit = fit_adjacent_parts(
+            previous.tube_part, PartPose(), 0,
+            next_piece.tube_part, matching,
+            gap_mm=2,
+        )
+        self.assertFalse(fit.common_line)
+        self.assertEqual(fit.minimum_clearance_mm, 2.0)
+
     def test_contour_catalog_skips_speculation_when_large(self):
         parts = [
             angled_part((0.1, 0), (0.3, 0), str(n))
