@@ -2574,7 +2574,9 @@ def _is_folder_completed(directory, da_fare_path=None):
         dirs[:] = [child for child in dirs if not _is_fatto_folder_name(child)]
         if any(f.lower().endswith('.zzx') for f in files):
             return False
-    if find_unmatched_igs_files(directory):
+    # Quantity-only filename differences are informational, not missing
+    # drawings, and must not block the existing automatic archive workflow.
+    if any(item.get("type") == "missing" for item in find_unmatched_igs_files(directory)):
         return False
     return True
 
