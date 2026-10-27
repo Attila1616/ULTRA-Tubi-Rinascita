@@ -2412,7 +2412,10 @@ def _product_scope_for_path(file_path, base_path):
         return os.path.dirname(file_path)
 
     first_part = relative_path.split(os.path.sep)[0]
-    if first_part in ("", "."):
+    # When the scanner is run on an inner work folder (e.g. as part of
+    # archiving), its first child may be IGS itself, while the matching ZZX
+    # lives in that folder's sibling 'fatto'. IGS is not a product scope.
+    if first_part.casefold() in ("", ".", "igs"):
         return os.path.normpath(base_path)
     return os.path.normpath(os.path.join(base_path, first_part))
 
