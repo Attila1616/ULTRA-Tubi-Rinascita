@@ -183,3 +183,22 @@ button, input, select, summary { font: inherit; }
  .tube-group .tube-header { padding: 10px; }
  .active-filter-bar { padding: 10px; }
 }
+
+/* One movable database search bar, shared by the three main tabs.
+   The database view displays it only inside the database toolbar. */
+.header-database-search { min-width: 0; width: 100%; }
+.header-database-search .database-search-field { max-width: none; width: 100%; }
+.db-search-slot { min-width: 230px; flex: 1 1 350px; max-width: 690px; }
+.db-search-slot .database-search-field { width: 100%; max-width: none; }
+.shared-search-input-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.shared-search-input-row #db-quick-search { min-width: 0; flex: 1 1 auto; width: 100%; }
+.shared-search-input-row #db-search-submit { flex: 0 0 auto; white-space: nowrap; }
+#db-search-database-slot #db-search-submit { display: none; }
+.app-header.database-active #db-search-header-slot { display: none; }
+.app-header.database-active .header-workspace { grid-template-columns: 1fr; }
+.app-header.database-active .header-actions .header-button-row { justify-content: flex-start; }
+@media (max-width: 750px) {
+    .header-database-search { width: 100%; }
+    .shared-search-input-row { flex-wrap: wrap; }
+    .header-database-search #db-search-submit { width: 100%; }
+}
