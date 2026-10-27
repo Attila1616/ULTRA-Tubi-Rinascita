@@ -1,4 +1,4 @@
-"""PROD / folder TD / file TD / length marking layout regression tests."""
+"""PROD / full folder TD / abbreviated file TD / length engraving regression tests."""
 import os
 import unittest
 
@@ -19,31 +19,101 @@ class NestedMarkingLayoutTests(unittest.TestCase):
         }
         return _build_nested_marking_text(segment, {})
 
-    def test_normal_code_in_folder_and_filename(self):
+    def test_normal_folder_full_and_file_short(self):
         text = self.build_marking(
             "TD0002A00189 aisi 304 tubolare 50x50x2 L200 2pz.zzx"
         )
         self.assertEqual(
             text.splitlines(),
-            ["p prod 80", "TD.00318", "TD.00189", "L200"],
+            ["p prod 80", "TD1905A00318", "TD.00189", "L200"],
         )
 
-    def test_two_file_td_codes_each_get_separate_line(self):
+    def test_two_different_file_td_codes_each_get_a_line(self):
         text = self.build_marking(
             "TD0002A00189 TD0003B00456 aisi 304 L200 2pz.zzx"
         )
         self.assertEqual(
             text.splitlines(),
-            ["p prod 80", "TD.00318", "TD.00189", "TD.00456", "L200"],
+            ["p prod 80", "TD1905A00318", "TD.00189", "TD.00456", "L200"],
+        )
+
+    def test_identical_folder_and_file_td_printed_once_full(self):
+        text = self.build_marking(
+            "TD1905A00318 aisi 304 tubolare 50x50x2 L200 2pz.zzx"
+        )
+        self.assertEqual(
+            text.splitlines(), ["p prod 80", "TD1905A00318", "L200"]
+        )
+
+    def test_identical_codes_ignore_case(self):
+        text = self.build_marking("td1905a00318 L200 2pz.zzx")
+        self.assertEqual(text.splitlines(), ["p prod 80", "TD1905A00318", "L200"])
+
+    def test_folder_match_and_different_file_code(self):
+        text = self.build_marking(
+            "TD1905A00318 TD0002A00189 L200 2pz.zzx"
+        )
+        self.assertEqual(
+            text.splitlines(),
+            ["p prod 80", "TD1905A00318", "TD.00189", "L200"],
+        )
+
+    def test_only_full_identifier_equality_counts_as_duplicate(self):
+        # These codes share the last 5 digits, but their full IDs differ.
+        text = self.build_marking("TD9999Z00318 L200 2pz.zzx")
+        self.assertEqual(
+            text.splitlines(),
+            ["p prod 80", "TD1905A00318", "TD.00318", "L200"],
+        )
+
+    def test_duplicate_file_td_identifiers_printed_once(self):
+        text = self.build_marking(
+            "TD0002A00189 TD0002A00189 L200 2pz.zzx"
+        )
+        self.assertEqual(
+            text.splitlines(), ["p prod 80", "TD1905A00318", "TD.00189", "L200"]
         )
 
     def test_no_file_td_omits_only_file_entry(self):
         text = self.build_marking("aisi 304 tubolare 50x50x2 L200 2pz.zzx")
-        self.assertEqual(text.splitlines(), ["p prod 80", "TD.00318", "L200"])
+        self.assertEqual(text.splitlines(), ["p prod 80", "TD1905A00318", "L200"])
 
     def test_no_td_anywhere_keeps_prod_and_length(self):
         text = self.build_marking("tubo 50x50x2 L200 2pz.zzx", folder="TT")
         self.assertEqual(text.splitlines(), ["p prod 80", "L200"])
+
+    def test_td_root_folder_replaces_prod_and_nested_folder_td(self):
+        text = self.build_marking(
+            "TD0002A00189 L200 1pz.zzx",
+            main_folder="TD9999Z00123 produzione",
+            folder="TD1905A00318 2pz",
+        )
+        self.assertEqual(
+            text.splitlines(),
+            ["TD9999Z00123", "TD.00189", "L200"],
+        )
+
+    def test_td_root_same_as_file_code_prints_full_once(self):
+        text = self.build_marking(
+            "TD1905A00318 L200 1pz.zzx",
+            main_folder="TD1905A00318 2pz",
+            folder="ALTRO",
+        )
+        self.assertEqual(text.splitlines(), ["TD1905A00318", "L200"])
+
+    def test_td_root_without_td_in_filename_has_no_prod_line(self):
+        text = self.build_marking(
+            "tubo L200 2pz.zzx", main_folder="TD1905A00318", folder="ALTRO"
+        )
+        self.assertEqual(text.splitlines(), ["TD1905A00318", "L200"])
+
+    def test_td_root_with_file_variant_keeps_letter_after_length(self):
+        text = self.build_marking(
+            "TD1905A00318B L200 2pz.zzx",
+            main_folder="TD1905A00318 lotto 4",
+            folder="ALTRO",
+        )
+        self.assertEqual(text.splitlines(), ["TD1905A00318", "L200 B"])
 
     def test_ta_prefix_not_treated_as_td(self):
         text = self.build_marking("TA0002A00189 L200.zzx", folder="TT")
@@ -83,11 +153,11 @@ class NestedMarkingLayoutTests(unittest.TestCase):
         )
         self.assertEqual(text.splitlines()[-1], "L200 C")
 
-    def test_shortened_codes_preserve_leading_zeroes(self):
+    def test_shortened_file_codes_preserve_leading_zeroes(self):
         text = self.build_marking("TD0000A00001 L200.zzx", folder="TD9999Z00000")
         self.assertEqual(
             text.splitlines(),
-            ["p prod 80", "TD.00000", "TD.00001", "L200"],
+            ["p prod 80", "TD9999Z00000", "TD.00001", "L200"],
         )
 
     def test_multiline_layout_never_joins_or_reorders_fields(self):
