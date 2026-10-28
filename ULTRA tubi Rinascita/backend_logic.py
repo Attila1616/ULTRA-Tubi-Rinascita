@@ -88,6 +88,7 @@ def _report_nesting_job(job_id, stage, *, fraction=None, eta=None,
         if error is not None:
             record["error"] = str(error)
         record.update(extra)
+        record["lastUpdatedAt"] = time.perf_counter()
         _NESTING_JOB_STATUS[str(job_id)] = record
         # Prevent status objects from accumulating across recalculations.
         if len(_NESTING_JOB_STATUS) > 64:
@@ -98,7 +99,21 @@ def _report_nesting_job(job_id, stage, *, fraction=None, eta=None,
 
 def get_nesting_job_status(job_id):
     with _NESTING_JOB_LOCK:
-        return dict(_NESTING_JOB_STATUS.get(str(job_id), {"stage": "Avvio", "done": False}))
+        record = dict(_NESTING_JOB_STATUS.get(
+            str(job_id), {"stage": "Avvio", "done": False}
+        ))
+    if record.get("startedAt") is not None:
+        now = time.perf_counter()
+        record["elapsedSeconds"] = round(now-record["startedAt"], 1)
+        if not record.get("done") and "etaSeconds" in record:
+            remaining = float(record["etaSeconds"]) - max(
+                0.0, now-record.get("lastUpdatedAt", now)
+            )
+            record["estimateExceeded"] = remaining <= 0
+            record["etaSeconds"] = round(max(0.0, remaining), 1)
+    record.pop("startedAt", None)
+    record.pop("lastUpdatedAt", None)
+    return record
 
 
 def optimize_calculated_nesting(payload):
