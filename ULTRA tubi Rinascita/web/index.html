@@ -409,6 +409,11 @@
                     <input id="settings-nesting-rod-tolerance-mm" type="number" min="0" max="50" step="0.1" value="1" class="search-input search-input-small">
                     <span>mm oltre i 6000 nominali ammessi nel calcolo (predefinito +1 mm). Controlla la lunghezza reale prima di tagliare.</span>
                 </div>
+                <div class="settings-threshold-grid">
+                    <label for="settings-nesting-tail-reserve-max-length-mm">Lunghezza max pezzo riservato (Ottimizza nesting)</label>
+                    <input id="settings-nesting-tail-reserve-max-length-mm" type="number" min="0" max="6000" step="1" value="5000" class="search-input search-input-small">
+                    <span>mm: riserva i pezzi entro questa lunghezza che possono essere usati come ultimo pezzo nella zona rossa. Prima dispone gli altri pezzi, poi riempie le verghe con quelli riservati. 0 = nessun pezzo riservato. Solo Ottimizza nesting.</span>
+                </div>
                 <label class="settings-checkbox-row">
                     <input id="settings-nesting-rotation-visualization-enabled" type="checkbox">
                     <span>Mostra rotazioni provate e rotazione scelta sulle verghe</span>
