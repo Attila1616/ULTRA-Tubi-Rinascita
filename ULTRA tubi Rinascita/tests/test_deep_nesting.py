@@ -122,6 +122,67 @@ class DeepNestingTests(unittest.TestCase):
         self.assertEqual(len(result["rods"][0]["placements"]), 3)
         self.assertLessEqual(result["rods"][0]["used"], 600.00001)
 
+    def test_l215_moves_before_last_l1174_into_flip_zone(self):
+        # Reproduces the supplied screenshot: a ~5576 mm rod containing
+        # L4400 and L1174, plus L215 pieces stranded on a short last rod.
+        # A donor L215 should be INSERTED BEFORE L1174, moving only the
+        # final (eligible) L1174 into the chuck-zone flip region.
+        items = sample([4400, 1174, 806, 657] + [215] * 7)
+        normalized = core._normalize_items(items, 6001)
+        before_first = core._optimize_fixed_item_sequence(
+            normalized, [0, 1], 6001, 400, 2
+        )
+        before_donor = core._optimize_fixed_item_sequence(
+            normalized, list(range(2, len(items))), 6001, 400, 2
+        )
+        self.assertIsNotNone(before_first)
+        self.assertIsNotNone(before_donor)
+        self.assertAlmostEqual(before_first.used_span, 5576, delta=.1)
+        proposed = core._optimize_fixed_item_sequence(
+            normalized, [0, 4, 1], 6001, 400, 2
+        )
+        self.assertIsNotNone(proposed)
+        self.assertTrue(proposed.tail_used)
+        self.assertAlmostEqual(proposed.used_span, 5793, delta=.1)
+        self.assertTrue(proposed.placed[-1].requires_tail_flip)
+
+        initial = [
+            core._rod_to_dict(rod, normalized, 6001, 400, 2)
+            for rod in (before_first, before_donor)
+        ]
+        result = optimize_existing_rods(
+            items, initial, rod_length=6001, dead_zone_mm=400,
+            gap_mm=2, time_budget_s=4.0,
+        )
+        self.assertEqual(len(result["rods"]), 2)
+        self.assertTrue(any(
+            pkeys[0] == "piece-0"
+            and pkeys[-1] == "piece-1"
+            and any(key in pkeys[1:-1] for key in (
+                "piece-4", "piece-5", "piece-6", "piece-7",
+                "piece-8", "piece-9", "piece-10"
+            ))
+            for pkeys in (
+                [p["instance_key"] for p in rod["placements"]]
+                for rod in result["rods"]
+            )
+        ))
+        self.assertGreaterEqual(result["stats"]["guidedMoves"], 1)
+        self.assertGreaterEqual(result["stats"]["guidedTrials"], 1)
+        self.assertTrue(all(
+            rod["used"] <= 6001.00001 for rod in result["rods"]
+        ))
+
+    def test_last_piece_must_remain_flip_eligible(self):
+        from unittest.mock import patch
+        items = sample([4400, 1174, 215])
+        normalized = core._normalize_items(items, 6001)
+        with patch.object(core, "_tail_is_usable", return_value=False):
+            blocked = core._optimize_fixed_item_sequence(
+                normalized, [0, 2, 1], 6001, 400, 2
+            )
+        self.assertIsNone(blocked)
+
     def test_one_rod_does_not_create_more_rods(self):
         items = sample([100, 100, 150])
         seeds = seed_rods(items, [[0, 1, 2]])
