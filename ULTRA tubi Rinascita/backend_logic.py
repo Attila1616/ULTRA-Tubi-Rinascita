@@ -161,6 +161,21 @@ def optimize_calculated_nesting(payload):
             dead_zone_mm=400.0, gap_mm=gap,
             progress=callback,
         )
+        # Never replace a previously accepted nesting with a plan requiring
+        # more rods or more total material. A small concentration bonus is
+        # meaningful only when material usage is otherwise unchanged.
+        prior_used = sum(float(r.get("used") or 0.0) for r in old_rods)
+        revised_used = sum(float(r.get("used") or 0.0)
+                           for r in result["rods"])
+        if (
+            len(result["rods"]) > len(old_rods)
+            or (len(result["rods"]) == len(old_rods)
+                and revised_used > prior_used + 0.5)
+        ):
+            result["rods"] = old_rods
+            result["stats"]["keptOriginal"] = True
+            result["stats"]["finalRods"] = len(old_rods)
+            result["stats"]["finalUsedMm"] = round(prior_used, 2)
         with _NESTING_CACHE_LOCK:
             if generation != _NESTING_CACHE_GENERATION:
                 raise ValueError("Cache cleared while optimizing. Discarded stale result.")
