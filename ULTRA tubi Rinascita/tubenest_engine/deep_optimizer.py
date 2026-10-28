@@ -414,10 +414,6 @@ def optimize_existing_rods(
             attempt = directed_gap_transfer(working)
             guided = attempt is not None
 
-        donor_indices = sorted(
-            range(len(working)),
-            key=lambda i: (working[i].used_span, working[i].piece_count)
-        )
         # Random fallback may take pieces from *any* rod, including the
         # fuller rods at the top of the list.
         donor_i = rng.randrange(len(working))
