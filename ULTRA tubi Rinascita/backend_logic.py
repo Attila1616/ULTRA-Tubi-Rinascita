@@ -161,21 +161,50 @@ def optimize_calculated_nesting(payload):
             dead_zone_mm=400.0, gap_mm=gap,
             progress=callback,
         )
-        # Never replace a previously accepted nesting with a plan requiring
-        # more rods or more total material. A small concentration bonus is
-        # meaningful only when material usage is otherwise unchanged.
+        # Removing a stock rod is the primary win. At equal rod count,
+        # encourage concentrating parts onto nearly full rods: moving a
+        # 215mm part from the short final rod to a fuller rod often adds one
+        # small cutting gap without lowering the total used length. The old
+        # 0.5mm veto silently discarded such useful arrangements.
         prior_used = sum(float(r.get("used") or 0.0) for r in old_rods)
-        revised_used = sum(float(r.get("used") or 0.0)
-                           for r in result["rods"])
-        if (
+        revised_used = sum(
+            float(r.get("used") or 0.0) for r in result["rods"]
+        )
+        def concentration(rod_list):
+            return sum(
+                (float(r.get("used") or 0.0) / max(1.0, rod_length))**2
+                for r in rod_list
+            )
+        prior_concentration = concentration(old_rods)
+        revised_concentration = concentration(result["rods"])
+        result["stats"]["initialFillConcentration"] = round(
+            prior_concentration, 6
+        )
+        result["stats"]["finalFillConcentration"] = round(
+            revised_concentration, 6
+        )
+        same_count = len(result["rods"]) == len(old_rods)
+        material_allowance = max(12.0, min(20.0, 2.0*gap*len(old_rods)))
+        worse = (
             len(result["rods"]) > len(old_rods)
-            or (len(result["rods"]) == len(old_rods)
-                and revised_used > prior_used + 0.5)
-        ):
+            or (
+                same_count and (
+                    revised_used > prior_used + material_allowance
+                    or (
+                        revised_used >= prior_used-0.05
+                        and revised_concentration <= prior_concentration+1e-8
+                    )
+                )
+            )
+        )
+        if worse:
             result["rods"] = old_rods
             result["stats"]["keptOriginal"] = True
             result["stats"]["finalRods"] = len(old_rods)
             result["stats"]["finalUsedMm"] = round(prior_used, 2)
+            result["stats"]["finalFillConcentration"] = round(
+                prior_concentration, 6
+            )
         with _NESTING_CACHE_LOCK:
             if generation != _NESTING_CACHE_GENERATION:
                 raise ValueError("Cache cleared while optimizing. Discarded stale result.")
