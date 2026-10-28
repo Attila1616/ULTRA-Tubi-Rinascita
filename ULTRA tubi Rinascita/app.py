@@ -166,6 +166,7 @@ class Api:
         self.config = logic.load_config() or {}
         self.config.setdefault("nesting_gap_mm", 2.0)
         self.config.setdefault("nesting_rod_tolerance_mm", 1.0)
+        self.config.setdefault("nesting_tail_reserve_max_length_mm", 5000.0)
         self.config["nesting_algorithm"] = "current"
         self.config.setdefault("nesting_rotation_visualization_enabled", False)
         self.config.setdefault("nesting_debug_enabled", True)
@@ -222,6 +223,17 @@ class Api:
             )
         except (TypeError, ValueError):
             updated["nesting_rod_tolerance_mm"] = 1.0
+
+        try:
+            threshold = float(payload.get(
+                "nesting_tail_reserve_max_length_mm", 5000.0
+            ))
+            updated["nesting_tail_reserve_max_length_mm"] = (
+                max(0.0, min(6000.0, threshold))
+                if math.isfinite(threshold) else 5000.0
+            )
+        except (TypeError, ValueError):
+            updated["nesting_tail_reserve_max_length_mm"] = 5000.0
 
         updated["nesting_algorithm"] = "current"
         updated["nesting_rotation_visualization_enabled"] = bool(
