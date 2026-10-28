@@ -64,23 +64,30 @@ def optimize_existing_rods(
         if time.perf_counter() >= deadline or trials >= max_trials:
             return None
         trials += 1
-        value = core._optimize_fixed_item_sequence(
-            normalized, seq, rod_length, dead_zone_mm, gap_mm
-        )
+        try:
+            value = core._optimize_fixed_item_sequence(
+                normalized, seq, rod_length, dead_zone_mm, gap_mm
+            )
+        except (ValueError, TypeError, OverflowError):
+            value = None  # Reject this mutation, keep the existing plan.
         cache[seq] = value
         if len(cache) > 2800:
             cache.popitem(last=False)
         return value
 
     def objective(states):
-        # Stock count dominates. For equal stock count, reduce used length,
-        # then concentrate remaining pieces on fuller rods so more scraps
-        # reside on a smaller number of reusable offcuts.
+        # Rod count dominates. For the same count, real material savings
+        # (up to half-millimetre precision) dominate concentration. Among
+        # materially equivalent alternatives, fill fewer rods more closely
+        # to stock length and preserve additional valid shared cuts.
         used_span = sum(r.used_span for r in states)
         concentration = core._rod_fill_concentration(states, rod_length)
         return (
             len(states),
-            used_span - 7.0 * concentration - .15 * sum(r.common_lines for r in states),
+            round(used_span * 2),
+            -round(concentration, 6),
+            -sum(r.common_lines for r in states),
+            round(used_span, 5),
         )
 
     def emit(stage, current, *, force=False):
