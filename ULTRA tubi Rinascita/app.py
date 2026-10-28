@@ -582,9 +582,19 @@ class Api:
             print("[TubeNest CACHE] Failed to clear:", str(exc), flush=True)
             return {"status": "error", "message": str(exc)}
 
-    def nest_piece_groups(self, groups, rod_length=6000):
+    def get_nesting_job_status(self, job_id):
+        return logic.get_nesting_job_status(job_id)
+
+    def optimize_calculated_nesting(self, payload):
         try:
-            return logic.nest_piece_groups(groups or [], rod_length)
+            return logic.optimize_calculated_nesting(payload or {})
+        except Exception as exc:
+            print("[TubeNest DEEP] API failed", str(exc), flush=True)
+            return {"status": "error", "message": str(exc)}
+
+    def nest_piece_groups(self, groups, rod_length=6000, job_id=None):
+        try:
+            return logic.nest_piece_groups(groups or [], rod_length, job_id=job_id)
         except Exception:
             print("--- PYTHON ERROR in nest_piece_groups ---")
             traceback.print_exc()
