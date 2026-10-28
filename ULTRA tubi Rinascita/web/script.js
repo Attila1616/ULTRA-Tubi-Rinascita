@@ -436,6 +436,9 @@ async function openSettingsModal() {
         document.getElementById('settings-nesting-rod-tolerance-mm').value =
             Number.isFinite(Number(config.nesting_rod_tolerance_mm))
                 ? Math.max(0, Math.min(50, Number(config.nesting_rod_tolerance_mm))) : 1;
+        document.getElementById('settings-nesting-tail-reserve-max-length-mm').value =
+            Number.isFinite(Number(config.nesting_tail_reserve_max_length_mm))
+                ? Math.max(0, Math.min(6000, Number(config.nesting_tail_reserve_max_length_mm))) : 5000;
         document.getElementById('settings-nesting-rotation-visualization-enabled').checked = !!config.nesting_rotation_visualization_enabled;
         document.getElementById('settings-nesting-debug-enabled').checked = config.nesting_debug_enabled !== false;
         document.getElementById('settings-nested-text-marking-enabled').checked = !!config.nested_text_marking_enabled;
@@ -577,6 +580,8 @@ async function saveSettings() {
             nesting_gap_mm: Math.max(0, Number(document.getElementById('settings-nesting-gap-mm').value) || 0),
             nesting_rod_tolerance_mm: Math.max(0, Math.min(50,
                 Number(document.getElementById('settings-nesting-rod-tolerance-mm').value) || 0)),
+            nesting_tail_reserve_max_length_mm: Math.max(0, Math.min(6000,
+                Number(document.getElementById('settings-nesting-tail-reserve-max-length-mm').value) || 0)),
             nesting_algorithm: 'current',
             nesting_rotation_visualization_enabled: document.getElementById('settings-nesting-rotation-visualization-enabled').checked,
             nesting_debug_enabled: document.getElementById('settings-nesting-debug-enabled').checked,
