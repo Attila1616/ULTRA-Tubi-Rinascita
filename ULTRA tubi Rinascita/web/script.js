@@ -2280,9 +2280,12 @@ async function optimizeGroupNesting(tubeType) {
         const oldUsed = rods.reduce((n, r) => n + Number(r.used || 0), 0);
         const newUsed = improved.reduce((n, r) => n + Number(r.used || 0), 0);
         const stats = response.stats || {};
+        const reservedText = (stats.reservedPieces ?? 0) +
+            ' pezzi riservati (max ' +
+            (stats.reserveThresholdMm ?? 5000) + ' mm)';
         if (stats.keptOriginal) {
             alert('Ricerca completata: nessun miglioramento valido rispetto al nesting attuale. ' +
-                'Tentativi geometrici: ' + (stats.trials ?? '—') +
+                reservedText + '. Tentativi geometrici: ' + (stats.trials ?? '—') +
                 '. Inserimenti mirati valutati: ' + (stats.guidedTrials ?? 0) +
                 '. Tentativi di eliminazione: ' +
                 (stats.rodEliminationAttempts ?? 0) + '.');
@@ -2308,7 +2311,7 @@ async function optimizeGroupNesting(tubeType) {
         alert('Ottimizzazione completata. Verghe: ' + oldCount + ' → ' +
             newCount + '. Lunghezza occupata totale: ' +
             oldUsed.toFixed(1) + ' → ' + newUsed.toFixed(1) +
-            ' mm' + fillText +
+            ' mm' + fillText + '. ' + reservedText +
             '. Tentativi geometrici: ' + (stats.trials ?? '—') +
             '. Inserimenti mirati: ' + (stats.guidedMoves ?? 0) +
             '. Tentativi di eliminazione verghe: ' +
