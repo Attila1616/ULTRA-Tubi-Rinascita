@@ -117,6 +117,26 @@ class ModernUIContractTests(unittest.TestCase):
         self.assertIn("totalUsed > nestingAllowedLengthMm()", self.script)
         self.assertIn("used > nestingAllowedLengthMm()", self.script)
 
+    def test_optional_deep_nesting_button_and_eta_contract(self):
+        self.assertIn('data-action="optimize-nesting-group"', self.script)
+        self.assertIn("async function optimizeGroupNesting(tubeType)", self.script)
+        self.assertIn("async function withNestingProgress(", self.script)
+        self.assertIn("pywebview.api.optimize_calculated_nesting({", self.script)
+        self.assertIn("pywebview.api.get_nesting_job_status(jobId)", self.script)
+        self.assertIn("nestingAggressiveGroups.has(tubeType)", self.script)
+        self.assertIn("data-nesting-progress-tube", self.script)
+        self.assertIn("nestingEtaText(", self.script)
+        self.assertIn("context.piecesToNest.length", self.script)
+        self.assertIn("buildClientNestingSignature(", self.script)
+        self.assertIn("epoch !== nestingCacheResetEpoch", self.script)
+        self.assertIn("await saveUiState()", self.script)
+
+    def test_default_fast_nesting_still_runs_independently(self):
+        self.assertIn("async function ensureGroupNesting(tubeType)", self.script)
+        self.assertIn("jobId => nestGroupsBackend(", self.script)
+        self.assertIn("tubeType, 'fast'", self.script)
+        self.assertIn("tubeType, 'deep'", self.script)
+
     def test_light_only_presentation(self):
         self.assertIn("color-scheme: light", self.css)
         self.assertNotIn("prefers-color-scheme: dark", self.css)
