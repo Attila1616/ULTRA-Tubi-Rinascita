@@ -125,6 +125,16 @@ def optimize_calculated_nesting(payload):
         from tubenest_engine.deep_optimizer import optimize_existing_rods
         config = load_config(silent=True) or {}
         gap = max(0.0, float(config.get("nesting_gap_mm", 2.0)))
+        try:
+            reserve_limit = float(
+                config.get("nesting_tail_reserve_max_length_mm", 5000.0)
+            )
+            reserve_limit = (
+                max(0.0, min(6000.0, reserve_limit))
+                if math.isfinite(reserve_limit) else 5000.0
+            )
+        except (ValueError, TypeError, OverflowError):
+            reserve_limit = 5000.0
         base_length = float(payload.get("rodLength") or 6000.0)
         rod_length = configured_nesting_rod_length(config, base_length)
         group = payload.get("group") or {}
@@ -160,6 +170,7 @@ def optimize_calculated_nesting(payload):
             pieces, old_rods, rod_length=rod_length,
             dead_zone_mm=400.0, gap_mm=gap,
             progress=callback,
+            reserve_tail_max_length_mm=reserve_limit,
         )
         # Removing a stock rod is the primary win. At equal rod count,
         # encourage concentrating parts onto nearly full rods: moving a
