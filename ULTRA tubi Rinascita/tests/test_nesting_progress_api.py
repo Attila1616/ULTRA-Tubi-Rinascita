@@ -43,7 +43,9 @@ class ProgressApiTests(unittest.TestCase):
             {"used": 2984.0, "placements": []},
         ]
         new_rods = [
-            {"used": 5793.0, "placements": []},
+            # Even a 2mm extra cutting gap is permitted when the rod is
+            # substantially fuller and the remaining offcut becomes useful.
+            {"used": 5795.0, "placements": []},
             {"used": 2767.0, "placements": []},
         ]
         payload = {
