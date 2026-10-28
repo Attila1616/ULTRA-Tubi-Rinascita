@@ -3592,6 +3592,7 @@ def _planar_fast_path_eligible(item):
 def _indexed_planar_chain(
     items, rod_length, dead_zone_mm, gap_mm, groups, cut_classes,
     angle_buckets, transition_catalog, *, packing_first=False,
+    progress_callback=None, progress_offset=0,
 ):
     """Build rods from cached *verified* connections between drawing types.
 
@@ -3780,6 +3781,15 @@ def _indexed_planar_chain(
             _score, selected_key, state = best
             # The selected instance was groups[key][0], so pop that one.
             remaining[selected_key].pop(0)
+            if progress_callback is not None:
+                remaining_count = sum(len(v) for v in remaining.values())
+                processed = progress_offset + len(items) - remaining_count
+                if processed % 3 == 0 or not remaining_count:
+                    progress_callback(
+                        "Assemblaggio verghe",
+                        processed,
+                        max(1, len(items)*2),
+                    )
             if not remaining[selected_key]:
                 del remaining[selected_key]
 
@@ -4177,7 +4187,8 @@ def _refine_indexed_planar_rods(
     return rods
 
 
-def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
+def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm,
+                               progress_callback=None):
     """Fast angle-agnostic nesting of all reliably planar cut geometries.
 
     Equal end angles from any legal rotation become candidate connections.
@@ -4216,6 +4227,7 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
     first = _indexed_planar_chain(
         items, rod_length, dead_zone_mm, gap_mm,
         groups, classes, angle_buckets, transitions, packing_first=False,
+        progress_callback=progress_callback, progress_offset=0,
     )
     if first is None:
         return None
@@ -4235,6 +4247,8 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
         second = _indexed_planar_chain(
             items, rod_length, dead_zone_mm, gap_mm,
             groups, classes, angle_buckets, transitions, packing_first=True,
+            progress_callback=progress_callback,
+            progress_offset=len(items),
         )
         if second is not None:
             if len(second) < len(selected):
@@ -4253,9 +4267,13 @@ def _certified_edge_chain_plan(items, rod_length, dead_zone_mm, gap_mm):
                 ):
                     selected = second
 
+    if progress_callback is not None:
+        progress_callback("Rifinitura e incastri", int(len(items)*1.9), len(items)*2)
     selected = _refine_indexed_planar_rods(
         items, selected, rod_length, dead_zone_mm, gap_mm,
     )
+    if progress_callback is not None:
+        progress_callback("Rifinitura completata", len(items)*2, len(items)*2)
     _PARALLEL_STATS["edge_chain_rods"] = len(selected)
     if len(selected) == 1:
         lower_bound = 1
@@ -4282,6 +4300,7 @@ def _optimize_normalized(
     rod_length,
     dead_zone_mm,
     gap_mm,
+    progress_callback=None,
 ):
     total_started = time.perf_counter()
     configured_workers = nesting_cpu_worker_count()
@@ -4292,7 +4311,8 @@ def _optimize_normalized(
     # benefit from the combinatorial beam/merge search. Most repeat-heavy
     # straight and compatible-angle jobs can stop here.
     chain = _certified_edge_chain_plan(
-        normalized, rod_length, dead_zone_mm, gap_mm
+        normalized, rod_length, dead_zone_mm, gap_mm,
+        progress_callback=progress_callback,
     )
     if chain is not None:
         _PARALLEL_STATS["item_count"] = len(normalized)
@@ -4515,6 +4535,7 @@ def optimize_items_dict(
     gap_mm=DEFAULT_GAP_MM,
     dead_zone_mm=DEFAULT_CHUCK_DEAD_ZONE,
     algorithm="current",
+    progress_callback=None,
 ):
     _reset_parallel_stats()
     _reset_pairwise_fit_stats()
@@ -4530,6 +4551,7 @@ def optimize_items_dict(
         rod_length=float(rod_length),
         dead_zone_mm=float(dead_zone_mm),
         gap_mm=max(0.0, float(gap_mm)),
+        progress_callback=progress_callback,
     )
     rods.sort(
         key=lambda state: (
