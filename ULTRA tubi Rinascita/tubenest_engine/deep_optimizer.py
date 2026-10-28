@@ -15,6 +15,7 @@ from . import optimizer as core
 def optimize_existing_rods(
     pieces, initial_rods, *, rod_length=6000.0, dead_zone_mm=400.0,
     gap_mm=2.0, time_budget_s=None, progress=None,
+    reserve_tail_max_length_mm=5000.0,
 ):
     started = time.perf_counter()
     normalized = core._normalize_items(pieces, rod_length)
@@ -448,6 +449,58 @@ def optimize_existing_rods(
     iteration = 0
     emit("Analisi verghe e geometrie", best, force=True)
 
+    # Experimental core-first, eligible-tail-last construction.
+    # This is invoked ONLY by the opt-in deep optimizer, never by the
+    # automatic first-pass nesting engine. Keep the original rods as a
+    # guaranteed safe fallback even when the new seed uses more stock.
+    reserve_stats = {
+        "reserveThresholdMm": float(reserve_tail_max_length_mm),
+        "reservedPieces": 0,
+        "corePieces": count,
+        "reserveSeedStatus": "disabled",
+        "reserveSeedAccepted": False,
+    }
+    if (
+        float(reserve_tail_max_length_mm) > 0
+        and time.perf_counter() < deadline
+    ):
+        from .tail_reserve import reserve_tail_packing_seed
+
+        def reserve_progress(stage, _status):
+            emit(stage, best, force=True)
+
+        reserve_deadline = min(
+            deadline, time.perf_counter()
+            + min(60.0, max(2.0, budget * 0.22))
+        )
+        try:
+            reserved_plan, reserve_stats = reserve_tail_packing_seed(
+                pieces, normalized, initial_rods, fit,
+                rod_length=rod_length, dead_zone_mm=dead_zone_mm,
+                gap_mm=gap_mm,
+                max_length_mm=reserve_tail_max_length_mm,
+                deadline=reserve_deadline,
+                progress=reserve_progress,
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            reserved_plan = None
+            reserve_stats["reserveSeedStatus"] = "error: " + str(exc)
+        if reserved_plan is not None:
+            signature = state_signature(reserved_plan)
+            candidate_score = objective(reserved_plan)
+            reserve_stats["reserveSeedAccepted"] = candidate_score < best_score
+            if candidate_score < best_score:
+                best, best_score = list(reserved_plan), candidate_score
+                working, working_score = list(reserved_plan), candidate_score
+                no_improve = 0
+                emit("Miglioramento con pezzi finali riservati", best, force=True)
+            else:
+                # An initially worse partition can still be a useful start
+                # for guided transfers and rod-elimination attempts.
+                working, working_score = list(reserved_plan), candidate_score
+            visited.add(signature)
+
+
     # One outer iteration tests multiple mutations; restarts prevent a local
     # optimum from trapping the optimizer. No exhaustive permutations.
     while trials < max_trials and time.perf_counter() < deadline:
@@ -624,6 +677,7 @@ def optimize_existing_rods(
         "stats": {
             "trials": trials,
             "validCandidates": tested,
+            **reserve_stats,
             "guidedTrials": guided_trials,
             "guidedMoves": guided_transfers,
             "exploratoryMoves": exploratory_transfers,
