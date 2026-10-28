@@ -128,6 +128,11 @@ class DeepNestingTests(unittest.TestCase):
         # A donor L215 should be INSERTED BEFORE L1174, moving only the
         # final (eligible) L1174 into the chuck-zone flip region.
         items = sample([4400, 1174, 806, 657] + [215] * 7)
+        # Distinct drawings don't have matching machining signatures,
+        # so the ordinary 2-mm gap remains at both insertion boundaries.
+        for item in items:
+            for end in item["tubePart"]["ends"]:
+                end["boundary_signature"] = item["sourceId"]
         normalized = core._normalize_items(items, 6001)
         before_first = core._optimize_fixed_item_sequence(
             normalized, [0, 1], 6001, 400, 2
