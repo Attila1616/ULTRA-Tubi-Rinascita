@@ -2250,7 +2250,10 @@ async function optimizeGroupNesting(tubeType) {
             tubeType, 'deep',
             jobId => window.pywebview.api.optimize_calculated_nesting({
                 jobId, group: nestingApiGroup(tubeType, context.piecesToNest),
-                rods: rods.map(rod => ({placements: rod.placements})),
+                rods: rods.map(rod => ({
+                    placements: rod.placements,
+                    used: rod.used,
+                })),
                 rodLength: 6000,
             }),
             context.piecesToNest.length
