@@ -2130,10 +2130,12 @@ function nestingEtaText(seconds) {
 function showNestingProgress(tubeType, payload) {
     const stage = payload?.stage || 'Calcolo geometrico';
     const percent = Number(payload?.percent);
-    const pct = Number.isFinite(percent) ? percent.toFixed(0) + '% · ' : '';
-    const detail = payload?.mode === 'deep' ? ' · tempo massimo stimato' : '';
-    const text = stage + ' · ' + pct + 'ETA ' +
-        nestingEtaText(payload?.etaSeconds) + detail;
+    const pct = payload?.percent != null && Number.isFinite(percent)
+        ? percent.toFixed(0) + '% · ' : '';
+    const mode = payload?.mode === 'deep' ? 'Limite ricerca' : 'ETA stimata';
+    const estimate = payload?.estimateExceeded ? 'stima superata' :
+        nestingEtaText(payload?.etaSeconds);
+    const text = stage + ' · ' + pct + mode + ': ' + estimate;
     nestingProgressByTube.set(tubeType, text);
     document.querySelectorAll('[data-nesting-progress-tube]').forEach(node => {
         if (node.dataset.nestingProgressTube === tubeType) {
@@ -2141,7 +2143,7 @@ function showNestingProgress(tubeType, payload) {
         }
     });
 }
-async function withNestingProgress(tubeType, mode, job) {
+async function withNestingProgress(tubeType, mode, job, itemCount = 0) {
     const jobId = nestingJobId(tubeType, mode);
     let polling = false;
     let stopped = false;
@@ -2159,10 +2161,29 @@ async function withNestingProgress(tubeType, mode, job) {
             polling = false;
         }
     };
-    const timer = setInterval(poll, 950);
+    const initialEta = mode === 'deep'
+        ? Math.min(300, Math.max(35, 15 + 2.3 * itemCount))
+        : Math.max(2, 0.20 * itemCount);
+    const started = Date.now();
+    const timer = setInterval(() => {
+        // Preserve a useful approximate countdown if a particular pywebview
+        // bridge serializes progress requests behind the long-running call.
+        const current = nestingProgressByTube.get(tubeType);
+        if (!polling && !stopped) void poll();
+        if (!stopped && current?.startsWith('Avvio')) {
+            showNestingProgress(tubeType, {
+                stage: mode === 'deep' ? 'Avvio ottimizzazione approfondita'
+                    : 'Avvio nesting',
+                etaSeconds: Math.max(0, initialEta-(Date.now()-started)/1000),
+                estimateExceeded: mode !== 'deep' &&
+                    (Date.now()-started)/1000 > initialEta,
+                mode
+            });
+        }
+    }, 950);
     showNestingProgress(tubeType, {
         stage: mode === 'deep' ? 'Avvio ottimizzazione approfondita' : 'Avvio nesting',
-        etaSeconds: null, mode
+        etaSeconds: initialEta, mode
     });
     try {
         return await job(jobId);
@@ -2231,7 +2252,8 @@ async function optimizeGroupNesting(tubeType) {
                 jobId, group: nestingApiGroup(tubeType, context.piecesToNest),
                 rods: rods.map(rod => ({placements: rod.placements})),
                 rodLength: 6000,
-            })
+            }),
+            context.piecesToNest.length
         );
         if (response?.status !== 'success') {
             throw new Error(response?.message || 'Ottimizzazione approfondita fallita.');
@@ -2298,7 +2320,8 @@ async function ensureGroupNesting(tubeType) {
             tubeType, 'fast',
             jobId => nestGroupsBackend(
                 [{ tubeType, pieces: context.piecesToNest }], 6000, jobId
-            )
+            ),
+            context.piecesToNest.length
         );
         const result = groups[0] || { tubeType, rods: [] };
 
