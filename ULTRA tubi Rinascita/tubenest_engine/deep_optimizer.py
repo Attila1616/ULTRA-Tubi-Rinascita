@@ -124,12 +124,43 @@ def optimize_existing_rods(
             tuple(p.item_index for p in rod.placed) for rod in states
         ))
 
-    def candidate_slots(rod):
-        # The last piece is a valuable geometric anchor. Try inserting just
-        # before it, between longer pieces, and at other boundaries.
-        return core._fill_interior_slots(
-            rod, normalized, max_slots=10
+    angle_cache = {
+        item.index: core._item_angle_buckets(item)
+        for item in normalized
+    }
+
+    def candidate_slots(rod, piece_idx=None):
+        # Rank *all* useful insertion boundaries by potential matching end
+        # angles, then prioritize insertion before the final piece. These
+        # are hints only: the exact solver decides whether co-edge is safe.
+        base = core._fill_interior_slots(
+            rod, normalized, max_slots=12
         )
+        if piece_idx is None:
+            return base
+        cuts = {
+            cls for cls in angle_cache.get(piece_idx, ()) if cls is not None
+        }
+        if not cuts:
+            return base
+        placements = rod.placed
+        count = len(placements)
+
+        def promise(slot):
+            matches = 0
+            if slot > 0:
+                prev = placements[slot-1]
+                c = angle_cache.get(prev.item_index, (None, None))
+                outgoing = c[0 if prev.pose.reversed_end_for_end else 1]
+                matches += int(outgoing in cuts and outgoing is not None)
+            if slot < count:
+                nxt = placements[slot]
+                c = angle_cache.get(nxt.item_index, (None, None))
+                incoming = c[1 if nxt.pose.reversed_end_for_end else 0]
+                matches += int(incoming in cuts and incoming is not None)
+            return (-matches, slot != count-1, abs(slot-(count-1)), slot)
+
+        return sorted(base, key=promise)
 
     def likely_fit(piece_index, target):
         # Cheap feasibility hint only. Angle overlap may allow a nominally
@@ -225,7 +256,7 @@ def optimize_existing_rods(
             shortened = source_seq[:source_pos] + source_seq[source_pos+1:]
             # Place where the end cut is geometrically promising, including
             # the specific case: small piece immediately before the last.
-            for at in candidate_slots(target):
+            for at in candidate_slots(target, piece_idx):
                 if trials-spent_at_start >= candidate_limit or time.perf_counter() >= deadline:
                     break
                 moved = fit(dest_seq[:at]+[piece_idx]+dest_seq[at:])
@@ -308,7 +339,7 @@ def optimize_existing_rods(
                         if not likely_fit(piece_idx, target):
                             continue
                         seq = [p.item_index for p in target.placed]
-                        for position in candidate_slots(target)[:5]:
+                        for position in candidate_slots(target, piece_idx)[:6]:
                             result = fit(seq[:position]+[piece_idx]+seq[position:])
                             if result is None:
                                 continue
@@ -420,7 +451,12 @@ def optimize_existing_rods(
                 (i for i in range(len(working)) if i != donor_i),
                 key=lambda i: -working[i].used_span,
             )
-            target_i = rng.choice(target_order[:min(5, len(target_order))])
+            if rng.random() < 0.5:
+                target_i = rng.choice(target_order[:min(8, len(target_order))])
+            else:
+                # Also sample the underfilled bottom rods, not just the
+                # fullest targets at the top of the displayed list.
+                target_i = rng.choice(target_order[-min(8, len(target_order)):])
             target_seq = [p.item_index for p in working[target_i].placed]
             if operation == "move":
                 # Small first, but also sample other pieces for angled-edge
