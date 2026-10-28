@@ -2250,10 +2250,9 @@ async function optimizeGroupNesting(tubeType) {
             tubeType, 'deep',
             jobId => window.pywebview.api.optimize_calculated_nesting({
                 jobId, group: nestingApiGroup(tubeType, context.piecesToNest),
-                rods: rods.map(rod => ({
-                    placements: rod.placements,
-                    used: rod.used,
-                })),
+                // Keep all backend rod metadata for lossless fallback.
+                // Only UI-specific segment objects are removed.
+                rods: rods.map(({segments, ...backendRod}) => backendRod),
                 rodLength: 6000,
             }),
             context.piecesToNest.length
