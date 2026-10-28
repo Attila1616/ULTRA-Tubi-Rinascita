@@ -81,6 +81,47 @@ class DeepNestingTests(unittest.TestCase):
         self.assertTrue(messages)
         self.assertTrue(all(0 <= row["percent"] <= 99 for row in messages))
 
+    def test_guided_transfer_moves_400_mm_piece_from_top_to_bottom_gap(self):
+        # This is the production pattern: a long rod carries a short-ish
+        # piece that belongs in a gap on a different rod. The original deep
+        # optimizer never looked at donors outside the five sparsest rods.
+        items = sample([400, 100, 180])
+        baseline = seed_rods(items, [[0, 1], [2]])
+        result = optimize_existing_rods(
+            items, baseline, rod_length=600, dead_zone_mm=0,
+            time_budget_s=1.5,
+        )
+        self.assertEqual(len(result["rods"]), 2)
+        self.assertEqual(sorted(
+            p["instance_key"] for rod in result["rods"]
+            for p in rod["placements"]
+        ), ["piece-0", "piece-1", "piece-2"])
+        # The 400 and 180 mm pieces can become neighbours, filling one rod
+        # to 580 mm without increasing the total geometric used length.
+        self.assertTrue(any(
+            {"piece-0", "piece-2"}.issubset({
+                p["instance_key"] for p in rod["placements"]
+            })
+            for rod in result["rods"]
+        ))
+        self.assertGreaterEqual(result["stats"]["guidedMoves"], 1)
+        self.assertGreaterEqual(result["stats"]["guidedTrials"], 1)
+        self.assertAlmostEqual(
+            result["stats"]["initialUsedMm"],
+            result["stats"]["finalUsedMm"], delta=.1
+        )
+
+    def test_guided_gap_insertion_can_eliminate_short_rod(self):
+        items = sample([300, 200, 100])
+        baseline = seed_rods(items, [[0, 1], [2]])
+        result = optimize_existing_rods(
+            items, baseline, rod_length=600, dead_zone_mm=0,
+            time_budget_s=1.5,
+        )
+        self.assertEqual(len(result["rods"]), 1)
+        self.assertEqual(len(result["rods"][0]["placements"]), 3)
+        self.assertLessEqual(result["rods"][0]["used"], 600.00001)
+
     def test_one_rod_does_not_create_more_rods(self):
         items = sample([100, 100, 150])
         seeds = seed_rods(items, [[0, 1, 2]])
