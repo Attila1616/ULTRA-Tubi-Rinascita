@@ -2274,22 +2274,37 @@ async function optimizeGroupNesting(tubeType) {
         const oldCount = rods.length, newCount = improved.length;
         const oldUsed = rods.reduce((n, r) => n + Number(r.used || 0), 0);
         const newUsed = improved.reduce((n, r) => n + Number(r.used || 0), 0);
-        // Do not overwrite a better cached plan with a worse search result.
-        if (newCount > oldCount ||
-            (newCount === oldCount && newUsed > oldUsed + 15)) {
-            alert('Nessun miglioramento sicuro; conservato il nesting precedente.');
+        const stats = response.stats || {};
+        if (stats.keptOriginal) {
+            alert('Ricerca completata: nessun miglioramento valido rispetto al nesting attuale. ' +
+                'Tentativi geometrici: ' + (stats.trials ?? '—') +
+                '. Inserimenti mirati valutati: ' + (stats.guidedTrials ?? 0) +
+                '. Tentativi di eliminazione: ' +
+                (stats.rodEliminationAttempts ?? 0) + '.');
             return;
+        }
+        // The Python solver has already checked physical validity and the
+        // material budget, including concentration improvements with a
+        // small extra cut gap. Do not apply a second 15mm veto here.
+        if (newCount > oldCount) {
+            throw new Error('La ricerca ha restituito più verghe del nesting iniziale.');
         }
         nestingResultCache.set(tubeType, {
             signature, rods: improved,
             backendCacheHit: false, deepOptimized: true,
         });
         await saveUiState();
-        const stats = response.stats || {};
+        const beforeFill = Number(stats.initialFillConcentration);
+        const afterFill = Number(stats.finalFillConcentration);
+        const fillText = Number.isFinite(beforeFill) && Number.isFinite(afterFill)
+            ? ' · concentrazione riempimento: ' +
+                beforeFill.toFixed(3) + ' → ' + afterFill.toFixed(3)
+            : '';
         alert('Ottimizzazione completata. Verghe: ' + oldCount + ' → ' +
             newCount + '. Lunghezza occupata totale: ' +
             oldUsed.toFixed(1) + ' → ' + newUsed.toFixed(1) +
-            ' mm. Tentativi geometrici: ' + (stats.trials ?? '—') +
+            ' mm' + fillText +
+            '. Tentativi geometrici: ' + (stats.trials ?? '—') +
             '. Inserimenti mirati: ' + (stats.guidedMoves ?? 0) +
             '. Tentativi di eliminazione verghe: ' +
             (stats.rodEliminationAttempts ?? 0) + '.');
