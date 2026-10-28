@@ -490,6 +490,8 @@ def optimize_existing_rods(
                     visited.add(signature)
                 tested += 1
                 score = objective(attempt)
+                if guided:
+                    guided_transfers += 1
                 if score < best_score:
                     best, best_score = list(attempt), score
                     working, working_score = list(attempt), score
@@ -501,7 +503,6 @@ def optimize_existing_rods(
                     # piece exchange or elimination of another rod.
                     working, working_score = list(attempt), score
                     exploratory_transfers += 1
-                    guided_transfers += 1
                     no_improve += 1
                 elif score < working_score or rng.random() < .055:
                     working, working_score = list(attempt), score
