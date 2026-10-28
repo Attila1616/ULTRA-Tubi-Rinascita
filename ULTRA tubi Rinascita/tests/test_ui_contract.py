@@ -131,6 +131,17 @@ class ModernUIContractTests(unittest.TestCase):
         self.assertIn("epoch !== nestingCacheResetEpoch", self.script)
         self.assertIn("await saveUiState()", self.script)
 
+    def test_deep_nesting_keeps_valid_fill_improvements(self):
+        # Old JS veto rejected legitimate rearrangements if they added
+        # slightly more than 15mm nominal stock usage; the backend now
+        # evaluates both stock usage and usable offcut concentration.
+        self.assertIn("stats.initialFillConcentration", self.script)
+        self.assertIn("stats.finalFillConcentration", self.script)
+        self.assertIn("if (stats.keptOriginal)", self.script)
+        self.assertNotIn("newUsed > oldUsed + 15", self.script)
+        self.assertIn("stats.guidedMoves", self.script)
+        self.assertIn("stats.guidedTrials", self.script)
+
     def test_default_fast_nesting_still_runs_independently(self):
         self.assertIn("async function ensureGroupNesting(tubeType)", self.script)
         self.assertIn("jobId => nestGroupsBackend(", self.script)
