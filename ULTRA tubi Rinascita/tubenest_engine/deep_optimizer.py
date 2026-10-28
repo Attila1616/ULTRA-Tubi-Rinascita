@@ -247,7 +247,7 @@ def optimize_existing_rods(
                     possible_pieces.append((
                         (
                             abs(empty_space-length),
-                            0 if length <= empty_space+EPS else 1,
+                            0 if length <= empty_space + core.EPS else 1,
                             -donor.used_span,
                             length,
                             donor_i,
