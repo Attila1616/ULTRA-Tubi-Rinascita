@@ -1908,6 +1908,7 @@ def nest_piece_instances(piece_instances, rod_length=6000):
 
 def nest_piece_groups(groups, rod_length=6000, job_id=None):
     """Nest multiple tube-type groups with the geometry-aware optimizer."""
+    global _NESTING_SECONDS_PER_PIECE
     request_started = time.perf_counter()
     group_count = sum(len(g.get("pieces") or []) for g in (groups or []))
     _report_nesting_job(
@@ -2060,7 +2061,6 @@ def nest_piece_groups(groups, rod_length=6000, job_id=None):
         request_seconds = time.perf_counter() - request_started
         # Feed the next fast ETA with actual duration; no fixed-speed promise.
         if group_count and not all(group.get("cacheHit") for group in result_groups):
-            global _NESTING_SECONDS_PER_PIECE
             measured = max(.01, request_seconds / group_count)
             _NESTING_SECONDS_PER_PIECE = (
                 .7*_NESTING_SECONDS_PER_PIECE + .3*measured
