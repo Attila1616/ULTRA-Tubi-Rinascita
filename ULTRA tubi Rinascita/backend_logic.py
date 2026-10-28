@@ -59,6 +59,108 @@ _NESTING_GROUP_CACHE_LIMIT = 128
 _NESTING_CACHE_VERSION = 8
 _NESTING_GROUP_CACHE_LOADED = False
 _NESTING_CACHE_GENERATION = 0
+
+# Short-lived progress snapshots, queried by the UI while a nesting request
+# runs in the pywebview API worker. They contain no piece geometry.
+_NESTING_JOB_LOCK = threading.RLock()
+_NESTING_JOB_STATUS = {}
+_NESTING_SECONDS_PER_PIECE = 0.20
+
+
+def _report_nesting_job(job_id, stage, *, fraction=None, eta=None,
+                        elapsed=None, done=False, error=None, **extra):
+    if not job_id:
+        return
+    with _NESTING_JOB_LOCK:
+        record = dict(_NESTING_JOB_STATUS.get(str(job_id), {}))
+        if "startedAt" not in record:
+            record["startedAt"] = time.perf_counter()
+        spent = time.perf_counter() - record["startedAt"]
+        record.update(
+            stage=str(stage),
+            elapsedSeconds=round(max(0.0, elapsed if elapsed is not None else spent), 1),
+            done=bool(done),
+        )
+        if fraction is not None:
+            record["percent"] = round(max(0, min(100, 100*float(fraction))), 1)
+        if eta is not None:
+            record["etaSeconds"] = max(0.0, round(float(eta), 1))
+        if error is not None:
+            record["error"] = str(error)
+        record.update(extra)
+        _NESTING_JOB_STATUS[str(job_id)] = record
+        # Prevent status objects from accumulating across recalculations.
+        if len(_NESTING_JOB_STATUS) > 64:
+            for key in list(_NESTING_JOB_STATUS)[:-32]:
+                if _NESTING_JOB_STATUS[key].get("done"):
+                    _NESTING_JOB_STATUS.pop(key, None)
+
+
+def get_nesting_job_status(job_id):
+    with _NESTING_JOB_LOCK:
+        return dict(_NESTING_JOB_STATUS.get(str(job_id), {"stage": "Avvio", "done": False}))
+
+
+def optimize_calculated_nesting(payload):
+    """Explicit opt-in deep search; locked rods are never part of this call."""
+    payload = payload or {}
+    job_id = str(payload.get("jobId") or "")
+    _report_nesting_job(job_id, "Preparazione ricerca approfondita", fraction=0)
+    try:
+        from tubenest_engine.deep_optimizer import optimize_existing_rods
+        config = load_config(silent=True) or {}
+        gap = max(0.0, float(config.get("nesting_gap_mm", 2.0)))
+        base_length = float(payload.get("rodLength") or 6000.0)
+        rod_length = configured_nesting_rod_length(config, base_length)
+        group = payload.get("group") or {}
+        pieces, _ = _hydrate_group_sources(group)
+        old_rods = payload.get("rods") or []
+        for piece in pieces:
+            part = piece.get("tubePart")
+            if not isinstance(part, dict):
+                raise ValueError("Deep nesting requires validated ZZX geometry for every piece.")
+            filename = str(piece.get("fileName") or piece.get("filePath") or "ZZX")
+            problems = validate_tube_part_data(filename, part)
+            if problems:
+                raise ValueError(f"Invalid geometry: {filename}: {problems}")
+        signature = _nesting_group_signature(
+            str(group.get("tubeType") or ""), pieces,
+            rod_length=rod_length, gap_mm=gap, dead_zone_mm=400.0,
+            algorithm="current",
+        )
+        with _NESTING_CACHE_LOCK:
+            generation = _NESTING_CACHE_GENERATION
+
+        def callback(progress):
+            fraction = float(progress.get("percent") or 0.0)/100.0
+            _report_nesting_job(
+                job_id, progress.get("stage") or "Ottimizzazione approfondita",
+                fraction=fraction,
+                eta=progress.get("etaSeconds"),
+                trials=progress.get("trials", 0),
+                rodCount=progress.get("rodCount"),
+            )
+
+        result = optimize_existing_rods(
+            pieces, old_rods, rod_length=rod_length,
+            dead_zone_mm=400.0, gap_mm=gap,
+            progress=callback,
+        )
+        with _NESTING_CACHE_LOCK:
+            if generation != _NESTING_CACHE_GENERATION:
+                raise ValueError("Cache cleared while optimizing. Discarded stale result.")
+        _cache_nesting_group(signature, result["rods"], generation=generation)
+        _report_nesting_job(job_id, "Completato", fraction=1, eta=0, done=True)
+        return {
+            "status": "success",
+            "rods": result["rods"],
+            "stats": result["stats"],
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        _report_nesting_job(job_id, "Errore", done=True, error=str(exc))
+        return {"status": "error", "message": str(exc)}
+
 _NESTING_CACHE_LOCK = threading.RLock()
 _NESTING_VALIDATION_CACHE = {}
 _NESTING_VALIDATION_CACHE_LIMIT = 4096
@@ -1804,9 +1906,14 @@ def nest_piece_instances(piece_instances, rod_length=6000):
         return {"status": "error", "message": str(exc), "rods": []}
 
 
-def nest_piece_groups(groups, rod_length=6000):
+def nest_piece_groups(groups, rod_length=6000, job_id=None):
     """Nest multiple tube-type groups with the geometry-aware optimizer."""
     request_started = time.perf_counter()
+    group_count = sum(len(g.get("pieces") or []) for g in (groups or []))
+    _report_nesting_job(
+        job_id, "Analisi pezzi", fraction=0.01,
+        eta=max(2, group_count * _NESTING_SECONDS_PER_PIECE),
+    )
     try:
         config = load_config(silent=True) or {}
         try:
@@ -1873,6 +1980,13 @@ def nest_piece_groups(groups, rod_length=6000):
             )
             cached = signature in _NESTING_GROUP_CACHE
             cache_generation = _NESTING_CACHE_GENERATION
+            initial_estimate = max(
+                2.0, len(pieces)*_NESTING_SECONDS_PER_PIECE
+            )
+            _report_nesting_job(
+                job_id, "Calcolo nesting iniziale",
+                fraction=0.06, eta=initial_estimate
+            )
             optimizer_seconds = 0.0
             parallel_stats = None
             if cached:
@@ -1885,12 +1999,25 @@ def nest_piece_groups(groups, rod_length=6000):
                     flush=True,
                 )
                 optimizer_started = time.perf_counter()
+                def fast_progress(phase, processed, total):
+                    elapsed = time.perf_counter() - optimizer_started
+                    frac = min(0.95, (0.08 + .85*float(processed)/max(1, total)))
+                    estimate = (
+                        max(0.0, elapsed*(1-frac)/max(frac, .01))
+                        if processed else initial_estimate
+                    )
+                    _report_nesting_job(
+                        job_id, phase, fraction=frac, eta=estimate,
+                        processed=processed, total=total
+                    )
+
                 rods = tubenest_engine.optimize_items_dict(
                     pieces,
                     rod_length=rod_length,
                     gap_mm=gap_mm,
                     dead_zone_mm=400.0,
                     algorithm=nesting_algorithm,
+                    progress_callback=fast_progress if job_id else None,
                 )
                 optimizer_seconds = time.perf_counter() - optimizer_started
                 parallel_stats = tubenest_engine.get_parallel_stats()
@@ -1931,6 +2058,14 @@ def nest_piece_groups(groups, rod_length=6000):
             })
 
         request_seconds = time.perf_counter() - request_started
+        # Feed the next fast ETA with actual duration; no fixed-speed promise.
+        if group_count and not all(group.get("cacheHit") for group in result_groups):
+            global _NESTING_SECONDS_PER_PIECE
+            measured = max(.01, request_seconds / group_count)
+            _NESTING_SECONDS_PER_PIECE = (
+                .7*_NESTING_SECONDS_PER_PIECE + .3*measured
+            )
+        _report_nesting_job(job_id, "Completato", fraction=1, eta=0, done=True)
         print(
             f"[TubeNest PERF] request total={request_seconds:.3f}s "
             f"groups={len(result_groups)}"
@@ -1942,6 +2077,7 @@ def nest_piece_groups(groups, rod_length=6000):
         }
     except Exception as exc:
         traceback.print_exc()
+        _report_nesting_job(job_id, "Errore", done=True, error=str(exc))
         return {"status": "error", "message": str(exc), "groups": []}
 
 
