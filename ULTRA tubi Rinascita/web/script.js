@@ -11,6 +11,8 @@ let lastZzxWarningSignature = '';
 let nestingRenderSequence = 0;
 let nestingResultCache = new Map();
 let nestingLoadingGroups = new Set();
+let nestingAggressiveGroups = new Set();
+let nestingProgressByTube = new Map();
 let nestingActiveGenerationByTube = new Map();
 let nestingErrorByTube = new Map();
 let nestingRodToleranceMm = 1.0;
@@ -2111,6 +2113,169 @@ function cachedNestingForGroup(group, context) {
     return { signature, rods: cached.rods || [] };
 }
 
+// Progress snapshots are read from the backend worker, rather than a fake
+// countdown. The displayed ETA remains approximate and can change as
+// geometry becomes more expensive or the optimizer finds more candidates.
+function nestingJobId(tubeType, mode) {
+    return mode + '-' + Date.now().toString(36) + '-' +
+        Math.random().toString(36).slice(2) + '-' + tubeType.length;
+}
+function nestingEtaText(seconds) {
+    const value = Number(seconds);
+    if (!Number.isFinite(value) || value < 0) return 'ETA in aggiornamento';
+    const rounded = Math.ceil(value);
+    if (rounded < 60) return '~' + rounded + ' s';
+    return '~' + Math.floor(rounded / 60) + ' min ' + (rounded % 60) + ' s';
+}
+function showNestingProgress(tubeType, payload) {
+    const stage = payload?.stage || 'Calcolo geometrico';
+    const percent = Number(payload?.percent);
+    const pct = Number.isFinite(percent) ? percent.toFixed(0) + '% · ' : '';
+    const detail = payload?.mode === 'deep' ? ' · tempo massimo stimato' : '';
+    const text = stage + ' · ' + pct + 'ETA ' +
+        nestingEtaText(payload?.etaSeconds) + detail;
+    nestingProgressByTube.set(tubeType, text);
+    document.querySelectorAll('[data-nesting-progress-tube]').forEach(node => {
+        if (node.dataset.nestingProgressTube === tubeType) {
+            node.textContent = text;
+        }
+    });
+}
+async function withNestingProgress(tubeType, mode, job) {
+    const jobId = nestingJobId(tubeType, mode);
+    let polling = false;
+    let stopped = false;
+    const poll = async () => {
+        if (polling || stopped) return;
+        polling = true;
+        try {
+            const state = await window.pywebview.api.get_nesting_job_status(jobId);
+            if (!stopped && state && !state.done) {
+                showNestingProgress(tubeType, {...state, mode});
+            }
+        } catch (err) {
+            console.debug('[TubeNest] Progress status unavailable:', err);
+        } finally {
+            polling = false;
+        }
+    };
+    const timer = setInterval(poll, 950);
+    showNestingProgress(tubeType, {
+        stage: mode === 'deep' ? 'Avvio ottimizzazione approfondita' : 'Avvio nesting',
+        etaSeconds: null, mode
+    });
+    try {
+        return await job(jobId);
+    } finally {
+        stopped = true;
+        clearInterval(timer);
+        nestingProgressByTube.delete(tubeType);
+    }
+}
+
+function nestingApiGroup(tubeType, pieces) {
+    const group = (allTubeData || []).find(g => g.tubeType === tubeType);
+    const sources = {};
+    const originals = new Map((group?.pieces || []).map(p => [p.id, p]));
+    (pieces || []).forEach(segment => {
+        const sourceId = String(segment.sourceId || '');
+        if (!sourceId || sources[sourceId]) return;
+        const source = originals.get(segment.sourceId);
+        sources[sourceId] = {
+            sourceId,
+            tubePart: source?.tubePart || null,
+            filePath: source?.filePath || '',
+            fileName: source?.fileName || ''
+        };
+    });
+    return {
+        tubeType, sources,
+        pieces: (pieces || []).map(s => ({
+            instanceKey: s.instanceKey,
+            sourceId: s.sourceId,
+            length: s.length,
+        })),
+    };
+}
+function hydrateCalculatedRods(rawRods, originalSegments) {
+    const original = new Map((originalSegments || []).map(
+        segment => [segment.instanceKey, segment]
+    ));
+    return (rawRods || []).map(rod => ({
+        ...rod,
+        segments: (rod.placements || []).map(placement => {
+            const segment = original.get(placement.instance_key);
+            if (!segment) throw new Error(
+                'Nesting returned unknown instance ' + placement.instance_key
+            );
+            return {...segment, nestPlacement: placement};
+        })
+    }));
+}
+
+async function optimizeGroupNesting(tubeType) {
+    if (!tubeType || nestingLoadingGroups.has(tubeType) ||
+        nestingAggressiveGroups.has(tubeType)) return;
+    const group = (allTubeData || []).find(g => g.tubeType === tubeType);
+    if (!group) return;
+    const context = buildGroupNestingContext(group);
+    const {signature, rods} = cachedNestingForGroup(group, context);
+    if (!rods?.length || !context.piecesToNest.length) return;
+    const epoch = nestingCacheResetEpoch;
+    nestingAggressiveGroups.add(tubeType);
+    renderUI();
+    try {
+        const response = await withNestingProgress(
+            tubeType, 'deep',
+            jobId => window.pywebview.api.optimize_calculated_nesting({
+                jobId, group: nestingApiGroup(tubeType, context.piecesToNest),
+                rods: rods.map(rod => ({placements: rod.placements})),
+                rodLength: 6000,
+            })
+        );
+        if (response?.status !== 'success') {
+            throw new Error(response?.message || 'Ottimizzazione approfondita fallita.');
+        }
+        const updatedGroup = (allTubeData || []).find(g => g.tubeType === tubeType);
+        if (!updatedGroup ||
+            buildClientNestingSignature(
+                updatedGroup, buildGroupNestingContext(updatedGroup).piecesToNest
+            ) !== signature || epoch !== nestingCacheResetEpoch) {
+            alert('Nesting non applicato: i pezzi sono cambiati durante il calcolo.');
+            return;
+        }
+        const improved = hydrateCalculatedRods(
+            response.rods, context.piecesToNest
+        );
+        const oldCount = rods.length, newCount = improved.length;
+        const oldUsed = rods.reduce((n, r) => n + Number(r.used || 0), 0);
+        const newUsed = improved.reduce((n, r) => n + Number(r.used || 0), 0);
+        // Do not overwrite a better cached plan with a worse search result.
+        if (newCount > oldCount ||
+            (newCount === oldCount && newUsed > oldUsed + 15)) {
+            alert('Nessun miglioramento sicuro; conservato il nesting precedente.');
+            return;
+        }
+        nestingResultCache.set(tubeType, {
+            signature, rods: improved,
+            backendCacheHit: false, deepOptimized: true,
+        });
+        await saveUiState();
+        const stats = response.stats || {};
+        alert('Ottimizzazione completata. Verghe: ' + oldCount + ' → ' +
+            newCount + '. Lunghezza occupata totale: ' +
+            oldUsed.toFixed(1) + ' → ' + newUsed.toFixed(1) +
+            ' mm. Tentativi: ' + (stats.trials ?? '—') + '.');
+    } catch (error) {
+        console.error('[TubeNest DEEP] Optimization failed', error);
+        alert(error?.message || 'Errore ottimizzazione approfondita.');
+    } finally {
+        nestingAggressiveGroups.delete(tubeType);
+        nestingProgressByTube.delete(tubeType);
+        renderUI();
+    }
+}
+
 async function ensureGroupNesting(tubeType) {
     if (!tubeType || nestingLoadingGroups.has(tubeType)) return;
 
@@ -2129,9 +2294,12 @@ async function ensureGroupNesting(tubeType) {
     renderUI();
 
     try {
-        const groups = await nestGroupsBackend([
-            { tubeType, pieces: context.piecesToNest }
-        ]);
+        const groups = await withNestingProgress(
+            tubeType, 'fast',
+            jobId => nestGroupsBackend(
+                [{ tubeType, pieces: context.piecesToNest }], 6000, jobId
+            )
+        );
         const result = groups[0] || { tubeType, rods: [] };
 
         // Do not store stale work if quantities/locks changed while Python was
@@ -2256,7 +2424,10 @@ async function renderUI() {
 
             let statusHtml = '';
             if (isLoading) {
-                statusHtml = '<div class="nesting-group-status">Calcolo nesting geometrico in corso...</div>';
+                statusHtml = '<div class="nesting-group-status" data-nesting-progress-tube="' +
+                    escapeAttr(group.tubeType) + '">' +
+                    escapeHtml(nestingProgressByTube.get(group.tubeType) ||
+                    'Calcolo nesting geometrico in corso...') + '</div>';
             } else if (error) {
                 statusHtml = `<div class="nesting-group-status nesting-group-error">Errore nesting: ${escapeHtml(error)}</div>`;
             } else if (cachedRods === null) {
@@ -2513,9 +2684,14 @@ function renderRodsHTML(tubeType, lockedForTube, nestedRods) {
         <h3 class="details-section-title">Visualizzazione Verghe (${totalShown} visibili)</h3>
         <div class="rod-section-actions">
             ${nestingDebugEnabled ? `<button class="action-button database-mini-button" data-action="debug-nesting-group" data-tube-type="${escapeAttr(tubeType)}">Debug nesting</button>` : ''}
+            ${nestedRods.length && !nestingLoadingGroups.has(tubeType) ?
+                `<button class="action-button database-mini-button" data-action="optimize-nesting-group" data-tube-type="${escapeAttr(tubeType)}" ${nestingAggressiveGroups.has(tubeType) ? 'disabled' : ''}>${nestingAggressiveGroups.has(tubeType) ? 'Ottimizzazione in corso...' : 'Ottimizza nesting'}</button>` : ''}
             <button class="action-button database-mini-button" data-action="toggle-unlocked-rods" data-tube-type="${escapeAttr(tubeType)}">${unlockedVisible ? 'Nascondi libere' : 'Mostra libere'}</button>
         </div>
     </div>`;
+    if (nestingAggressiveGroups.has(tubeType)) {
+        html += `<div class="nesting-group-status" data-nesting-progress-tube="${escapeAttr(tubeType)}">${escapeHtml(nestingProgressByTube.get(tubeType) || 'Ottimizzazione approfondita in corso...')}</div>`;
+    }
 
     (lockedForTube || []).forEach((rod, index) => {
         html += renderSingleRodHTML({
@@ -3107,6 +3283,9 @@ async function handleContainerClick(event) {
                 break;
             case 'mark-locked-segment-fatto':
                 await markLockedSegmentFatto(actionTarget.dataset.tubeType, actionTarget.dataset.rodId, actionTarget.dataset.segmentKey);
+                break;
+            case 'optimize-nesting-group':
+                await optimizeGroupNesting(actionTarget.dataset.tubeType);
                 break;
             case 'debug-nesting-group':
                 await debugNestingGroup(actionTarget.dataset.tubeType);
@@ -4062,7 +4241,7 @@ async function confirmInventoryUse() {
 }
 
 // --- Utilities ---
-async function nestGroupsBackend(groupRequests, rodLength = 6000) {
+async function nestGroupsBackend(groupRequests, rodLength = 6000, jobId = null) {
     const sourcePieces = new Map();
     (allTubeData || []).forEach(group => {
         (group.pieces || []).forEach(piece => sourcePieces.set(piece.id, piece));
@@ -4099,7 +4278,7 @@ async function nestGroupsBackend(groupRequests, rodLength = 6000) {
 
     if (payload.length === 0) return [];
 
-    const response = await window.pywebview.api.nest_piece_groups(payload, rodLength);
+    const response = await window.pywebview.api.nest_piece_groups(payload, rodLength, jobId);
     if (!response || response.status !== 'success') {
         throw new Error(response?.message || 'Nesting backend non disponibile.');
     }
