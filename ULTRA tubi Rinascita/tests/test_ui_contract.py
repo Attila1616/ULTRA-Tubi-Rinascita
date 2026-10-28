@@ -117,6 +117,16 @@ class ModernUIContractTests(unittest.TestCase):
         self.assertIn("totalUsed > nestingAllowedLengthMm()", self.script)
         self.assertIn("used > nestingAllowedLengthMm()", self.script)
 
+    def test_tail_reserve_threshold_is_only_configured_for_deep_nesting(self):
+        self.assertIn(
+            'id="settings-nesting-tail-reserve-max-length-mm"', self.index
+        )
+        self.assertIn("nesting_tail_reserve_max_length_mm:", self.script)
+        self.assertIn("config.nesting_tail_reserve_max_length_mm", self.script)
+        self.assertIn("stats.reservedPieces", self.script)
+        self.assertIn("stats.reserveThresholdMm", self.script)
+        self.assertIn("async function optimizeGroupNesting(tubeType)", self.script)
+
     def test_optional_deep_nesting_button_and_eta_contract(self):
         self.assertIn('data-action="optimize-nesting-group"', self.script)
         self.assertIn("async function optimizeGroupNesting(tubeType)", self.script)
