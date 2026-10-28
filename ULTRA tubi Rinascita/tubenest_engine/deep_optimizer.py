@@ -76,18 +76,17 @@ def optimize_existing_rods(
         return value
 
     def objective(states):
-        # Rod count dominates. For the same count, real material savings
-        # (up to half-millimetre precision) dominate concentration. Among
-        # materially equivalent alternatives, fill fewer rods more closely
-        # to stock length and preserve additional valid shared cuts.
+        # Fewer rods are always better. For equal rod count, consider
+        # concentration AND actual used stock. It is often worth spending
+        # one extra cutting gap to turn a 5500-mm rod into a ~5800-mm rod
+        # and leave one longer, more reusable offcut elsewhere.
         used_span = sum(r.used_span for r in states)
         concentration = core._rod_fill_concentration(states, rod_length)
         return (
             len(states),
-            round(used_span * 2),
-            -round(concentration, 6),
+            round(used_span - 400.0 * concentration, 4),
+            round(used_span, 4),
             -sum(r.common_lines for r in states),
-            round(used_span, 5),
         )
 
     def emit(stage, current, *, force=False):
@@ -189,109 +188,143 @@ def optimize_existing_rods(
             <= rod_length-target.used_span+allowance
         )
 
-    def directed_gap_transfer(states, *, candidate_limit=48):
-        """Search actual gaps across ALL other rods, not just short donors.
+    def directed_gap_transfer(states, *, candidate_limit=240):
+        """Systematically test small pieces in the gaps of *every* rod.
 
-        A transfer need not improve the total used length immediately: it may
-        create the free space required for a subsequent rod-eliminating move.
-        No speculative geometry is accepted; both rods are refit exactly.
+        The original search examined only a few candidate donors and at
+        most 48 fits, so it frequently never reached a 215-mm piece on
+        the short bottom rod. Here, all donor rods are eligible and the
+        important insertion immediately BEFORE the last piece is tested
+        explicitly, preserving the final piece's tail-flip opportunity.
+
+        Each accepted geometric candidate is still refitted in its new
+        sequence. We can prefer filling a nearly full rod even if total
+        used length is unchanged (or incurs a tiny extra cutting gap).
         """
         nonlocal guided_trials
         if len(states) < 2:
             return None
-        candidates = []
-        target_indices = sorted(
+        begin = trials
+        allowed_extra = max(10.0, gap_mm * 4.0)
+        selected = None
+        # Go through every receiving rod. Do not assume the most promising
+        # gap is near the top or bottom of the displayed nesting list.
+        targets = sorted(
             range(len(states)),
-            key=lambda i: (
-                # Prefer rods a small piece could make nearly full, but
-                # include the short bottom rods too.
-                abs(rod_length-states[i].used_span-400.0),
-                rod_length-states[i].used_span,
-                i,
-            )
+            key=lambda i: (-states[i].used_span, i),
         )
-        # Periodically prefer the sparsest rods to avoid focusing only on
-        # already near-full ones.
-        sparse = sorted(range(len(states)), key=lambda i: states[i].used_span)
-        target_indices = list(dict.fromkeys(
-            target_indices[:8] + sparse[:3]
-        ))
-        for target_i in target_indices:
+        for target_i in targets:
+            if trials-begin >= candidate_limit or time.perf_counter() >= deadline:
+                break
             target = states[target_i]
-            old_seq = [p.item_index for p in target.placed]
-            gap = max(0.0, rod_length-target.used_span)
-            options = []
+            target_seq = [p.item_index for p in target.placed]
+            empty_space = max(0.0, rod_length - target.used_span)
+            if empty_space < 4.0:
+                continue
+
+            # Scan every donor, not just the shortest few. Prefer a piece
+            # close to the available gap; include smaller pieces because
+            # using several of them can be needed to fill a rod.
+            possible_pieces = []
             for donor_i, donor in enumerate(states):
                 if donor_i == target_i:
                     continue
-                for source_pos, placed in enumerate(donor.placed):
-                    piece_idx = placed.item_index
+                for source_pos, placement in enumerate(donor.placed):
+                    piece_idx = placement.item_index
                     if not likely_fit(piece_idx, target):
                         continue
                     length = normalized[piece_idx].physical_length
-                    # Consider 400 mm class cuts even from nearly full rods.
-                    # Slight overlength is allowed for real angle overlaps.
-                    rank = (
-                        abs(length-gap),
-                        0 if donor.used_span > target.used_span else 1,
-                        source_pos,
-                    )
-                    options.append((rank, donor_i, source_pos, piece_idx))
-            options.sort()
-            candidates.extend(
-                (target_i, donor_i, pos, piece)
-                for _, donor_i, pos, piece in options[:12]
-            )
-        if not candidates:
-            return None
-        best_move = None
-        spent_at_start = trials
-        for target_i, donor_i, source_pos, piece_idx in candidates:
-            if trials-spent_at_start >= candidate_limit or time.perf_counter() >= deadline:
-                break
-            target = states[target_i]
-            donor = states[donor_i]
-            source_seq = [p.item_index for p in donor.placed]
-            dest_seq = [p.item_index for p in target.placed]
-            shortened = source_seq[:source_pos] + source_seq[source_pos+1:]
-            # Place where the end cut is geometrically promising, including
-            # the specific case: small piece immediately before the last.
-            for at in candidate_slots(target, piece_idx):
-                if trials-spent_at_start >= candidate_limit or time.perf_counter() >= deadline:
+                    possible_pieces.append((
+                        (
+                            abs(empty_space-length),
+                            0 if length <= empty_space+EPS else 1,
+                            -donor.used_span,
+                            length,
+                            donor_i,
+                            source_pos,
+                        ),
+                        donor_i, source_pos, piece_idx,
+                    ))
+            possible_pieces.sort(key=lambda row: row[0])
+            # Balanced candidate sampling: exact-gap fits, small parts,
+            # pieces from other full rods and pieces from low-filled rods.
+            # This avoids burying 215mm copies behind dozens of 400mm
+            # copies that happen to be a closer nominal match.
+            near = possible_pieces[:min(20, len(possible_pieces))]
+            shorter = sorted(possible_pieces,
+                             key=lambda x: normalized[x[3]].physical_length)[:12]
+            sparse = sorted(possible_pieces,
+                            key=lambda x: states[x[1]].used_span)[:10]
+            donor_options = list(dict.fromkeys(
+                (entry[1], entry[2], entry[3])
+                for entry in near + shorter + sparse
+            ))
+            for donor_i, source_pos, piece_idx in donor_options:
+                if trials-begin >= candidate_limit or time.perf_counter() >= deadline:
                     break
-                moved = fit(dest_seq[:at]+[piece_idx]+dest_seq[at:])
-                if moved is None or moved.used_span <= target.used_span+0.01:
-                    continue
-                remaining = fit(shortened) if shortened else None
-                if shortened and remaining is None:
-                    continue
-                before = target.used_span+donor.used_span
-                after = moved.used_span + (remaining.used_span if remaining else 0)
-                if after > before + max(3.0, gap_mm*3):
-                    continue
-                attempt = list(states)
-                attempt[target_i] = moved
-                if remaining:
-                    attempt[donor_i] = remaining
-                else:
-                    attempt.pop(donor_i)
-                identity = state_signature(attempt)
-                if identity in visited:
-                    continue
-                # A complete rod elimination always wins. Otherwise favor
-                # placing a piece near the target's stock end, while limiting
-                # net material waste and preferring new common-lines.
-                key = (
-                    0 if remaining is None else 1,
-                    abs(rod_length-moved.used_span),
-                    round(after-before, 3),
-                    -moved.common_lines,
-                    target_i, donor_i,
+                donor = states[donor_i]
+                donor_seq = [p.item_index for p in donor.placed]
+                remainder_seq = (
+                    donor_seq[:source_pos] + donor_seq[source_pos+1:]
                 )
-                if best_move is None or key < best_move[0]:
-                    best_move = (key, attempt)
-        guided_trials += trials-spent_at_start
-        return best_move[1] if best_move else None
+                # Rank actual matching end-cut angles, but never equate a
+                # matching angle with permission to share one laser cut.
+                insert_positions = candidate_slots(target, piece_idx)
+                for pos in insert_positions:
+                    if trials-begin >= candidate_limit or time.perf_counter() >= deadline:
+                        break
+                    new_target = fit(
+                        target_seq[:pos] + [piece_idx] + target_seq[pos:]
+                    )
+                    if new_target is None:
+                        continue
+                    remainder = fit(remainder_seq) if remainder_seq else None
+                    if remainder_seq and remainder is None:
+                        continue
+                    old_used = target.used_span + donor.used_span
+                    new_used = new_target.used_span + (
+                        remainder.used_span if remainder else 0.0
+                    )
+                    if new_used > old_used + allowed_extra:
+                        continue
+                    attempt = list(states)
+                    attempt[target_i] = new_target
+                    if remainder is None:
+                        attempt.pop(donor_i)
+                    else:
+                        attempt[donor_i] = remainder
+                    if state_signature(attempt) in visited:
+                        continue
+                    # Measure whether the move creates more reusable stock
+                    # by making one rod fuller and one donor emptier.
+                    new_concentration = (
+                        new_target.used_span**2 +
+                        (remainder.used_span if remainder else 0.0)**2
+                    )
+                    old_concentration = (
+                        target.used_span**2 + donor.used_span**2
+                    )
+                    if len(attempt) == len(states) and (
+                        new_concentration <= old_concentration + 0.01
+                        and new_used >= old_used - 0.05
+                    ):
+                        continue
+                    score = (
+                        len(attempt)-len(states),
+                        -(new_concentration-old_concentration)
+                            / max(1.0, rod_length**2),
+                        round(new_used-old_used, 3),
+                        abs(rod_length-new_target.used_span),
+                        donor_i, target_i, source_pos, pos,
+                    )
+                    if selected is None or score < selected[0]:
+                        selected = (score, attempt)
+                # If an excellent candidate is found, keep scanning more
+                # donors until budget expires; another move may eliminate a
+                # rod entirely rather than just filling one gap.
+
+        guided_trials += trials-begin
+        return selected[1] if selected else None
 
     def absorb_short_rod(states, *, trial_limit=75):
         """Try eliminating a short rod by fitting every piece elsewhere.
@@ -411,7 +444,10 @@ def optimize_existing_rods(
             guided = attempt is not None
         if attempt is None and len(working) > 1 and iteration % 3 != 2:
             emit("Riempimento mirato delle verghe", best)
-            attempt = directed_gap_transfer(working)
+            attempt = directed_gap_transfer(
+                working,
+                candidate_limit=min(360, max(100, 5*count)),
+            )
             guided = attempt is not None
 
         # Random fallback may take pieces from *any* rod, including the
