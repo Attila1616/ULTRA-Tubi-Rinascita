@@ -207,15 +207,25 @@ def optimize_existing_rods(
         begin = trials
         allowed_extra = max(10.0, gap_mm * 4.0)
         selected = None
-        # Go through every receiving rod. Do not assume the most promising
-        # gap is near the top or bottom of the displayed nesting list.
+        # A fair per-target work budget is essential. Previously the first
+        # few full rods consumed the entire 48-trial search, so the 5500-mm
+        # rods with a usable 215-mm gap were never visited. Skip only rods
+        # which have no candidate that could plausibly fit.
         targets = sorted(
             range(len(states)),
-            key=lambda i: (-states[i].used_span, i),
+            key=lambda i: (
+                0 if 100 <= rod_length-states[i].used_span <= 1400 else 1,
+                abs((rod_length-states[i].used_span)-350),
+                i,
+            ),
+        )
+        per_target_budget = max(
+            12, min(65, candidate_limit // max(1, len(targets)))
         )
         for target_i in targets:
             if trials-begin >= candidate_limit or time.perf_counter() >= deadline:
                 break
+            target_start_trials = trials
             target = states[target_i]
             target_seq = [p.item_index for p in target.placed]
             empty_space = max(0.0, rod_length - target.used_span)
@@ -255,12 +265,26 @@ def optimize_existing_rods(
                              key=lambda x: normalized[x[3]].physical_length)[:12]
             sparse = sorted(possible_pieces,
                             key=lambda x: states[x[1]].used_span)[:10]
-            donor_options = list(dict.fromkeys(
-                (entry[1], entry[2], entry[3])
-                for entry in near + shorter + sparse
-            ))
+            # Keep a representative from the first and last occurrence
+            # of each drawing per donor; identical quantity instances do
+            # not need to monopolize the same target's test budget.
+            options_by_drawing = {}
+            for entry in near + shorter + sparse:
+                donor_i, source_pos, piece_idx = entry[1:]
+                drawing_key = (
+                    donor_i, normalized[piece_idx].type_key
+                )
+                seen = options_by_drawing.setdefault(drawing_key, [])
+                if len(seen) < 2:
+                    seen.append((donor_i, source_pos, piece_idx))
+            donor_options = [
+                item for variants in options_by_drawing.values()
+                for item in variants
+            ]
             for donor_i, source_pos, piece_idx in donor_options:
-                if trials-begin >= candidate_limit or time.perf_counter() >= deadline:
+                if (trials-begin >= candidate_limit
+                    or trials-target_start_trials >= per_target_budget
+                    or time.perf_counter() >= deadline):
                     break
                 donor = states[donor_i]
                 donor_seq = [p.item_index for p in donor.placed]
@@ -271,7 +295,9 @@ def optimize_existing_rods(
                 # matching angle with permission to share one laser cut.
                 insert_positions = candidate_slots(target, piece_idx)
                 for pos in insert_positions:
-                    if trials-begin >= candidate_limit or time.perf_counter() >= deadline:
+                    if (trials-begin >= candidate_limit
+                        or trials-target_start_trials >= per_target_budget
+                        or time.perf_counter() >= deadline):
                         break
                     new_target = fit(
                         target_seq[:pos] + [piece_idx] + target_seq[pos:]
