@@ -212,6 +212,15 @@ class DeepNestingTests(unittest.TestCase):
                 rod_length=600, dead_zone_mm=0, time_budget_s=.1,
             )
 
+    def test_deep_optimizer_respects_configured_tail_reserve_cutoff(self):
+        # Pieces longer than the cutoff are core pieces, not reserved tails.
+        from tubenest_engine.tail_reserve import tail_reserve_eligible
+        pieces = sample([5200, 600])
+        normalized = core._normalize_items(pieces, 6001)
+        self.assertFalse(tail_reserve_eligible(normalized[0], 5000, 400))
+        self.assertTrue(tail_reserve_eligible(normalized[1], 5000, 400))
+        self.assertFalse(tail_reserve_eligible(normalized[1], 500, 400))
+
     def test_up_to_five_minute_budget_for_120_pieces(self):
         # The budget is proportional to work size and capped at 300 s.
         from tubenest_engine import deep_optimizer
