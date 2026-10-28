@@ -2289,7 +2289,10 @@ async function optimizeGroupNesting(tubeType) {
         alert('Ottimizzazione completata. Verghe: ' + oldCount + ' → ' +
             newCount + '. Lunghezza occupata totale: ' +
             oldUsed.toFixed(1) + ' → ' + newUsed.toFixed(1) +
-            ' mm. Tentativi: ' + (stats.trials ?? '—') + '.');
+            ' mm. Tentativi geometrici: ' + (stats.trials ?? '—') +
+            '. Inserimenti mirati: ' + (stats.guidedMoves ?? 0) +
+            '. Tentativi di eliminazione verghe: ' +
+            (stats.rodEliminationAttempts ?? 0) + '.');
     } catch (error) {
         console.error('[TubeNest DEEP] Optimization failed', error);
         alert(error?.message || 'Errore ottimizzazione approfondita.');
