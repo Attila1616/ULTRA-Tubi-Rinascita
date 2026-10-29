@@ -446,6 +446,9 @@ async function openSettingsModal() {
         document.getElementById('settings-nested-text-marking-height-mm').value = Number.isFinite(Number(config.nested_text_marking_height_mm))
             ? Math.min(10, Math.max(1, Number(config.nested_text_marking_height_mm)))
             : 5;
+        document.getElementById('settings-nested-text-marking-min-height-mm').value =
+            Number.isFinite(Number(config.nested_text_marking_min_height_mm))
+                ? Math.min(10, Math.max(0.5, Number(config.nested_text_marking_min_height_mm))) : 2;
         const roundTipMode = ['short', 'long', 'both', 'none'].includes(String(config.nested_round_tip_marking_mode || '').toLowerCase())
             ? String(config.nested_round_tip_marking_mode).toLowerCase()
             : (config.nested_round_tip_marking_enabled !== false ? 'short' : 'none');
@@ -588,6 +591,8 @@ async function saveSettings() {
             igs_hide_quantity_mismatch_warnings: document.getElementById('settings-igs-hide-quantity-mismatches').checked,
             nested_text_marking_enabled: document.getElementById('settings-nested-text-marking-enabled').checked,
             nested_round_text_head_motion_enabled: document.getElementById('settings-round-text-head-motion-enabled').checked,
+            nested_text_marking_min_height_mm: Math.min(10, Math.max(0.5,
+                Number(document.getElementById('settings-nested-text-marking-min-height-mm').value) || 2)),
             nested_text_marking_height_mm: Math.min(
                 10,
                 Math.max(
