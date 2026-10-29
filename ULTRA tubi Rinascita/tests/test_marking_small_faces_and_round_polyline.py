@@ -5,6 +5,7 @@ import unittest
 from tubenest_engine.bcmp import Block, Record
 from tubenest_engine.text_marking import (
     MarkingFitError, build_marking_records, build_round_marking_records,
+    distribute_marking_lines_across_faces, marking_layout_candidates,
 )
 
 
@@ -24,6 +25,60 @@ def prepared(strokes, lines):
 
 
 class NarrowFlatTextTests(unittest.TestCase):
+    def test_20x20_three_line_label_has_no_empty_fourth_face(self):
+        label = "PROD 80\\nTD1905A00318\\nL200"
+        lines = marking_layout_candidates(label.replace("\\\\n", "\\n"))[0]
+        groups = distribute_marking_lines_across_faces(lines, 4)
+        self.assertEqual(groups, [["PROD 80"], ["TD1905A00318"], ["L200"]])
+        self.assertEqual(sum(map(len, groups)), len(lines))
+        self.assertTrue(all(groups))
+
+    def test_two_and_four_line_markings_use_only_occupied_faces(self):
+        for count in (1, 2, 3, 4, 5, 7):
+            with self.subTest(count=count):
+                lines = [f"LINE {i}" for i in range(count)]
+                groups = distribute_marking_lines_across_faces(lines, 4)
+                self.assertEqual(len(groups), min(count, 4))
+                self.assertEqual(
+                    [line for group in groups for line in group], lines
+                )
+                self.assertTrue(all(group for group in groups))
+
+    def test_empty_or_unavailable_faces_never_make_blank_text_group(self):
+        self.assertEqual(distribute_marking_lines_across_faces([], 4), [])
+        self.assertEqual(distribute_marking_lines_across_faces(
+            ["L200", "TD.00189"], 0
+        ), [])
+
+    def test_20x20_each_split_line_can_be_generated_on_its_own_face(self):
+        lines = ["PROD 80", "TD1905A00318", "L200"]
+        groups = distribute_marking_lines_across_faces(lines, 4)
+        for index, (group, face) in enumerate(
+            zip(groups, ("+Y", "+X", "-Y", "-X"))
+        ):
+            with self.subTest(face=face):
+                result = build_marking_records(
+                    source_shape_record=source_record(),
+                    font_path="unused",
+                    lines=group,
+                    height_mm=3.0,
+                    start_z=5.0,
+                    outside_width=20.0,
+                    outside_height=20.0,
+                    corner_radius=2.0,
+                    max_z=250.0,
+                    first_handle=1100+index,
+                    face=face,
+                    prepared_layout=prepared(
+                        [[(0.0, -3.0), (12.0, 3.0)]], group
+                    ),
+                )
+                self.assertEqual(result["report"]["layout_lines"], group)
+                self.assertEqual(result["report"]["face"], face)
+                self.assertEqual(
+                    result["report"]["corner_safety_margin_mm"], 2.0
+                )
+
     def test_20x20_flat_face_with_two_mm_corner_clearance(self):
         test = build_marking_records(
             source_shape_record=source_record(),
