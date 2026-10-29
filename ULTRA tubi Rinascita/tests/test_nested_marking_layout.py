@@ -74,6 +74,38 @@ class NestedMarkingLayoutTests(unittest.TestCase):
             text.splitlines(), ["p prod 80", "TD1905A00318", "TD.00189", "L200"]
         )
 
+    def test_only_first_td_folder_below_tt_counts(self):
+        segment = {
+            "mainFolder": "03 p prod 80",
+            "filePath": os.path.join(
+                "Da Fare", "03 p prod 80", "TT",
+                "TD1111A00001", "TD2222B00002", "TD3333C00003",
+                "tubolare 20x20x2", "TD4444D00004 L200.zzx",
+            ),
+            "fileName": "TD4444D00004 L200.zzx",
+            "length": 200,
+        }
+        self.assertEqual(
+            _build_nested_marking_text(segment, {}).splitlines(),
+            ["p prod 80", "TD1111A00001", "TD.00004", "L200"],
+        )
+
+    def test_first_td_folder_may_be_below_non_td_tt_subfolder(self):
+        segment = {
+            "mainFolder": "03 p prod 80",
+            "filePath": os.path.join(
+                "Da Fare", "03 p prod 80", "TT",
+                "altro", "TD1111A00001", "TD2222B00002",
+                "tubo", "TD1111A00001 L300.zzx",
+            ),
+            "fileName": "TD1111A00001 L300.zzx",
+            "length": 300,
+        }
+        self.assertEqual(
+            _build_nested_marking_text(segment, {}).splitlines(),
+            ["p prod 80", "TD1111A00001", "L300"],
+        )
+
     def test_no_file_td_omits_only_file_entry(self):
         text = self.build_marking("aisi 304 tubolare 50x50x2 L200 2pz.zzx")
         self.assertEqual(text.splitlines(), ["p prod 80", "TD1905A00318", "L200"])
