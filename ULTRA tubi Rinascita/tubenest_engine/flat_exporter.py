@@ -31,6 +31,7 @@ from .text_marking import (
     build_round_tip_line_records,
     layout_text_strokes,
     marking_layout_candidates,
+    distribute_marking_lines_across_faces,
     validate_romans_font,
 )
 
@@ -1828,17 +1829,11 @@ def _flat_transform(
                             break
                         if len(layout_lines) < 2:
                             continue
-                        face_count = min(4, len(spatial_positions))
-                        counts = [
-                            len(layout_lines) // face_count
-                            + (1 if i < len(layout_lines) % face_count else 0)
-                            for i in range(face_count)
-                        ]
-                        line_groups = []
-                        cursor = 0
-                        for count in counts:
-                            line_groups.append(layout_lines[cursor:cursor+count])
-                            cursor += count
+                        line_groups = distribute_marking_lines_across_faces(
+                            layout_lines, min(4, len(spatial_positions))
+                        )
+                        if not line_groups:
+                            continue
                         for text_height in marking_scales:
                             parts = []
                             descriptions = []
