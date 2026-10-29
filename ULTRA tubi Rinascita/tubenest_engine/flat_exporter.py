@@ -1789,6 +1789,26 @@ def _flat_transform(
                         selected_text_height = text_height
                         break
 
+                # Prefer a readable full-size label distributed across
+                # flat faces over an unnecessarily tiny single-face label.
+                # Retain the proven scaled layout as a fallback if multi-face
+                # placement cannot clear holes or other geometry.
+                scaled_single_fallback = None
+                if (
+                    addition is not None
+                    and marking_profile_kind in {"Square", "Rect"}
+                    and selected_text_height < text_marking_height_mm - 1e-6
+                ):
+                    scaled_single_fallback = (
+                        addition, selected_layout_index,
+                        selected_spatial_position,
+                        selected_local_surface_position,
+                        selected_start_z, selected_preferred_start_z,
+                        selected_start_limits, selected_end_clearances,
+                        selected_text_height, selected_multiface,
+                    )
+                    addition = None
+
                 # If all lines cannot share one flat face, distribute them
                 # across available faces. This is particularly important for
                 # 20x20 tubes with long multi-line PROD/TD/L labels.
@@ -1988,6 +2008,16 @@ def _flat_transform(
                             selected_text_height = text_height
                             selected_multiface = True
                             break
+
+                if addition is None and scaled_single_fallback is not None:
+                    (
+                        addition, selected_layout_index,
+                        selected_spatial_position,
+                        selected_local_surface_position,
+                        selected_start_z, selected_preferred_start_z,
+                        selected_start_limits, selected_end_clearances,
+                        selected_text_height, selected_multiface,
+                    ) = scaled_single_fallback
 
                 if addition is None:
                     reason = (
