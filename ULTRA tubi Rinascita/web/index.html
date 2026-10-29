@@ -433,6 +433,11 @@
                     <input id="settings-nested-text-marking-height-mm" type="number" min="1" max="10" step="0.5" value="5" class="search-input search-input-small">
                     <span>mm, da 1 a 10</span>
                 </div>
+                <div class="settings-threshold-grid">
+                    <label for="settings-nested-text-marking-min-height-mm">Altezza minima testo automatico</label>
+                    <input id="settings-nested-text-marking-min-height-mm" type="number" min="0.5" max="10" step="0.5" value="2" class="search-input search-input-small">
+                    <span>mm: se il testo non entra, ULTRA riduce l'altezza fino a questo valore e può distribuirlo su più facce. Margine di sicurezza di 2 mm dagli angoli arrotondati.</span>
+                </div>
                 <label class="settings-checkbox-row">
                     <input id="settings-round-text-head-motion-enabled" type="checkbox" checked>
                     <span>Usa movimento testa per la marcatura TEXT sui tubi tondi</span>
