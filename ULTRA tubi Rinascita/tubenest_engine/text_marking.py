@@ -499,6 +499,7 @@ def build_marking_records(
     face_y=None,
     prepared_layout=None,
     axial_direction=1.0,
+    safety_margin_mm=2.0,
 ):
     """Build planar channel-4 text on one true flat tube face.
 
@@ -508,6 +509,7 @@ def build_marking_records(
     height_mm = float(height_mm)
     start_z = float(start_z)
     corner_radius = max(0.0, float(corner_radius or 0.0))
+    safety_margin_mm = max(0.0, float(safety_margin_mm))
     max_z = float(max_z)
     axial_direction = float(axial_direction)
     if axial_direction not in (-1.0, 1.0):
@@ -554,7 +556,7 @@ def build_marking_records(
         return start_z - (axial_hi - value)
 
     if face == "+Y":
-        transverse_limit = outside_width / 2.0 - corner_radius
+        transverse_limit = outside_width / 2.0 - corner_radius - safety_margin_mm
         normal = (0.0, 1.0, 0.0)
 
         def lift(point):
@@ -565,7 +567,7 @@ def build_marking_records(
             )
 
     elif face == "+X":
-        transverse_limit = outside_height / 2.0 - corner_radius
+        transverse_limit = outside_height / 2.0 - corner_radius - safety_margin_mm
         normal = (1.0, 0.0, 0.0)
 
         def lift(point):
@@ -576,7 +578,7 @@ def build_marking_records(
             )
 
     elif face == "-Y":
-        transverse_limit = outside_width / 2.0 - corner_radius
+        transverse_limit = outside_width / 2.0 - corner_radius - safety_margin_mm
         normal = (0.0, -1.0, 0.0)
 
         def lift(point):
@@ -587,7 +589,7 @@ def build_marking_records(
             )
 
     elif face == "-X":
-        transverse_limit = outside_height / 2.0 - corner_radius
+        transverse_limit = outside_height / 2.0 - corner_radius - safety_margin_mm
         normal = (-1.0, 0.0, 0.0)
 
         def lift(point):
@@ -654,6 +656,7 @@ def build_marking_records(
             "outside_width_mm": outside_width,
             "outside_height_mm": outside_height,
             "corner_radius_mm": corner_radius,
+            "corner_safety_margin_mm": safety_margin_mm,
             "flat_transverse_limit": transverse_limit,
             # Backward-compatible diagnostic key used by older tests/tools.
             "flat_x_limit": transverse_limit,
