@@ -26,8 +26,9 @@ def prepared(strokes, lines):
 
 class NarrowFlatTextTests(unittest.TestCase):
     def test_20x20_three_line_label_has_no_empty_fourth_face(self):
-        label = "PROD 80\\nTD1905A00318\\nL200"
-        lines = marking_layout_candidates(label.replace("\\\\n", "\\n"))[0]
+        lines = marking_layout_candidates(chr(10).join(
+            ["PROD 80", "TD1905A00318", "L200"]
+        ))[0]
         groups = distribute_marking_lines_across_faces(lines, 4)
         self.assertEqual(groups, [["PROD 80"], ["TD1905A00318"], ["L200"]])
         self.assertEqual(sum(map(len, groups)), len(lines))
