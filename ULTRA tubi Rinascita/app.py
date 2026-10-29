@@ -173,6 +173,7 @@ class Api:
         self.config.setdefault("igs_hide_quantity_mismatch_warnings", False)
         self.config.setdefault("nested_text_marking_enabled", False)
         self.config.setdefault("nested_text_marking_height_mm", 5.0)
+        self.config.setdefault("nested_text_marking_min_height_mm", 2.0)
         self.config.setdefault("nested_round_text_head_motion_enabled", True)
         round_tip_mode = str(
             self.config.get("nested_round_tip_marking_mode") or ""
@@ -253,6 +254,14 @@ class Api:
                 updated.get("nested_text_marking_enabled", False),
             )
         )
+        try:
+            height = float(payload.get("nested_text_marking_min_height_mm",
+                                       updated.get("nested_text_marking_min_height_mm", 2.0)))
+            updated["nested_text_marking_min_height_mm"] = (
+                max(0.5, min(10.0, height)) if math.isfinite(height) else 2.0
+            )
+        except (ValueError, TypeError):
+            updated["nested_text_marking_min_height_mm"] = 2.0
         updated["nested_round_text_head_motion_enabled"] = bool(
             payload.get(
                 "nested_round_text_head_motion_enabled",
