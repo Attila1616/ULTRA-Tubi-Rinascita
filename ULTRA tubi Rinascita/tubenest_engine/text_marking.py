@@ -256,6 +256,32 @@ def marking_layout_candidates(text):
             seen.add(cleaned)
     return unique
 
+def distribute_marking_lines_across_faces(lines, available_faces):
+    """Split an ordered label across at most one nonempty group per face.
+
+    A three-line 20x20 label must use three faces, not four groups where
+    the last group is empty. Empty groups must never reach
+    layout_text_strokes(), which correctly rejects invisible labels.
+    Preserve every visible line exactly once, in the original order.
+    """
+    visible = [str(line).strip() for line in (lines or []) if str(line).strip()]
+    try:
+        faces = max(0, int(available_faces))
+    except (ValueError, TypeError, OverflowError):
+        faces = 0
+    count = min(len(visible), faces)
+    if not count:
+        return []
+    base, extra = divmod(len(visible), count)
+    groups = []
+    offset = 0
+    for face_index in range(count):
+        size = base + (1 if face_index < extra else 0)
+        groups.append(visible[offset:offset + size])
+        offset += size
+    return groups
+
+
 def layout_text_strokes(
     font_path,
     lines,
