@@ -1281,6 +1281,7 @@ def _flat_transform(
     *,
     text_marking_enabled=False,
     text_marking_height_mm=5.0,
+    text_marking_min_height_mm=2.0,
     text_marking_font_path=None,
     text_marking_offset_mm=5.0,
     round_text_head_motion_enabled=True,
@@ -1367,6 +1368,12 @@ def _flat_transform(
             raise ValueError("Text marking font path is not configured")
         validate_romans_font(text_marking_font_path)
         text_marking_height_mm = float(text_marking_height_mm)
+        text_marking_min_height_mm = float(text_marking_min_height_mm)
+        if not (0.5 <= text_marking_min_height_mm <= 10.0):
+            raise ValueError("Minimum TEXT marking height must be between 0.5 and 10 mm")
+        text_marking_min_height_mm = min(
+            text_marking_height_mm, text_marking_min_height_mm
+        )
         if not (1.0 <= text_marking_height_mm <= 10.0):
             raise ValueError("Text marking height must be between 1 and 10 mm")
 
@@ -2223,6 +2230,7 @@ def export_flat_nested_rod(
     title=None,
     text_marking_enabled=False,
     text_marking_height_mm=5.0,
+    text_marking_min_height_mm=2.0,
     text_marking_font_path=None,
     round_text_head_motion_enabled=True,
     round_tip_marking_enabled=False,
@@ -2261,6 +2269,7 @@ def export_flat_nested_rod(
         rod_length,
         text_marking_enabled=bool(text_marking_enabled),
         text_marking_height_mm=float(text_marking_height_mm),
+        text_marking_min_height_mm=float(text_marking_min_height_mm),
         text_marking_font_path=text_marking_font_path,
         round_text_head_motion_enabled=bool(round_text_head_motion_enabled),
         round_tip_marking_enabled=bool(round_tip_marking_enabled),
@@ -2311,6 +2320,7 @@ def export_flat_nested_rod_to_directory(
     gap_mm=2.0,
     text_marking_enabled=False,
     text_marking_height_mm=5.0,
+    text_marking_min_height_mm=2.0,
     text_marking_font_path=None,
     round_text_head_motion_enabled=True,
     round_tip_marking_enabled=False,
@@ -2330,6 +2340,7 @@ def export_flat_nested_rod_to_directory(
         title=output_path.stem,
         text_marking_enabled=text_marking_enabled,
         text_marking_height_mm=text_marking_height_mm,
+        text_marking_min_height_mm=text_marking_min_height_mm,
         text_marking_font_path=text_marking_font_path,
         round_text_head_motion_enabled=round_text_head_motion_enabled,
         round_tip_marking_enabled=round_tip_marking_enabled,
