@@ -2458,9 +2458,6 @@ def export_locked_rod_zzx(payload):
             text_marking_min_height_mm = 2.0
         if not math.isfinite(text_marking_min_height_mm):
             text_marking_min_height_mm = 2.0
-        text_marking_min_height_mm = min(
-            text_marking_height_mm, max(0.5, text_marking_min_height_mm)
-        )
         try:
             text_marking_height_mm = float(
                 config.get("nested_text_marking_height_mm", 5.0)
@@ -2470,6 +2467,9 @@ def export_locked_rod_zzx(payload):
         text_marking_height_mm = min(
             10.0,
             max(1.0, text_marking_height_mm),
+        )
+        text_marking_min_height_mm = min(
+            text_marking_height_mm, max(0.5, text_marking_min_height_mm)
         )
 
         round_tip_marking_mode = str(
