@@ -158,6 +158,12 @@ class ModernUIContractTests(unittest.TestCase):
         self.assertIn("tubeType, 'fast'", self.script)
         self.assertIn("tubeType, 'deep'", self.script)
 
+    def test_minimum_text_height_setting_for_narrow_tubes(self):
+        self.assertIn('id="settings-nested-text-marking-min-height-mm"', self.index)
+        self.assertIn("nested_text_marking_min_height_mm:", self.script)
+        self.assertIn("config.nested_text_marking_min_height_mm", self.script)
+        self.assertIn('id="settings-round-text-head-motion-enabled"', self.index)
+
     def test_light_only_presentation(self):
         self.assertIn("color-scheme: light", self.css)
         self.assertNotIn("prefers-color-scheme: dark", self.css)
