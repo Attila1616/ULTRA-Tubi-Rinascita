@@ -14,7 +14,7 @@ from pathlib import Path
 import struct
 import xml.etree.ElementTree as ET
 
-from .bcmp import FormatError, vector
+from .bcmp import Block, Record, FormatError, vector
 from .geometry import Line, composite
 
 
@@ -373,6 +373,7 @@ def _build_shape_records(
     first_handle,
     curve_flags,
     planar_normal,
+    geometry_style="composite",
 ):
     shape_records = []
     geometry_records = []
@@ -381,15 +382,38 @@ def _build_shape_records(
     next_handle = int(first_handle)
 
     for points in paths:
-        geometry_record = composite(
-            [
-                Line(
-                    point,
-                    tuple(b - a for a, b in zip(point, next_point)),
+        if geometry_style == "polyline":
+            # TubeST 7.1.27.1 writes each head-motion marking stroke as a
+            # single Polyline3D BCMP record, with Curve flag 0x80. Do not
+            # split its points into CompositeCurve3D/Line3D blocks: those
+            # are semantically equivalent geometry, but not the native
+            # head-motion representation in the supplied TubeST sample.
+            if len(points) < 2:
+                continue
+            polyline_payload = (
+                struct.pack("<I", len(points)) + b"".join(
+                    vector(tuple(map(float, point)))
+                    for point in points
                 )
-                for point, next_point in zip(points, points[1:])
-            ]
-        )
+            )
+            geometry_record = Record(
+                "TGePolyline3D",
+                [
+                    Block("Polyline3D"),
+                    Block("Curve3D", payload=bytes(4)),
+                    Block("Polyline3D", payload=polyline_payload),
+                ],
+            )
+        else:
+            geometry_record = composite(
+                [
+                    Line(
+                        point,
+                        tuple(b - a for a, b in zip(point, next_point)),
+                    )
+                    for point, next_point in zip(points, points[1:])
+                ]
+            )
 
         shape_record = deepcopy(source_shape_record)
         object_block = next(
@@ -437,7 +461,8 @@ def _build_shape_records(
         geometry_element = ET.SubElement(
             shape_element,
             "Geometry",
-            Class="CompositeCurve3D",
+            Class="Polyline3D" if geometry_style == "polyline"
+                  else "CompositeCurve3D",
         )
         segment_ref = ET.Element("GeoCurve", Handle=str(next_handle))
 
@@ -824,6 +849,7 @@ def build_round_marking_records(
         first_handle=first_handle,
         curve_flags=curve_flags,
         planar_normal=(0.0, 0.0, 0.0),
+        geometry_style="polyline" if head_motion_mode else "composite",
     )
     report.update(geometry_report)
     all_points = [point for path in paths for point in path]
@@ -849,9 +875,10 @@ def build_round_marking_records(
             "head_motion_mode": head_motion_mode,
             "planar_normal": [0.0, 0.0, 0.0],
             "representation": (
-                "CompositeCurve3D with subdivided Line3D chords on the "
-                "outside cylinder using TubesT Curve flag 0x80 for "
-                "perpendicular/head-motion machining"
+                "TubeST-style Polyline3D surface strokes with Curve 0x80"
+                if head_motion_mode else
+                "CompositeCurve3D chords using rotational marking"
+            
             ),
         }
     )
