@@ -2229,12 +2229,23 @@ def _abbreviate_marking_td_code(code):
 
 
 def _marking_td_folder_codes(file_path):
-    """Full TD code(s) from the nearest folder containing a TD identifier."""
-    parts = os.path.normpath(str(file_path or "")).split(os.path.sep)
-    for part in reversed(parts[:-1]):
-        codes = _marking_td_codes(part)
-        if codes:
-            return codes
+    """Return ONLY the first TD-bearing folder below TT, never its children.
+
+    Examples:
+      TT/TD0001A00001/TD0002B00002/tube/file.zzx -> TD0001A00001
+      TT/profile/TD0002B00002/file.zzx -> TD0002B00002
+    Once the first TD folder is found, no TD codes in deeper folders count.
+    """
+    parts = re.split(r"[\\/]+", str(file_path or "").strip())
+    folders = parts[:-1]
+    for index, name in enumerate(folders):
+        if name.strip().upper() != "TT":
+            continue
+        for subfolder in folders[index + 1:]:
+            codes = _marking_td_codes(subfolder)
+            if codes:
+                return codes[:1]
+        return []
     return []
 
 
@@ -2275,11 +2286,8 @@ def _marking_length_variant(file_name, file_path=""):
 def _find_marking_td_code(file_path):
     """Legacy full-folder-code accessor for any external callers."""
     parts = os.path.normpath(str(file_path or "")).split(os.path.sep)
-    for part in reversed(parts[:-1]):
-        match = _TEXT_TD_RE.search(part)
-        if match:
-            return match.group(0).upper()
-    return ""
+    codes = _marking_td_folder_codes(file_path)
+    return codes[0] if codes else ""
 
 
 def _format_marking_length(value, file_name=""):
