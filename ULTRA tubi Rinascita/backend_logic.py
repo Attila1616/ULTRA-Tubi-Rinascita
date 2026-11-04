@@ -1112,16 +1112,28 @@ def generate_tube_order_txt(da_fare_path=None):
         thresholds = _order_priority_thresholds(config)
         include_low_priority = _order_include_low_priority(config)
         priority_rank = {"alta": 0, "media": 1, "bassa": 2}
-        eligible = []
+        manual_keys = tube_database.load_manual_order_keys(VARIABLES_ROOT)
+        # Automatic reorders plus explicitly requested tubes, deduplicated
+        # by their canonical tube identity (not the text description).
+        eligible_by_key = {}
         for row in tube_database.get_order_priority_rows(VARIABLES_ROOT):
             priority = tube_database.normalize_order_priority(row.get("priorita"))
             quantity = int(row.get("quantitaTotale") or 0)
             if priority == "bassa" and not include_low_priority:
                 continue
             if priority and quantity <= thresholds[priority]:
-                eligible.append(row)
-
+                key = tube_database.identity_key_from_tube(row)
+                eligible_by_key[key] = dict(row)
+        # This snapshot is read at generation time, so even manually
+        # selected tubes show their CURRENT inventory total.
+        inventory = tube_database.summarize_inventory(VARIABLES_ROOT, {})
+        for row in inventory:
+            key = tube_database.identity_key_from_tube(row)
+            if key in manual_keys:
+                eligible_by_key[key] = dict(row)
+        eligible = list(eligible_by_key.values())
         eligible.sort(key=lambda row: (
+            0 if tube_database.identity_key_from_tube(row) in manual_keys else 1,
             priority_rank.get(row.get("priorita"), 9),
             row.get("forma", ""),
             str(row.get("misura", "")),
@@ -1131,12 +1143,13 @@ def generate_tube_order_txt(da_fare_path=None):
         ))
 
         lines = []
-        seen_lines = set()
         for row in eligible:
             line = _format_order_tube_line(row)
-            if line and line not in seen_lines:
-                lines.append(line)
-                seen_lines.add(line)
+            if line:
+                quantity = int(row.get("quantitaTotale") or 0)
+                lines.extend([line, f"Giacenza attuale: {quantity} verghe", ""])
+        if lines:
+            lines.pop()
 
         if not lines:
             return {
@@ -1157,7 +1170,7 @@ def generate_tube_order_txt(da_fare_path=None):
         return {
             "status": "success",
             "path": file_path,
-            "rows_count": len(lines),
+            "rows_count": len(eligible),
             "thresholds": thresholds,
             "include_low_priority": include_low_priority,
         }
