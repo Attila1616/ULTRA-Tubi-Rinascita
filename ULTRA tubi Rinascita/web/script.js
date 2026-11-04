@@ -43,6 +43,7 @@ let historyList, startDateInput, endDateInput, lastCheckedCheckbox = null;
 let isCtrlPressed = false;
 let isShiftPressed = false;
 let tubeDatabaseRows = [];
+let dbOrderSelected = new Set();
 let tubeDatabaseDebug = {};
 let tubeDatabaseLocations = [];
 let tubeDatabaseTargets = [];
@@ -226,6 +227,10 @@ if (searchModal) searchModal.addEventListener('mousedown', (e) => { if (e.target
     document.getElementById('db-export-xlsx-btn')?.addEventListener('click', openInventoryExportModal);
     document.getElementById('db-order-priorities-btn')?.addEventListener('click', openOrderPriorityModal);
     document.getElementById('db-order-txt-btn')?.addEventListener('click', generateTubeOrderTxt);
+    document.getElementById('db-order-select-visible')?.addEventListener('change', selectVisibleTubeOrders);
+    document.getElementById('db-order-add-selected')?.addEventListener('click', () => updateSelectedTubeOrders('add'));
+    document.getElementById('db-order-remove-selected')?.addEventListener('click', () => updateSelectedTubeOrders('remove'));
+    tubeDatabaseContainer?.addEventListener('change', handleTubeOrderSelectionChange);
     document.getElementById('adhoc-docx-btn')?.addEventListener('click', generateAdhocDocx);
     document.getElementById('adhoc-reset-btn')?.addEventListener('click', resetAdhocBaseline);
     if (dbListViewBtn) dbListViewBtn.addEventListener('click', () => setTubeDatabaseMode('list'));
@@ -1112,6 +1117,78 @@ async function loadTubeDatabase() {
         tubeDatabaseStatus.textContent = 'Errore durante il caricamento del Database Tubi.';
     }
 }
+function updateTubeOrderSelectionToolbar() {
+    const visible = tubeDatabaseRows.map(row => row.key).filter(Boolean);
+    const allSelected = visible.length > 0 &&
+        visible.every(key => dbOrderSelected.has(key));
+    const anySelected = visible.some(key => dbOrderSelected.has(key));
+    const toggle = document.getElementById('db-order-select-visible');
+    if (toggle) {
+        toggle.checked = allSelected;
+        toggle.indeterminate = anySelected && !allSelected;
+        toggle.disabled = visible.length === 0;
+    }
+    const status = document.getElementById('db-order-selection-status');
+    if (status) {
+        const manuallyOrdered = tubeDatabaseRows.filter(row => row.manualOrder).length;
+        status.textContent = dbOrderSelected.size + ' selezionati · ' +
+            manuallyOrdered + ' già in ordine (tra i visibili)';
+    }
+    for (const id of ['db-order-add-selected', 'db-order-remove-selected']) {
+        const button = document.getElementById(id);
+        if (button) button.disabled = dbOrderSelected.size === 0;
+    }
+}
+
+function selectVisibleTubeOrders(event) {
+    const checked = !!event.target.checked;
+    tubeDatabaseRows.forEach(row => {
+        if (!row.key) return;
+        if (checked) dbOrderSelected.add(row.key);
+        else dbOrderSelected.delete(row.key);
+    });
+    renderTubeDatabase(tubeDatabaseDebug);
+}
+
+function handleTubeOrderSelectionChange(event) {
+    const input = event.target.closest('input.database-order-select');
+    if (!input) return;
+    const key = input.dataset.orderKey;
+    if (!key) return;
+    if (input.checked) dbOrderSelected.add(key);
+    else dbOrderSelected.delete(key);
+    // One tube type may be present on several location cards. Keep every
+    // checkbox in sync with its canonical identity across both views.
+    renderTubeDatabase(tubeDatabaseDebug);
+}
+
+async function updateSelectedTubeOrders(operation) {
+    const keys = [...dbOrderSelected];
+    if (!keys.length) {
+        alert('Seleziona almeno un tubo dal database.');
+        return;
+    }
+    if (!['add', 'remove'].includes(operation)) return;
+    const add = operation === 'add';
+    try {
+        const result = await window.pywebview.api.set_manual_tube_order({
+            operation, keys
+        });
+        if (result?.status !== 'success') {
+            throw new Error(result?.message || 'Impossibile aggiornare Ordine tubi.');
+        }
+        dbOrderSelected.clear();
+        await loadTubeDatabase();
+        alert((add ? 'Tubi aggiunti a Ordine tubi: ' :
+            'Tubi rimossi da Ordine tubi: ') +
+            result.changed + '. Totale selezionati manualmente: ' +
+            result.selected_count + '.');
+    } catch (error) {
+        console.error('[TubeNest ORDER] Manual tube order failed:', error);
+        alert(error?.message || 'Errore durante la modifica di Ordine tubi.');
+    }
+}
+
 function orderPriorityBadge(priority) {
     const normalized = ['bassa', 'media', 'alta'].includes(String(priority || '').toLowerCase())
         ? String(priority).toLowerCase()
@@ -1123,6 +1200,7 @@ function renderTubeDatabase(debug) {
     const totalTypes = tubeDatabaseRows.length;
     const totalQuantity = tubeDatabaseRows.reduce((sum, row) => sum + (parseInt(row.quantitaTotale, 10) || 0), 0);
     tubeDatabaseStatus.textContent = `${totalTypes} tipi tubo visualizzati, ${totalQuantity} verghe totali. Posizioni: ${debug.position_rows || '-'} in ${debug.locations_count || '-'} ubicazioni.`;
+    updateTubeOrderSelectionToolbar();
 
     if (tubeDatabaseMode === 'panel') {
         renderTubeDatabasePanels();
