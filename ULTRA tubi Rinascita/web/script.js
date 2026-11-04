@@ -1214,6 +1214,7 @@ function renderTubeDatabase(debug) {
 
     const rows = [...tubeDatabaseRows].sort(compareTubeDatabaseRows);
     const headers = [
+        { key: 'select', label: 'Selez.' },
         { key: 'misura', label: 'Misura' },
         { key: 'spessore', label: 'Spessore' },
         { key: 'forma', label: 'Forma' },
@@ -1229,7 +1230,8 @@ function renderTubeDatabase(debug) {
     let html = '<div class="database-table">';
     headers.forEach(header => {
         const arrow = header.key === tubeDatabaseSort.key ? (tubeDatabaseSort.dir === 'asc' ? '▲' : '▼') : '';
-        const sortAttr = header.key === 'actions' ? '' : ` data-db-sort="${header.key}"`;
+        const sortAttr = ['actions', 'select'].includes(header.key)
+            ? '' : ` data-db-sort="${header.key}"`;
         html += `<div class="database-header"${sortAttr}>${header.label} <span class="sort-arrow">${arrow}</span></div>`;
     });
 
@@ -1239,7 +1241,15 @@ function renderTubeDatabase(debug) {
             .map(pos => `${escapeHtml(pos.label)} ${pos.quantita}V`)
             .join('<br>');
 
-        html += `<div class="database-cell"><strong>${escapeHtml(row.misura)}</strong></div>
+        const selected = dbOrderSelected.has(row.key) ? ' checked' : '';
+        const selectedLabel = row.manualOrder
+            ? '<span class="database-in-manual-order" title="Selezionato manualmente per Ordine tubi">In ordine</span>'
+            : '';
+        html += `<div class="database-cell database-selection-cell">
+                    <input type="checkbox" class="database-order-select" data-order-key="${escapeAttr(row.key)}"
+                        aria-label="Seleziona ${escapeAttr(row.misura)} per Ordine tubi"${selected}>
+                 </div>
+                 <div class="database-cell"><strong>${escapeHtml(row.misura)}</strong>${selectedLabel}</div>
                  <div class="database-cell">${escapeHtml(formatNumber(row.spessore))}</div>
                  <div class="database-cell">${escapeHtml(row.forma)}</div>
                  <div class="database-cell">${escapeHtml(row.materiale)}</div>
@@ -1319,6 +1329,7 @@ function renderTubeDatabasePanels() {
             } else {
                 html += '<div class="database-tube-cards">';
                 ripiano.tubi.forEach(tube => {
+                    const selected = dbOrderSelected.has(tube.key) ? ' checked' : '';
                     html += `<div class="database-tube-card"
                                 data-location="${escapeAttr(location.name)}"
                                 data-ripiano="${escapeAttr(ripiano.name)}"
@@ -1329,6 +1340,12 @@ function renderTubeDatabasePanels() {
                                 data-quantita="${escapeAttr(tube.quantita)}"
                                 data-codice="${escapeAttr(tube.codice || '')}"
                                 data-priorita="${escapeAttr(tube.priorita || '')}">
+                                <label class="database-order-card-choice">
+                                    <input type="checkbox" class="database-order-select"
+                                        data-order-key="${escapeAttr(tube.key)}" aria-label="Seleziona tubo per Ordine tubi"${selected}>
+                                    Seleziona per ordine
+                                    ${tube.manualOrder ? '<span class="database-in-manual-order">In ordine</span>' : ''}
+                                </label>
                                 <div class="database-tube-main">${escapeHtml(tube.misura)} x ${escapeHtml(formatNumber(tube.spessore))}</div>
                                 <div class="database-tube-meta">${escapeHtml(tube.materiale)} ${escapeHtml(tube.finitura)} · ${escapeHtml(tube.forma)}</div>
                                 <div class="database-tube-code ${tube.hasCode ? '' : 'missing-code'}">${escapeHtml(tube.codice || 'CODICE MANCANTE')}</div>
