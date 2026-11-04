@@ -111,7 +111,7 @@ button, input, select, summary { font: inherit; }
 .database-status { font-size: 12px; color: #445c74; margin: 3px 0 9px; }
 .database-results-hint { color: #8494a5; font-size: 11px; }
 #tube-database-list { min-width: 0; overflow-x: auto; border-radius: 12px; }
-.database-table { min-width: 1150px; grid-template-columns: 1.2fr .72fr 1fr .75fr .7fr 1.4fr .95fr .7fr 2fr 1fr; border: 1px solid #dae3ed; border-radius: 11px; overflow: hidden; }
+.database-table { min-width: 1190px; grid-template-columns: 48px 1.2fr .72fr 1fr .75fr .7fr 1.4fr .95fr .7fr 2fr 1fr; border: 1px solid #dae3ed; border-radius: 11px; overflow: hidden; }
 .database-header { position: relative; min-height: 44px; background: #eaf1f9; color: #37536e; border-bottom: 1px solid #d6e2f0; font-size: 11px; text-transform: uppercase; letter-spacing: .35px; }
 .database-header[data-db-sort]:hover { background: #dcebf9; }
 .database-cell { background: #fff; min-height: 54px; font-size: 12px; border-bottom-color: #edf1f5; }
@@ -119,6 +119,15 @@ button, input, select, summary { font: inherit; }
 .database-cell.database-code, .database-cell.database-positions { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; }
 .database-cell .database-mini-button { min-height: 30px; white-space: nowrap; }
 .database-cell.database-qty { color: #185d9e; font-size: 14px; }
+.database-manual-order-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid #dfe9f5; border-radius: 9px; background: #f7fafd; }
+.database-manual-order-all, .database-order-card-choice { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 7px; color: #37536e; font-size: 12px; cursor: pointer; }
+.database-manual-order-toolbar .database-status { margin: 0 auto 0 0; }
+.database-manual-order-toolbar .action-button:disabled { opacity: .55; cursor: not-allowed; }
+.database-selection-cell { justify-content: center; align-items: center; }
+.database-order-select, #db-order-select-visible { width: 16px; height: 16px; accent-color: #176cbb; cursor: pointer; }
+.database-in-manual-order { display: inline-flex; width: fit-content; margin: 3px 0 0; padding: 2px 5px; border-radius: 5px; background: #e4f3e9; color: #176235; font-size: 10px; font-weight: 700; }
+.database-order-card-choice { justify-self: start; margin-bottom: 3px; }
+
 .database-empty-state { text-align: center; border: 1px dashed #c6d8e9; border-radius: 12px; padding: 38px 18px; background: #fff; color: #63788f; }
 .database-empty-state strong { display: block; color: #243f58; font-size: 15px; margin-bottom: 5px; }
 .database-panels { display: grid; grid-template-columns: 1fr; gap: 12px; }
