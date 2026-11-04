@@ -16,6 +16,8 @@ NEW_IDS = {
     "db-location-filter", "db-clear-quick", "db-overview",
     "db-search-header-slot", "db-search-database-slot", "db-shared-search",
     "db-search-submit", "settings-nesting-rod-tolerance-mm",
+    "db-order-select-visible", "db-order-selection-status",
+    "db-order-add-selected", "db-order-remove-selected",
 }
 REPLACED_QUICK_SEARCH_IDS = {
     "search-dimensione", "search-spessore", "search-materiale",
@@ -41,6 +43,26 @@ class ModernUIContractTests(unittest.TestCase):
         self.assertTrue(NEW_IDS.issubset(set(present)))
         self.assertEqual(present.count("db-quick-search"), 1,
                          "One shared database search input must serve all tabs")
+
+    def test_manual_order_multiselect_in_both_database_views(self):
+        for element_id in (
+            "db-order-select-visible", "db-order-selection-status",
+            "db-order-add-selected", "db-order-remove-selected",
+        ):
+            with self.subTest(element_id=element_id):
+                self.assertIn('id="' + element_id + '"', self.index)
+        self.assertIn("function updateTubeOrderSelectionToolbar()", self.script)
+        self.assertIn("function selectVisibleTubeOrders(event)", self.script)
+        self.assertIn("function handleTubeOrderSelectionChange(event)", self.script)
+        self.assertIn("async function updateSelectedTubeOrders(operation)", self.script)
+        self.assertIn("window.pywebview.api.set_manual_tube_order(", self.script)
+        self.assertIn('class="database-order-select"', self.script)
+        self.assertIn("dbOrderSelected.has(row.key)", self.script)
+        self.assertIn("dbOrderSelected.has(tube.key)", self.script)
+        self.assertIn("row.manualOrder", self.script)
+        self.assertIn("tube.manualOrder", self.script)
+        self.assertIn("dbOrderSelected.clear()", self.script)
+        self.assertIn("await loadTubeDatabase()", self.script)
 
     def test_original_scripts_and_styles_still_loaded_in_order(self):
         self.assertIn('href="style.css"', self.index)
