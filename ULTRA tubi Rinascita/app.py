@@ -783,6 +783,13 @@ class Api:
             traceback.print_exc()
             return {"status": "error", "message": "Errore durante il salvataggio delle priorita ordini."}
 
+    def set_manual_tube_order(self, payload):
+        try:
+            return logic.set_manual_tube_order(payload or {}, self.da_fare_path)
+        except Exception as exc:
+            print("[TubeNest ORDER] Manual selection error:", exc, flush=True)
+            return {"status": "error", "message": str(exc)}
+
     def generate_tube_order_txt(self):
         try:
             return logic.generate_tube_order_txt(self.da_fare_path)
