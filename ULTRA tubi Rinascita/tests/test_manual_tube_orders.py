@@ -114,7 +114,7 @@ class OrderTxtTests(TestCase):
             content = Path(result["path"]).read_text(encoding="utf-8-sig")
             self.assertEqual(content.count("TA0001A00001"), 1)
             self.assertEqual(content.count("TA0002A00002"), 1)
-            self.assertIn("Giacenza attuale: 1 verghe", content)
+            self.assertIn("Giacenza attuale: 1 verga", content)
             self.assertIn("Giacenza attuale: 17 verghe", content)
             self.assertIn("Giacenza attuale: 9 verghe", content)
             self.assertIn("CODICE MANCANTE AISI 304", content)
