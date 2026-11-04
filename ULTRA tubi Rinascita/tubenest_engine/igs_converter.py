@@ -917,6 +917,40 @@ def _face_mesh_points(face, api):
     return result
 
 
+def _section_quality_key(probe):
+    """Rank complete profile sections ahead of slices intersecting holes.
+
+    A slice through a small transverse hole can still yield exactly two closed
+    loops, but has extra section edges and corrupts corner-radius detection.
+    Prefer the simplest valid outline, then the larger inner opening, with
+    distance from the tube midpoint as the final tie-breaker.
+    """
+    areas = sorted(
+        (float(area) for area in (probe.get("areas") or [])),
+        reverse=True,
+    )
+    return (
+        int(probe["edges"]),
+        -areas[1] if len(areas) >= 2 else 0.0,
+        abs(float(probe["fraction"]) - 0.5),
+    )
+
+
+def _sections_match(first, second):
+    """Two identical independent slices are evidence of an intact profile."""
+    if first["edges"] != second["edges"]:
+        return False
+    first_areas = sorted(first.get("areas") or [], reverse=True)
+    second_areas = sorted(second.get("areas") or [], reverse=True)
+    if len(first_areas) != 2 or len(second_areas) != 2:
+        return False
+    return all(
+        abs(float(a) - float(b))
+        <= max(1.0, 0.001 * max(abs(float(a)), abs(float(b))))
+        for a, b in zip(first_areas, second_areas)
+    )
+
+
 def _analyse_iges(path):
     started = time.perf_counter()
     _igs_log(path, "START analysis")
@@ -1049,9 +1083,11 @@ def _analyse_iges(path):
     )
     section_diagnostics = []
     selected_fraction = None
+    selected_probe = None
+    valid_sections = []
     for fraction in section_fractions:
         probe = {"fraction": float(fraction)}
-        section_data = _section_loops(
+        candidate = _section_loops(
             solid,
             axis,
             axial_min + overall_length * fraction,
@@ -1061,8 +1097,25 @@ def _analyse_iges(path):
             diagnostic=probe,
         )
         section_diagnostics.append(probe)
-        if section_data is not None:
+        if candidate is None:
+            continue
+
+        valid_sections.append((probe, candidate))
+        if (
+            selected_probe is None
+            or _section_quality_key(probe) < _section_quality_key(selected_probe)
+        ):
+            section_data = candidate
+            selected_probe = probe
             selected_fraction = float(fraction)
+
+        # Most ordinary tubes take only two probes. When the middle slice
+        # crosses a hole, keep probing until two clean, stable profiles agree.
+        # This avoids the expensive full sweep for regular production parts.
+        if any(
+            _sections_match(probe, previous_probe)
+            for previous_probe, _ in valid_sections[:-1]
+        ) and _section_quality_key(probe)[:1] == _section_quality_key(selected_probe)[:1]:
             break
 
     if section_data is None:
@@ -1080,7 +1133,7 @@ def _analyse_iges(path):
     _igs_log(
         path,
         "selected "
-        + _format_section_probe(section_diagnostics[-1]),
+        + _format_section_probe(selected_probe),
     )
 
     section_origin, section_loops, section_edges = section_data
