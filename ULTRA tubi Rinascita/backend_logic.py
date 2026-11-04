@@ -1147,14 +1147,17 @@ def generate_tube_order_txt(da_fare_path=None):
             line = _format_order_tube_line(row)
             if line:
                 quantity = int(row.get("quantitaTotale") or 0)
-                lines.extend([line, f"Giacenza attuale: {quantity} verghe", ""])
+                stock_unit = "verga" if quantity == 1 else "verghe"
+                lines.extend([
+                    line, f"Giacenza attuale: {quantity} {stock_unit}", ""
+                ])
         if lines:
             lines.pop()
 
         if not lines:
             return {
                 "status": "empty",
-                "message": "Nessun tubo codificato ha raggiunto la soglia di riordino.",
+                "message": "Nessun tubo nell'ordine: seleziona tubi dal database o attendi la soglia di riordino.",
                 "rows_count": 0,
                 "thresholds": thresholds,
                 "include_low_priority": include_low_priority,
