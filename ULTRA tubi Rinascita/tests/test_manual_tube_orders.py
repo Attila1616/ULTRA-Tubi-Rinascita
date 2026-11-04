@@ -124,6 +124,32 @@ class OrderTxtTests(TestCase):
                 content,
             )
 
+    def test_manual_order_alone_can_include_high_stock_or_zero_stock(self):
+        many = row("80x80", 3, "TA0099A00099", 23, "alta")
+        empty = row("40x40", 2, "TA0088A00088", 0, "")
+        selected = {
+            db.identity_key_from_tube(many), db.identity_key_from_tube(empty)
+        }
+        with (
+            TemporaryDirectory() as outdir,
+            patch.object(logic, "ensure_tube_database",
+                         return_value={"status": "success"}),
+            patch.object(logic, "load_config", return_value={}),
+            patch.object(db, "get_order_priority_rows", return_value=[]),
+            patch.object(db, "load_manual_order_keys", return_value=selected),
+            patch.object(db, "summarize_inventory",
+                         return_value=[many, empty]),
+            patch.object(logic, "_get_docx_output_dir_fallback",
+                         return_value=outdir),
+            patch.object(logic.os, "startfile", create=True),
+        ):
+            result = logic.generate_tube_order_txt()
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["rows_count"], 2)
+            content = Path(result["path"]).read_text(encoding="utf-8-sig")
+            self.assertIn("Giacenza attuale: 23 verghe", content)
+            self.assertIn("Giacenza attuale: 0 verghe", content)
+
     def test_only_low_stock_auto_orders_still_work(self):
         auto = row("50x50", 2, "TA0001A00001", 2, "media")
         too_much_stock = row("60x60", 2, "TA0002A00002", 20, "media")
