@@ -114,6 +114,15 @@
                     <button id="db-order-priorities-btn" class="action-button" type="button">Priorità ordini</button>
                     <button id="db-order-txt-btn" class="action-button fatto-button" type="button">Genera ordine TXT</button>
                 </div>
+                <div class="database-manual-order-toolbar" role="group" aria-label="Selezione manuale Ordine tubi">
+                    <label class="database-manual-order-all">
+                        <input id="db-order-select-visible" type="checkbox">
+                        Seleziona tubi visibili
+                    </label>
+                    <span id="db-order-selection-status" class="database-status" aria-live="polite">0 selezionati</span>
+                    <button id="db-order-add-selected" class="action-button button-primary" type="button" disabled>Aggiungi selezionati a Ordine tubi</button>
+                    <button id="db-order-remove-selected" class="action-button" type="button" disabled>Rimuovi selezionati da Ordine tubi</button>
+                </div>
                 <details class="db-tools-details" id="db-advanced-filters">
                     <summary>Filtri avanzati <span>Misura, materiale, finitura, forma, codice</span></summary>
                     <div class="database-filters">
