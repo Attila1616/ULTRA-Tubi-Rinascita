@@ -88,7 +88,8 @@ class OrderTxtTests(TestCase):
             db.identity_key_from_tube(auto),
             db.identity_key_from_tube(no_code),
         }
-        with TemporaryDirectory() as outdir, (
+        with (
+            TemporaryDirectory() as outdir,
             patch.object(logic, "ensure_tube_database",
                          return_value={"status": "success"}),
             patch.object(logic, "load_config", return_value={
@@ -126,7 +127,8 @@ class OrderTxtTests(TestCase):
     def test_only_low_stock_auto_orders_still_work(self):
         auto = row("50x50", 2, "TA0001A00001", 2, "media")
         too_much_stock = row("60x60", 2, "TA0002A00002", 20, "media")
-        with TemporaryDirectory() as outdir, (
+        with (
+            TemporaryDirectory() as outdir,
             patch.object(logic, "ensure_tube_database",
                          return_value={"status": "success"}),
             patch.object(logic, "load_config", return_value={}),
