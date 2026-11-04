@@ -967,10 +967,20 @@ def get_tube_database_rows(filters=None, da_fare_path=None):
 
     tube_database.ensure_order_priorities_for_inventory(VARIABLES_ROOT)
     rows = tube_database.summarize_inventory(VARIABLES_ROOT, filters or {})
+    ordered_keys = tube_database.load_manual_order_keys(VARIABLES_ROOT)
+    for row in rows:
+        row["key"] = tube_database.identity_key_from_tube(row)
+        row["manualOrder"] = row["key"] in ordered_keys
+    locations = tube_database.load_locations(VARIABLES_ROOT, filters or {})
+    for location in locations:
+        for shelf in location.get("ripiani", []):
+            for tube in shelf.get("tubi", []):
+                tube["key"] = tube_database.identity_key_from_tube(tube)
+                tube["manualOrder"] = tube["key"] in ordered_keys
     return {
         "status": "success",
         "rows": rows,
-        "locations": tube_database.load_locations(VARIABLES_ROOT, filters or {}),
+        "locations": locations,
         "targets": tube_database.get_location_targets(VARIABLES_ROOT),
         "debug": tube_database.database_debug(VARIABLES_ROOT),
     }
@@ -1052,6 +1062,19 @@ def set_tube_order_priorities(payload, da_fare_path=None):
     return tube_database.set_order_priorities(VARIABLES_ROOT, payload or {})
 
 
+def set_manual_tube_order(payload, da_fare_path=None):
+    """Apply a manual purchase selection without changing any stock count."""
+    ensure_result = ensure_tube_database(da_fare_path)
+    if ensure_result.get("status") != "success":
+        return {
+            "status": "error",
+            "message": ensure_result.get(
+                "message", "Database Tubi non disponibile."
+            ),
+        }
+    return tube_database.set_manual_order_tubes(VARIABLES_ROOT, payload or {})
+
+
 def _order_decimal_text(value):
     return tube_database.normalize_decimal_text(value).replace(".", ",")
 
@@ -1071,7 +1094,7 @@ def _format_order_tube_line(row):
         shape_label = "TUBOLARE RETTANGOLARE"
         size_label = f"{misura}x{spessore}"
     return " ".join([
-        str(row.get("codice") or "").strip().upper(),
+        str(row.get("codice") or "").strip().upper() or "CODICE MANCANTE",
         "AISI",
         str(row.get("materiale") or "304").strip().upper(),
         shape_label,
