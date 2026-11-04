@@ -17,6 +17,7 @@ MOVEMENTS_NAME = "movimenti.jsonl"
 CODE_CATALOG_NAME = "codici_tubi.json"
 ADHOC_STATE_NAME = "adhoc_state.json"
 ADHOC_LOG_NAME = "adhoc_reset_log.jsonl"
+MANUAL_ORDER_NAME = "ordine_tubi_manual.json"
 ORDER_PRIORITY_DEFAULT = "media"
 ORDER_PRIORITIES = ("bassa", "media", "alta")
 
@@ -69,6 +70,65 @@ def adhoc_state_path(project_root):
 
 def adhoc_log_path(project_root):
     return os.path.join(database_dir(project_root), ADHOC_LOG_NAME)
+
+
+def manual_order_path(project_root):
+    """Persistent manual purchase selection in the shared tube database."""
+    return os.path.join(database_dir(project_root), MANUAL_ORDER_NAME)
+
+
+def load_manual_order_keys(project_root):
+    document = read_json(manual_order_path(project_root), {"keys": []})
+    keys = document.get("keys", []) if isinstance(document, dict) else []
+    if not isinstance(keys, list):
+        return set()
+    return {
+        str(key).strip() for key in keys
+        if isinstance(key, str) and len(key.split("|")) == 4
+        and all(str(part).strip() for part in key.split("|"))
+    }
+
+
+def set_manual_order_tubes(project_root, payload):
+    """Add/remove distinct stocked tube types without altering priorities.
+
+    Accept canonical keys that already exist in the tube database. This
+    prevents a stale/forged UI selection adding arbitrary order descriptions.
+    """
+    payload = payload or {}
+    operation = str(payload.get("operation") or "add").lower().strip()
+    if operation not in {"add", "remove"}:
+        return {"status": "error", "message": "Operazione ordine non valida."}
+    raw_keys = payload.get("keys") or []
+    if not isinstance(raw_keys, list) or not raw_keys:
+        return {"status": "error", "message": "Seleziona almeno un tubo."}
+    valid_keys = {
+        identity_key_from_tube(tube)
+        for _, _, _, tube in iter_position_tubes(project_root)
+    }
+    supplied = {str(key).strip() for key in raw_keys}
+    invalid = supplied - valid_keys
+    if invalid:
+        return {
+            "status": "error",
+            "message": "Alcuni tubi selezionati non sono più nel database. "
+                       "Aggiorna l'elenco e riprova.",
+        }
+    before = load_manual_order_keys(project_root)
+    after = before | supplied if operation == "add" else before - supplied
+    if after != before:
+        write_json(manual_order_path(project_root), {
+            "schema_version": 1,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "keys": sorted(after),
+        })
+    return {
+        "status": "success",
+        "changed": len(after - before) if operation == "add"
+                   else len(before - after),
+        "selected_count": len(after),
+        "operation": operation,
+    }
 
 
 def normalize_decimal_text(value):
