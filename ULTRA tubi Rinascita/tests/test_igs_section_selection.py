@@ -65,6 +65,31 @@ class IgesSectionSelectionTests(unittest.TestCase):
         }
         self.assertFalse(_sections_match(reference, clipped_end))
 
+    def test_zero_area_seam_loops_are_ignored_when_matching_profiles(self):
+        # Actual 80x80x3 L315 IGES geometry: at 50% and 45%, the two
+        # identical stock loops are surrounded by degenerate IGES seams.
+        middle = {
+            "fraction": 0.50,
+            "edges": 24,
+            "areas": [6369.06, 5468.23] + [0.0] * 7,
+        }
+        nearby = {
+            "fraction": 0.45,
+            "edges": 24,
+            "areas": [6369.06, 5468.23] + [0.0] * 7,
+        }
+        clipped_end = {
+            "fraction": 0.25,
+            "edges": 22,
+            "areas": [6277.82, 5468.23] + [0.0] * 5,
+        }
+        self.assertTrue(_sections_match(middle, nearby))
+        self.assertFalse(_sections_match(middle, clipped_end))
+        self.assertLess(
+            _section_quality_key(middle),
+            _section_quality_key(clipped_end),
+        )
+
     def test_matching_allows_small_area_tolerance_from_cad(self):
         first = {
             "fraction": 0.45,
