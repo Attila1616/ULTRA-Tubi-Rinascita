@@ -55,6 +55,11 @@ FEATURE_PLANE_TOLERANCE_MM = 0.04
 END_MATCH_TOLERANCE_MM = 0.08
 DEGENERATE_EDGE_LENGTH_MM = 1e-3
 CHAIN_ENDPOINT_SNAP_MM = 1e-3
+# Only used after the precise contour pass fails; maximum endpoint repair is
+# 0.012 mm. Do not extend this to the cross-section detection by default.
+CUT_BOUNDARY_REPAIR_SNAP_MM = 0.012
+# Limit CAD surface sewing repairs to small slivers (never generic large gaps).
+SEW_REPAIR_TOLERANCES_MM = (0.001, 0.01)
 
 
 class IgsConversionError(ValueError):
@@ -95,6 +100,7 @@ def _format_section_probe(probe):
 def _ocp():
     try:
         from OCP.BRep import BRep_Tool
+        from OCP.BRepCheck import BRepCheck_Analyzer
         from OCP.BRepAdaptor import BRepAdaptor_Curve
         from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
         from OCP.BRepBuilderAPI import (
@@ -102,6 +108,7 @@ def _ocp():
             BRepBuilderAPI_Sewing,
         )
         from OCP.BRepMesh import BRepMesh_IncrementalMesh
+        from OCP.ShapeFix import ShapeFix_FixSmallFace
         from OCP.GCPnts import (
             GCPnts_AbscissaPoint,
             GCPnts_QuasiUniformDeflection,
@@ -126,6 +133,8 @@ def _ocp():
 
     return {
         "BRep_Tool": BRep_Tool,
+        "BRepCheck_Analyzer": BRepCheck_Analyzer,
+        "ShapeFix_FixSmallFace": ShapeFix_FixSmallFace,
         "BRepAdaptor_Curve": BRepAdaptor_Curve,
         "BRepAlgoAPI_Section": BRepAlgoAPI_Section,
         "BRepBuilderAPI_MakeSolid": BRepBuilderAPI_MakeSolid,
@@ -323,7 +332,9 @@ def _chain_edges(
     api,
     *,
     ignore_degenerate=False,
+    endpoint_tolerance=CHAIN_ENDPOINT_SNAP_MM,
 ):
+    endpoint_tolerance = float(endpoint_tolerance)
     edge_data = []
     for edge in edges:
         points = _edge_points(
@@ -356,7 +367,9 @@ def _chain_edges(
     if not edge_data:
         return []
 
-    edge_nodes = _cluster_edge_endpoints(edge_data)
+    edge_nodes = _cluster_edge_endpoints(
+        edge_data, tolerance=endpoint_tolerance,
+    )
     adjacency = defaultdict(list)
 
     for index, (start_node, end_node) in enumerate(edge_nodes):
@@ -404,7 +417,7 @@ def _chain_edges(
             current_node != start_node
             or closure_gap > max(
                 2e-3,
-                CHAIN_ENDPOINT_SNAP_MM * 2.0,
+                endpoint_tolerance * 2.0,
             )
         ):
             raise IgsConversionError(
@@ -417,6 +430,35 @@ def _chain_edges(
         loops.append(chain)
 
     return loops
+
+
+def _chain_cut_boundary(edges, api, source_path, boundary_label):
+    """Recover <=0.012 mm endpoint mismatches only on machining contours.
+
+    Keep the strict tolerance for ordinary contours and cross sections. Some
+    Siemens IGES files leave tiny gaps at split/sliver vertices even after
+    OpenCascade successfully reconstructs a valid solid.
+    """
+    try:
+        return _chain_edges(
+            edges, api, ignore_degenerate=True,
+        )
+    except IgsConversionError as initial_error:
+        try:
+            repaired = _chain_edges(
+                edges,
+                api,
+                ignore_degenerate=True,
+                endpoint_tolerance=CUT_BOUNDARY_REPAIR_SNAP_MM,
+            )
+        except IgsConversionError:
+            raise initial_error
+        _igs_log(
+            source_path,
+            f"Repaired {boundary_label} contour endpoints "
+            f"within {CUT_BOUNDARY_REPAIR_SNAP_MM:.3f} mm",
+        )
+        return repaired
 
 
 def _polygon_area(points_3d, project):
@@ -978,9 +1020,63 @@ def _analyse_iges(path):
     )
 
     if free_edges != 0:
+        # A few Siemens/IGES exports contain microscopic sliver faces at
+        # corners of angled cuts. Generic sewing does not reliably remove
+        # these, even at a much larger tolerance. Fix only the small faces,
+        # and accept the repair exclusively if it reconstructs a *valid*
+        # single solid with no free edges.
+        original_free_edges = free_edges
+        small_face_fix = api["ShapeFix_FixSmallFace"]()
+        small_face_fix.Init(reader.OneShape())
+        small_face_fix.Perform()
+        healed_shape = small_face_fix.FixShape()
+        for repair_tolerance in SEW_REPAIR_TOLERANCES_MM:
+            repaired_sewing = api["BRepBuilderAPI_Sewing"](
+                repair_tolerance
+            )
+            repaired_sewing.Add(healed_shape)
+            repaired_sewing.Perform()
+            if repaired_sewing.NbFreeEdges() != 0:
+                continue
+
+            repaired_shells = []
+            repair_explorer = api["TopExp_Explorer"](
+                repaired_sewing.SewedShape(),
+                api["TopAbs_SHELL"],
+            )
+            while repair_explorer.More():
+                repaired_shells.append(
+                    api["TopoDS"].Shell_s(repair_explorer.Current())
+                )
+                repair_explorer.Next()
+            if len(repaired_shells) != 1:
+                continue
+
+            builder = api["BRepBuilderAPI_MakeSolid"](
+                repaired_shells[0]
+            )
+            if not builder.IsDone():
+                continue
+            if not api["BRepCheck_Analyzer"](
+                builder.Solid()
+            ).IsValid():
+                continue
+
+            sewing = repaired_sewing
+            free_edges = 0
+            _igs_log(
+                path,
+                "small-face repair accepted: "
+                f"original_free_edges={original_free_edges} "
+                f"sewing_tolerance={repair_tolerance:.4f} mm",
+            )
+            break
+
+    if free_edges != 0:
         raise IgsConversionError(
             "Il modello IGS non forma un tubo chiuso: "
-            f"{sewing.NbFreeEdges()} bordi liberi rilevati."
+            f"{sewing.NbFreeEdges()} bordi liberi rilevati. "
+            "Riparazione CAD automatica non riuscita."
         )
 
     sewn_shape = sewing.SewedShape()
@@ -1585,17 +1681,19 @@ def _analyse_iges(path):
             continue
 
         outer_feature_loops = _usable_boundary_loops(
-            _chain_edges(
+            _chain_cut_boundary(
                 list(outer_boundary.values()),
                 api,
-                ignore_degenerate=True,
+                path,
+                "outer",
             )
         )
         inner_feature_loops = _usable_boundary_loops(
-            _chain_edges(
+            _chain_cut_boundary(
                 list(inner_boundary.values()),
                 api,
-                ignore_degenerate=True,
+                path,
+                "inner",
             )
         )
 
