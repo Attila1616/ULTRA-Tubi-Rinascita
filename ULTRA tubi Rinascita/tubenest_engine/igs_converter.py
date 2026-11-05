@@ -971,9 +971,16 @@ def _section_quality_key(probe):
         (float(area) for area in (probe.get("areas") or [])),
         reverse=True,
     )
+    # A section that intersects an angled cutoff may have *fewer* edges
+    # than an intact middle section, while still exposing two closed loops.
+    # Choosing the smallest edge count therefore corrupts tube dimensions.
+    # First maximize the outside/inside envelope; use edge count only when
+    # profiles have the same area. Raw IGES seams can have zero-area loops.
+    usable_areas = [area for area in areas if area > 1.0]
     return (
+        -usable_areas[0] if usable_areas else float("inf"),
+        -usable_areas[1] if len(usable_areas) >= 2 else float("inf"),
         int(probe["edges"]),
-        -areas[1] if len(areas) >= 2 else 0.0,
         abs(float(probe["fraction"]) - 0.5),
     )
 
@@ -982,8 +989,17 @@ def _sections_match(first, second):
     """Two identical independent slices are evidence of an intact profile."""
     if first["edges"] != second["edges"]:
         return False
-    first_areas = sorted(first.get("areas") or [], reverse=True)
-    second_areas = sorted(second.get("areas") or [], reverse=True)
+    # _section_loops records *raw* section-loop areas for diagnostics.
+    # IGES files often contain zero-area seam loops in addition to the
+    # genuine outer/inner tube contours. Ignore those when comparing.
+    first_areas = sorted(
+        (float(area) for area in (first.get("areas") or []) if area > 1.0),
+        reverse=True,
+    )
+    second_areas = sorted(
+        (float(area) for area in (second.get("areas") or []) if area > 1.0),
+        reverse=True,
+    )
     if len(first_areas) != 2 or len(second_areas) != 2:
         return False
     return all(
@@ -1215,7 +1231,10 @@ def _analyse_iges(path):
         if any(
             _sections_match(probe, previous_probe)
             for previous_probe, _ in valid_sections[:-1]
-        ) and _section_quality_key(probe)[:1] == _section_quality_key(selected_probe)[:1]:
+        ) and (
+            selected_probe is not None
+            and _sections_match(probe, selected_probe)
+        ):
             break
 
     if section_data is None:
