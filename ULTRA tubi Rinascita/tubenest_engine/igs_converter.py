@@ -1028,6 +1028,10 @@ def _analyse_iges(path):
         original_free_edges = free_edges
         small_face_fix = api["ShapeFix_FixSmallFace"]()
         small_face_fix.Init(reader.OneShape())
+        small_face_fix.SetPrecision(SEW_TOLERANCE_MM)
+        small_face_fix.SetMaxTolerance(
+            max(SEW_REPAIR_TOLERANCES_MM)
+        )
         small_face_fix.Perform()
         healed_shape = small_face_fix.FixShape()
         for repair_tolerance in SEW_REPAIR_TOLERANCES_MM:
