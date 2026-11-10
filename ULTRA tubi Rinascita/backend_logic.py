@@ -18,6 +18,7 @@ import importlib.util
 import tube_database
 import runtime_paths
 import tubenest_engine
+from startup_index import StartupZzxIndex
 from tubenest_engine.validation import validate_tube_part_data, validate_zzx_file
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
@@ -2640,112 +2641,218 @@ def export_locked_rod_zzx(payload):
         return {"status": "error", "message": str(exc)}
 
 
-def get_current_state(da_fare_path):
-    config = load_config()
-    ignore_list = set(folder.lower() for folder in config.get('ignore_folders', []))
+# Derived ZZX metadata is stored under local AppData, never in a Git repo or
+# user-selected Variables folder. Its parser revision is bound to source code.
+# The cache automatically invalidates edited/moved ZZX files by mtime + size.
+_STARTUP_METADATA_CACHE = None
+
+
+def _startup_parser_revision():
+    digest = hashlib.sha256()
+    source_dir = os.path.join(PROJECT_ROOT, "tubenest_engine")
+    for module in (
+        "archive.py", "bcmp.py", "domain.py", "geometry.py",
+        "models.py", "reader.py", "toolpath.py", "validation.py",
+    ):
+        file_path = os.path.join(source_dir, module)
+        try:
+            with open(file_path, "rb") as stream:
+                digest.update(module.encode("ascii"))
+                digest.update(stream.read())
+        except OSError:
+            pass
+    if IS_FROZEN:
+        try:
+            stat = os.stat(sys.executable)
+            digest.update(str((stat.st_size, stat.st_mtime_ns)).encode("ascii"))
+        except OSError:
+            pass
+    return digest.hexdigest()
+
+
+def _startup_metadata_cache():
+    global _STARTUP_METADATA_CACHE
+    if _STARTUP_METADATA_CACHE is None:
+        _STARTUP_METADATA_CACHE = StartupZzxIndex(
+            os.path.join(APP_DATA_PATH, "startup_zzx_index.json.gz"),
+            parser_revision=_startup_parser_revision(),
+        )
+    return _STARTUP_METADATA_CACHE
+
+
+def scan_work_files(da_fare_path):
+    """Enumerate each work-tree path just once for all startup screens.
+
+    Retain 'fatto' ZZX paths: unmatched-IGS detection intentionally uses
+    completed drawings to avoid false 'missing' warnings. Filtering for
+    the active tube list happens separately in get_current_state().
+    """
+    result = {"zzx": [], "igs": []}
+    if not da_fare_path or not os.path.isdir(da_fare_path):
+        return result
+    for root, _dirs, filenames in os.walk(da_fare_path):
+        for name in filenames:
+            lowered = name.lower()
+            if lowered.endswith(".zzx"):
+                result["zzx"].append(os.path.join(root, name))
+            elif lowered.endswith((".igs", ".iges")):
+                result["igs"].append(os.path.join(root, name))
+    return result
+
+
+def _skip_ignored_zzx(file_path, root_path, ignore_list):
+    relative_dir = os.path.relpath(os.path.dirname(file_path), root_path)
+    if relative_dir == ".":
+        return False
+    return any(
+        component.casefold() in ignore_list
+        for component in relative_dir.split(os.path.sep)
+    )
+
+
+def get_current_state(da_fare_path, *, file_index=None):
+    config = load_config(silent=True) or {}
+    ignore_list = {
+        str(folder).strip().casefold()
+        for folder in config.get("ignore_folders", [])
+        if str(folder).strip()
+    }
     if not da_fare_path or not os.path.isdir(da_fare_path):
         return []
 
+    started = time.perf_counter()
+    if file_index is None:
+        file_index = scan_work_files(da_fare_path)
+    cache = _startup_metadata_cache()
+    hits_before, misses_before = cache.hits, cache.misses
+
     all_pieces = []
-    for root, dirs, files in os.walk(da_fare_path):
-        path_parts = set(p.lower() for p in root.replace(da_fare_path, '').split(os.path.sep))
-        if not path_parts.isdisjoint(ignore_list):
-            dirs[:] = []
+    for file_path in file_index["zzx"]:
+        if _skip_ignored_zzx(file_path, da_fare_path, ignore_list):
+            continue
+        file = os.path.basename(file_path)
+        product_folder = get_product_folder_name(file_path, da_fare_path)
+        size, material, finish = extract_tube_info(file)
+        length, total_qty, completed_qty = extract_length_and_quantity_enhanced(file_path)
+        if length is None or total_qty is None:
             continue
 
-        for file in files:
-            if file.lower().endswith(".zzx"):
-                file_path = os.path.join(root, file)
-                product_folder = get_product_folder_name(file_path, da_fare_path)
-                size, material, finish = extract_tube_info(file)
-                length, total_qty, completed_qty = extract_length_and_quantity_enhanced(file_path)
-                if length is not None and total_qty is not None:
-                    geometry_result = tubenest_engine.describe_zzx(file_path)
-                    piece_data = {
-                        "id": str(uuid.uuid4()),
-                        "logicalKey": make_logical_piece_key(file_path, da_fare_path),
-                        "filePath": file_path,
-                        "fileName": file,
-                        "mainFolder": product_folder,
-                        "tubeType": f"{size} {material} {finish}",
-                        "length": length,
-                        "totalQuantity": total_qty,
-                        "completedQuantity": completed_qty,
-                        "quantityNeeded": max(0, total_qty - completed_qty),
-                        "geometryStatus": geometry_result.get("status", "error"),
-                    }
-                    if geometry_result.get("status") == "ok":
-                        piece_data["geometry"] = geometry_result.get("document")
-                        part_result = tubenest_engine.describe_tube_parts(file_path)
-                        piece_data["tubePartStatus"] = part_result.get("status", "error")
-                        if part_result.get("status") == "ok":
-                            parts = part_result.get("parts", [])
-                            piece_data["tubeParts"] = parts
-                            if len(parts) == 1:
-                                piece_data["tubePart"] = parts[0]
-                        else:
-                            piece_data["tubePartError"] = part_result.get("error", "Unknown TubePart error")
-                    else:
-                        piece_data["geometryError"] = geometry_result.get("error", "Unknown ZZX parser error")
-                    all_pieces.append(piece_data)
+        try:
+            geometry_result = cache.get(
+                file_path, "geometry",
+                lambda path=file_path: tubenest_engine.describe_zzx(path),
+            )
+        except OSError as exc:
+            geometry_result = {"status": "error", "error": str(exc)}
+        piece_data = {
+            "id": str(uuid.uuid4()),
+            "logicalKey": make_logical_piece_key(file_path, da_fare_path),
+            "filePath": file_path,
+            "fileName": file,
+            "mainFolder": product_folder,
+            "tubeType": f"{size} {material} {finish}",
+            "length": length,
+            "totalQuantity": total_qty,
+            "completedQuantity": completed_qty,
+            "quantityNeeded": max(0, total_qty - completed_qty),
+            "geometryStatus": geometry_result.get("status", "error"),
+        }
+        if geometry_result.get("status") == "ok":
+            piece_data["geometry"] = geometry_result.get("document")
+            try:
+                part_result = cache.get(
+                    file_path, "parts",
+                    lambda path=file_path: tubenest_engine.describe_tube_parts(path),
+                )
+            except OSError as exc:
+                part_result = {"status": "error", "error": str(exc)}
+            piece_data["tubePartStatus"] = part_result.get("status", "error")
+            if part_result.get("status") == "ok":
+                parts = part_result.get("parts", [])
+                piece_data["tubeParts"] = parts
+                if len(parts) == 1:
+                    piece_data["tubePart"] = parts[0]
+            else:
+                piece_data["tubePartError"] = part_result.get(
+                    "error", "Unknown TubePart error"
+                )
+        else:
+            piece_data["geometryError"] = geometry_result.get(
+                "error", "Unknown ZZX parser error"
+            )
+        all_pieces.append(piece_data)
+
+    # Even across renames / 'fatto' moves, old metadata must not be reused.
+    # Keep completed-file validation entries too; the warning scanner needs
+    # them even though active nesting never displays the archived files.
+    cache.prune_to_paths(file_index["zzx"])
+    cache.save()
 
     grouped_tubes = defaultdict(list)
     for piece in all_pieces:
-        grouped_tubes[piece['tubeType']].append(piece)
+        grouped_tubes[piece["tubeType"]].append(piece)
 
-    # Startup/data refresh deliberately does not calculate any nesting.
-    # Geometry-aware plans are requested lazily when a specific tube group is
-    # opened (or explicitly needed by summary/lock-all actions).
-    final_state = []
-    for tube_type, pieces in grouped_tubes.items():
-        final_state.append({"tubeType": tube_type, "pieces": pieces, "rods": []})
-    return final_state
+    print(
+        "[TubeNest STARTUP] "
+        f"files={len(file_index['zzx'])} active={len(all_pieces)} "
+        f"cache_hits={cache.hits - hits_before} "
+        f"parsed={cache.misses - misses_before} "
+        f"elapsed={time.perf_counter()-started:.2f}s",
+        flush=True,
+    )
+    # Geometry-aware plans are still calculated lazily when the user opens
+    # a group. No cached metadata is trusted without its file signature.
+    return [
+        {"tubeType": tube_type, "pieces": pieces, "rods": []}
+        for tube_type, pieces in grouped_tubes.items()
+    ]
 
 
-def find_zzx_validation_issues(da_fare_path):
-    """Find ZZX files that need drawing/operator review.
-
-    Filename wall thickness is authoritative and intentionally not compared
-    against ZZX metadata. Legacy array files with a deliberately deleted final
-    cutoff are also exempt from warnings.
-    """
+def find_zzx_validation_issues(da_fare_path, *, file_index=None):
+    """Return validation issues, rechecking only changed ZZX files."""
     if not da_fare_path or not os.path.isdir(da_fare_path):
         return []
 
     config = load_config(silent=True) or {}
-    ignore_list = {str(folder).strip().lower() for folder in config.get("ignore_folders", []) if str(folder).strip()}
+    ignore_list = {
+        str(folder).strip().casefold()
+        for folder in config.get("ignore_folders", [])
+        if str(folder).strip()
+    }
+    if file_index is None:
+        file_index = scan_work_files(da_fare_path)
+    cache = _startup_metadata_cache()
     issues = []
 
-    for root, dirs, files in os.walk(da_fare_path):
-        relative_root = os.path.relpath(root, da_fare_path)
-        path_parts = [] if relative_root == "." else [part.lower() for part in relative_root.split(os.path.sep)]
-        if any(part in ignore_list for part in path_parts):
-            dirs[:] = []
+    for file_path in file_index["zzx"]:
+        if _skip_ignored_zzx(file_path, da_fare_path, ignore_list):
             continue
-        dirs[:] = [d for d in dirs if d.lower() not in ignore_list]
-
-        for filename in files:
-            if not filename.lower().endswith(".zzx"):
-                continue
-            file_path = os.path.join(root, filename)
-            file_issues = validate_zzx_file(file_path)
-            if not file_issues:
-                continue
-
-            relative_path = os.path.relpath(file_path, da_fare_path)
-            for issue in file_issues:
-                issues.append({
-                    "filePath": file_path,
-                    "fileName": filename,
-                    "relativePath": relative_path,
-                    "mainFolder": get_product_folder_name(file_path, da_fare_path),
-                    "type": issue.get("type", "unknown"),
-                    "message": issue.get("message", "Controllare il file ZZX."),
-                    **{k: v for k, v in issue.items() if k not in {"type", "message"}},
-                })
-
+        filename = os.path.basename(file_path)
+        try:
+            file_issues = cache.get(
+                file_path, "validation",
+                lambda path=file_path: validate_zzx_file(path),
+            )
+        except OSError as exc:
+            file_issues = [{
+                "type": "read_error",
+                "message": f"Impossibile leggere ZZX: {exc}",
+            }]
+        for issue in file_issues or []:
+            issues.append({
+                "filePath": file_path,
+                "fileName": filename,
+                "relativePath": os.path.relpath(file_path, da_fare_path),
+                "mainFolder": get_product_folder_name(file_path, da_fare_path),
+                "type": issue.get("type", "unknown"),
+                "message": issue.get("message", "Controllare il file ZZX."),
+                **{k: v for k, v in issue.items()
+                   if k not in {"type", "message"}},
+            })
+    cache.save()
     issues.sort(key=lambda item: (item["relativePath"].lower(), item["type"]))
     return issues
+
 
 def _normalized_cut_stem(filename):
     return _stable_cut_stem(filename)
@@ -2793,7 +2900,7 @@ def _path_contains_fatto_folder(path):
     return any(_is_fatto_folder_name(part) for part in parts)
 
 
-def find_unmatched_igs_files(da_fare_path):
+def find_unmatched_igs_files(da_fare_path, *, file_index=None):
     """Return real missing ZZX and nonblocking quantity-only name differences.
 
     A quantity-only difference is detected only when *all other filename
@@ -2808,23 +2915,21 @@ def find_unmatched_igs_files(da_fare_path):
 
     zzx_by_stem = defaultdict(list)
     zzx_by_quantity_independent_stem = defaultdict(list)
-    igs_files = []
+    if file_index is None:
+        file_index = scan_work_files(da_fare_path)
 
-    for root, dirs, files in os.walk(da_fare_path):
-        in_fatto_branch = _path_contains_fatto_folder(root)
-        # Completed ZZX files are moved to 'fatto' (possibly through several
-        # nested archive folders) and renamed with '(fatti N)'. They MUST still
-        # be indexed: an active IGS in its 'IGS' folder is not missing if the
-        # corresponding drawing has already been completed. Only archived IGS
-        # sources should be excluded from missing-file warnings.
-        for file in files:
-            lower_file = file.lower()
-            file_path = os.path.normpath(os.path.join(root, file))
-            if lower_file.endswith(".zzx"):
-                zzx_by_stem[_normalized_cut_stem(file)].append(file_path)
-                zzx_by_quantity_independent_stem[_quantity_independent_stem(file)].append(file_path)
-            elif lower_file.endswith((".igs", ".iges")) and not in_fatto_branch:
-                igs_files.append(file_path)
+    for file_path in file_index["zzx"]:
+        filename = os.path.basename(file_path)
+        path = os.path.normpath(file_path)
+        zzx_by_stem[_normalized_cut_stem(filename)].append(path)
+        zzx_by_quantity_independent_stem[
+            _quantity_independent_stem(filename)
+        ].append(path)
+
+    for file_path in file_index["igs"]:
+        if not _path_contains_fatto_folder(os.path.dirname(file_path)):
+            igs_files.append(os.path.normpath(file_path))
+s.append(file_path)
 
     unmatched = []
     for igs_path in igs_files:
