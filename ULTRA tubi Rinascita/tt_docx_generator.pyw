@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import math
 import keyboard
 import time
 from collections import defaultdict, OrderedDict
@@ -287,8 +288,8 @@ def set_a4(doc):
     s.right_margin = Mm(15)
 
 
-def add_title(doc, text):
-    p = doc.add_paragraph()
+def add_title(doc, text, *, paragraph=None):
+    p = paragraph if paragraph is not None else doc.add_paragraph()
     r = p.add_run(text)
     r.bold = True
     r.font.size = Pt(22)
@@ -296,8 +297,14 @@ def add_title(doc, text):
     p.paragraph_format.keep_with_next = True
 
 
-def add_measure_heading(doc, text):
-    p = doc.add_paragraph()
+def add_measure_heading(doc, text, *, reuse_trailing=False):
+    # Nested tables automatically end with an empty paragraph in Word.
+    # Reuse it as the next measure heading rather than adding blank lines.
+    if reuse_trailing and getattr(doc, "paragraphs", None):
+        last = doc.paragraphs[-1]
+        p = last if not last.text else doc.add_paragraph()
+    else:
+        p = doc.add_paragraph()
     r = p.add_run(text)
     r.bold = True
     r.font.size = Pt(16)
@@ -436,17 +443,136 @@ def group_files_by_measure(file_paths):
     return out
 
 
-def write_section(doc, section_title, file_paths):
-    # header only — no body title
-    set_running_header(doc, section_title)
+# An A4 page has 267 mm of usable height with our 15 mm margins.
+# Leave room for Word's actual text wrapping and the dashed cut line.
+MAX_SINGLE_PAGE_TD_MM = 235.0
 
+
+def _td_group_estimated_height_mm(grouped):
+    """Conservative estimate solely to avoid unbreakable, oversized rows.
+
+    Word makes the final page-fitting decision for small groups via the
+    cantSplit outer row. An oversized group is written as normal content so
+    a legitimate multi-page TD is never clipped by a giant table row.
+    """
+    height = 22.0  # 22 pt TD heading, bottom line and separator
+    for _measure, filenames in grouped.items():
+        height += 21.0  # measure heading + table heading
+        for filename in filenames:
+            name, _quantity = split_name_and_qty(filename)
+            wrapped_lines = max(1, math.ceil(len(name) / 42.0))
+            height += max(11.0, 5.4 * wrapped_lines) + 1.0
+    return height
+
+
+def _zero_cell_margins(cell):
+    tc_pr = cell._tc.get_or_add_tcPr()
+    tc_mar = tc_pr.find(qn("w:tcMar"))
+    if tc_mar is None:
+        tc_mar = OxmlElement("w:tcMar")
+        tc_pr.append(tc_mar)
+    for side in ("top", "bottom", "left", "right", "start", "end"):
+        el = tc_mar.find(qn("w:" + side))
+        if el is None:
+            el = OxmlElement("w:" + side)
+            tc_mar.append(el)
+        el.set(qn("w:w"), "0")
+        el.set(qn("w:type"), "dxa")
+
+
+def _add_td_cut_line(container, *, reuse_trailing=False):
+    """Thin dashed cutting guide after a complete TD group."""
+    if reuse_trailing and getattr(container, "paragraphs", None):
+        last = container.paragraphs[-1]
+        p = last if not last.text else container.add_paragraph()
+    else:
+        p = container.add_paragraph()
+
+    # Give the border a visible line box; empty 1 pt paragraphs can make
+    # LibreOffice and some Word versions suppress the dashed border.
+    run = p.add_run(" ")
+    run.font.size = Pt(8)
+    p.paragraph_format.space_before = Pt(8)
+    p.paragraph_format.space_after = Pt(6)
+    p.paragraph_format.line_spacing = Pt(8)
+    p_pr = p._p.get_or_add_pPr()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "dashed")
+    bottom.set(qn("w:sz"), "7")
+    bottom.set(qn("w:color"), "888888")
+    bottom.set(qn("w:space"), "1")
+    borders.append(bottom)
+    p_pr.append(borders)
+
+
+def write_section(doc, section_title, file_paths, *, show_cut_line=False):
+    """Normal flow for an unusually tall TD that cannot fit on one page."""
+    add_title(doc, section_title)
     grouped = group_files_by_measure(file_paths)
-
     for measure, names in grouped.items():
         add_measure_heading(doc, measure)
         add_table_for_files(doc, names)
+    if show_cut_line:
+        _add_td_cut_line(doc)
 
-    doc.add_paragraph("")
+
+def _write_compact_td(doc, section_title, grouped, *, show_cut_line):
+    """One unsplittable table row makes Word move complete TDs together.
+
+    This keeps existing measure headings and inner tables unchanged. Word
+    decides whether the whole TD fits in the remaining space and moves the
+    group to the next page if it does not.
+    """
+    outer = doc.add_table(rows=1, cols=1)
+    outer.autofit = False
+    outer.columns[0].width = Mm(180)
+    row = outer.rows[0]
+    tr_pr = row._tr.get_or_add_trPr()
+    no_split = OxmlElement("w:cantSplit")
+    tr_pr.append(no_split)
+
+    cell = row.cells[0]
+    _zero_cell_margins(cell)
+    add_title(cell, section_title, paragraph=cell.paragraphs[0])
+    for measure, names in grouped.items():
+        add_measure_heading(cell, measure, reuse_trailing=True)
+        add_table_for_files(cell, names)
+
+    if show_cut_line:
+        _add_td_cut_line(cell, reuse_trailing=True)
+    elif cell.paragraphs and not cell.paragraphs[-1].text:
+        # Word requires a closing paragraph after a nested table.
+        trailing = cell.paragraphs[-1]
+        trailing.paragraph_format.space_after = Pt(0)
+        trailing.paragraph_format.line_spacing = Pt(1)
+
+
+def render_td_groups(doc, prod_name, taglio_files, other_section_files):
+    """Pack full TD blocks sequentially, without per-TD section breaks."""
+    groups = []
+    if taglio_files:
+        groups.append((f"{prod_name}: Taglio Principale", taglio_files))
+    groups.extend(
+        (f"{prod_name}: {name}", files)
+        for name, files in other_section_files
+    )
+
+    for index, (title, files) in enumerate(groups):
+        grouped = group_files_by_measure(files)
+        cut_line = index < len(groups) - 1
+        if _td_group_estimated_height_mm(grouped) <= MAX_SINGLE_PAGE_TD_MM:
+            _write_compact_td(
+                doc, title, grouped, show_cut_line=cut_line,
+            )
+        else:
+            # A TD taller than one page must be allowed to flow naturally.
+            # Start it cleanly instead of squeezing its title below another TD.
+            if index:
+                doc.add_page_break()
+            write_section(
+                doc, title, files, show_cut_line=cut_line,
+            )
 
 
 # ----------------------------
@@ -484,19 +610,7 @@ def generate_docx_for_prod(prod_root):
     doc = Document()
     set_a4(doc)
 
-    wrote_any_section = False
-
-    # --- Taglio Principale only if it has files ---
-    if taglio_files:
-        write_section(doc, f"{prod_name}: Taglio Principale", taglio_files)
-        wrote_any_section = True
-
-    # --- other sections ---
-    for name, files in other_section_files:
-        if wrote_any_section:
-            add_section_break(doc)
-        write_section(doc, f"{prod_name}: {name}", files)
-        wrote_any_section = True
+    render_td_groups(doc, prod_name, taglio_files, other_section_files)
 
     # --- save dialog ---
     root = tk.Tk()
@@ -562,18 +676,7 @@ def generate_docx_for_prod_auto(prod_root, output_dir=None):
         doc = Document()
         set_a4(doc)
 
-        wrote_any_section = False
-
-        # IMPORTANT: don't generate an empty Taglio Principale section
-        if taglio_files:
-            write_section(doc, f"{prod_name}: Taglio Principale", taglio_files)
-            wrote_any_section = True
-
-        for name, files in other_section_files:
-            if wrote_any_section:
-                add_section_break(doc)
-            write_section(doc, f"{prod_name}: {name}", files)
-            wrote_any_section = True
+        render_td_groups(doc, prod_name, taglio_files, other_section_files)
 
         out = output_dir if output_dir and os.path.isdir(output_dir) else prod_root
         os.makedirs(out, exist_ok=True)
