@@ -62,8 +62,7 @@ class TestTtDocxPacking(unittest.TestCase):
         ]
         self.generator.render_td_groups(doc, "PROD 474", [], groups)
 
-        # No per-TD Word section breaks: automatic pagination decides how many
-        # full, unsplittable TD blocks fit on each physical page.
+        # The DOCX keeps one section while entire TD groups remain unsplittable.
         self.assertEqual(len(doc.sections), 1)
         self.assertEqual(len(doc.tables), 3)
         self.assertFalse(doc.sections[0].header.paragraphs[0].text)
@@ -101,6 +100,75 @@ class TestTtDocxPacking(unittest.TestCase):
             self.assertTrue(
                 cell._tc.xpath(".//w:pBdr/w:bottom[@w:val='dashed']")
             )
+
+    def test_pseudo_nesting_fills_gaps_and_lines_stop_at_page_end(self):
+        # Input folder order would require 3 pages if rendered sequentially:
+        # 5-row Taglio, 8-row TD, 3-row TD, 2-row TD. Best-fit reuses the
+        # unoccupied space after Taglio and fits everything on 2 pages.
+        taglio = [_file(index=i) for i in range(5)]
+        groups = [
+            ("TD LARGE", [_file(index=i) for i in range(8)]),
+            ("TD MEDIUM", [_file(index=i) for i in range(3)]),
+            ("TD SMALL", [_file(index=i) for i in range(2)]),
+        ]
+
+        plan = self.generator._plan_td_pages("PROD 474", taglio, groups)
+        self.assertEqual(len(plan), 2)
+        self.assertEqual(
+            [[item["title"] for item in page] for page in plan],
+            [
+                ["PROD 474: Taglio Principale", "PROD 474: TD SMALL"],
+                ["PROD 474: TD LARGE", "PROD 474: TD MEDIUM"],
+            ],
+        )
+        self.assertEqual(
+            sum(len(page) for page in plan),
+            4,
+            "Every TD group must be exported exactly once",
+        )
+
+        doc = Document()
+        self.generator.set_a4(doc)
+        self.generator.render_td_groups(doc, "PROD 474", taglio, groups)
+        self.assertEqual(len(doc.tables), 4)
+        self.assertEqual(len(doc.sections), 1)
+        self.assertEqual(
+            len(doc._element.body.xpath(".//w:br[@w:type='page']")),
+            1,
+            "The two planned pages must have one explicit page break",
+        )
+        has_line = [
+            bool(table.cell(0, 0)._tc.xpath(
+                ".//w:pBdr/w:bottom[@w:val='dashed']"
+            ))
+            for table in doc.tables
+        ]
+        self.assertEqual(
+            has_line, [True, False, True, False],
+            "Cut lines must occur only between TDs on the same page",
+        )
+
+    def test_single_group_or_oversized_page_never_has_trailing_cut_line(self):
+        large = [_file(index=i) for i in range(40)]
+        other = [_file(index=0)]
+
+        doc = Document()
+        self.generator.set_a4(doc)
+        self.generator.render_td_groups(
+            doc, "PROD 474", large, [("TD SMALL", other)]
+        )
+        pages = self.generator._plan_td_pages(
+            "PROD 474", large, [("TD SMALL", other)]
+        )
+        self.assertEqual([len(page) for page in pages], [1, 1])
+        self.assertEqual(len(doc.tables), 2)
+        self.assertFalse(
+            doc._element.body.xpath(".//w:pBdr/w:bottom[@w:val='dashed']")
+        )
+        self.assertEqual(
+            len(doc._element.body.xpath(".//w:br[@w:type='page']")),
+            1,
+        )
 
     def test_large_td_group_is_not_wrapped_in_unsplittable_container(self):
         doc = Document()
