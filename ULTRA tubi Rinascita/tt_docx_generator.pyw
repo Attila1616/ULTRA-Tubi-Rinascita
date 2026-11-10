@@ -382,7 +382,9 @@ def add_table_for_files(doc, filenames):
     table = doc.add_table(rows=1, cols=4)
     table.style = "Table Grid"
     _set_table_fixed_layout(table)
-    _keep_table_with_previous(table)   # ⭐ stick to heading
+    # The preceding measure heading already uses keep_with_next.
+    # Do not add w:tblpPr here: that property FLOATS the table and may
+    # reorder nested TD content ahead of its heading in Word/LibreOffice.
 
     hdr = table.rows[0].cells
     hdr[0].text = "OK"
