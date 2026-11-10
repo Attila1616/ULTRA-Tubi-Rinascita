@@ -2555,24 +2555,73 @@ def export_locked_rod_zzx(payload):
         except (TypeError, ValueError):
             gap_mm = 2.0
 
-        result = tubenest_engine.export_flat_nested_rod_to_directory(
-            segments,
-            output_dir,
-            tube_type=str((payload or {}).get("tubeType") or "Tube"),
-            rod_id=str((payload or {}).get("rodId") or "rod"),
-            rod_length=configured_nesting_rod_length(
-                config, float((payload or {}).get("rodLength") or 6000.0)
-            ),
-            gap_mm=gap_mm,
-            text_marking_enabled=text_marking_enabled,
-            text_marking_height_mm=text_marking_height_mm,
-            text_marking_min_height_mm=text_marking_min_height_mm,
-            text_marking_font_path=text_marking_font_path,
-            round_text_head_motion_enabled=round_text_head_motion_enabled,
-            round_tip_marking_enabled=round_tip_marking_enabled,
-            round_tip_marking_mode=round_tip_marking_mode,
-            round_tip_marking_length_mm=round_tip_marking_length_mm,
+        rod_length = configured_nesting_rod_length(
+            config, float((payload or {}).get("rodLength") or 6000.0)
         )
+        force_gap_only = bool((payload or {}).get("ignoreCommonLines", False))
+        fallback_to_gap = False
+
+        # Work only on a copy of exported placements. The locked UI rod and
+        # its cached nesting must remain unchanged by either export mode.
+        prepared_segments = segments
+        if force_gap_only:
+            prepared_segments = tubenest_engine.reflow_export_placements_with_gap(
+                segments, gap_mm=gap_mm, rod_length=rod_length,
+            )
+
+        def export_prepared(current):
+            return tubenest_engine.export_flat_nested_rod_to_directory(
+                current,
+                output_dir,
+                tube_type=str((payload or {}).get("tubeType") or "Tube"),
+                rod_id=str((payload or {}).get("rodId") or "rod"),
+                rod_length=rod_length,
+                gap_mm=gap_mm,
+                text_marking_enabled=text_marking_enabled,
+                text_marking_height_mm=text_marking_height_mm,
+                text_marking_min_height_mm=text_marking_min_height_mm,
+                text_marking_font_path=text_marking_font_path,
+                round_text_head_motion_enabled=round_text_head_motion_enabled,
+                round_tip_marking_enabled=round_tip_marking_enabled,
+                round_tip_marking_mode=round_tip_marking_mode,
+                round_tip_marking_length_mm=round_tip_marking_length_mm,
+            )
+
+        try:
+            result = export_prepared(prepared_segments)
+        except ValueError as exc:
+            if (
+                force_gap_only
+                or "Shared-cut verification failed after final positioning."
+                not in str(exc)
+            ):
+                raise
+            # The initial candidate was proven *not* to be a safe common
+            # line by the final ZZX contour/process verifier. NEVER relax
+            # that verifier or delete either boundary. Retry by repositioning
+            # intact pieces with the configured clearance instead.
+            print(
+                "[TubeNest EXPORT] Shared boundary rejected; retrying "
+                f"with a physical {gap_mm:g} mm gap: {exc}",
+                flush=True,
+            )
+            prepared_segments = tubenest_engine.reflow_export_placements_with_gap(
+                segments, gap_mm=gap_mm, rod_length=rod_length,
+            )
+            result = export_prepared(prepared_segments)
+            fallback_to_gap = True
+
+        if force_gap_only or fallback_to_gap:
+            result["commonLineGapMode"] = True
+            result["commonLineFallback"] = fallback_to_gap
+            result["gapUsedMm"] = gap_mm
+            result.setdefault("warnings", []).append(
+                "Tagli comuni disattivati per questa esportazione; "
+                f"contorni completi e margine impostato ({gap_mm:g} mm). "
+                "Le posizioni esportate possono differire dal nesting "
+                "bloccato visibile. Verificare in TubePro/TubesT."
+            )
+
         return {
             "status": "success",
             **result,
