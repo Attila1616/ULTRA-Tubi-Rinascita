@@ -825,7 +825,7 @@ def extract_tube_info(filename):
         )
         finish_pattern = re.search(r"\b(BA|LUCIDO)\b", filename, re.IGNORECASE)
 
-        material = material_pattern.group(0).upper() if material_pattern else "UNKNOWN"
+        material = material_pattern.group(1).upper() if material_pattern else "UNKNOWN"
         finish = "BA" if finish_pattern else "2B"
 
         if square_pattern:
