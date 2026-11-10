@@ -557,31 +557,126 @@ def _write_compact_td(doc, section_title, grouped, *, show_cut_line):
         trailing.paragraph_format.line_spacing = Pt(1)
 
 
-def render_td_groups(doc, prod_name, taglio_files, other_section_files):
-    """Pack full TD blocks sequentially, without per-TD section breaks."""
-    groups = []
+# Reserved page-height allowance for a dashed separation between TDs.
+# The conservative per-group estimate also reserves some whitespace.
+TD_SEPARATOR_BUDGET_MM = 8.0
+
+
+def _plan_td_pages(prod_name, taglio_files, other_section_files,
+                   *, page_budget_mm=MAX_SINGLE_PAGE_TD_MM):
+    """Pseudo-nest whole TD groups vertically using best-fit decreasing.
+
+    The stock tables use almost the entire printable page width, so placing
+    two next to one another would make file names and signature boxes
+    unreadably narrow. Instead, reorder *complete* TD groups by their
+    estimated heights to fill the vertical gaps on A4 sheets.
+
+    Keep Taglio Principale first and retain each group's internal file order.
+    Oversized groups receive dedicated pages and may flow over multiple
+    physical sheets. Never reserve an empty or split group for a smaller one.
+    """
+    source = []
     if taglio_files:
-        groups.append((f"{prod_name}: Taglio Principale", taglio_files))
-    groups.extend(
+        source.append((f"{prod_name}: Taglio Principale", taglio_files))
+    source.extend(
         (f"{prod_name}: {name}", files)
         for name, files in other_section_files
     )
 
-    for index, (title, files) in enumerate(groups):
+    items = []
+    for index, (title, files) in enumerate(source):
         grouped = group_files_by_measure(files)
-        cut_line = index < len(groups) - 1
-        if _td_group_estimated_height_mm(grouped) <= MAX_SINGLE_PAGE_TD_MM:
-            _write_compact_td(
-                doc, title, grouped, show_cut_line=cut_line,
-            )
+        items.append({
+            "title": title,
+            "files": files,
+            "grouped": grouped,
+            "height_mm": _td_group_estimated_height_mm(grouped),
+            "original_index": index,
+        })
+
+    if not items:
+        return []
+
+    pages = []
+    page_heights = []
+
+    def new_page(item):
+        pages.append([item])
+        page_heights.append(item["height_mm"])
+
+    # Always print Taglio Principale first when it exists.
+    start = 0
+    if taglio_files:
+        new_page(items[0])
+        start = 1
+
+    # Place larger TDs before smaller ones, then fill the smallest available
+    # remainder. Stable original-index tie breaking is deterministic.
+    for item in sorted(
+        items[start:],
+        key=lambda value: (-value["height_mm"], value["original_index"]),
+    ):
+        if item["height_mm"] > page_budget_mm:
+            new_page(item)
+            continue
+
+        best_page = None
+        best_unused = None
+        for page_index, page in enumerate(pages):
+            if any(
+                placed["height_mm"] > page_budget_mm
+                for placed in page
+            ):
+                continue
+            separator = TD_SEPARATOR_BUDGET_MM if page else 0.0
+            used = page_heights[page_index] + separator + item["height_mm"]
+            if used > page_budget_mm:
+                continue
+            unused = page_budget_mm - used
+            if best_unused is None or unused < best_unused:
+                best_page = page_index
+                best_unused = unused
+
+        if best_page is None:
+            new_page(item)
         else:
-            # A TD taller than one page must be allowed to flow naturally.
-            # Start it cleanly instead of squeezing its title below another TD.
-            if index:
-                doc.add_page_break()
-            write_section(
-                doc, title, files, show_cut_line=cut_line,
+            page_heights[best_page] += (
+                TD_SEPARATOR_BUDGET_MM + item["height_mm"]
             )
+            pages[best_page].append(item)
+
+    return pages
+
+
+def render_td_groups(doc, prod_name, taglio_files, other_section_files):
+    """Pack TDs onto pages, drawing cut lines *only* between page-mates."""
+    pages = _plan_td_pages(
+        prod_name, taglio_files, other_section_files,
+    )
+    for page_index, page in enumerate(pages):
+        if page_index:
+            doc.add_page_break()
+
+        for group_index, group in enumerate(page):
+            # No dashed line after the final TD on any page, even if the
+            # next TD starts a new sheet (or there are no more TDs).
+            show_cut_line = group_index < len(page) - 1
+            if group["height_mm"] <= MAX_SINGLE_PAGE_TD_MM:
+                _write_compact_td(
+                    doc,
+                    group["title"],
+                    group["grouped"],
+                    show_cut_line=show_cut_line,
+                )
+            else:
+                # One exceptionally tall TD may span several real pages.
+                # It has its own page, so there must be no cut separator.
+                write_section(
+                    doc,
+                    group["title"],
+                    group["files"],
+                    show_cut_line=False,
+                )
 
 
 # ----------------------------
