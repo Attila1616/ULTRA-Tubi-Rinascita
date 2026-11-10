@@ -452,25 +452,36 @@ def group_files_by_measure(file_paths):
     return out
 
 
-# An A4 page has 267 mm of usable height with our 15 mm margins.
-# Leave room for Word's actual text wrapping and the dashed cut line.
-MAX_SINGLE_PAGE_TD_MM = 235.0
+# A4 height: 297 mm minus 15 mm margins on both sides = 267 mm.
+# Reserve 12 mm for pagination differences between Word/LibreOffice and
+# for the small paragraph preceding an explicit page break. The old 235 mm
+# cap wasted 32 mm even before its pessimistic per-row estimates.
+MAX_SINGLE_PAGE_TD_MM = 255.0
 
 
 def _td_group_estimated_height_mm(grouped):
-    """Conservative estimate solely to avoid unbreakable, oversized rows.
+    """Estimate *actual fixed-table geometry* for page bin packing.
 
-    Word makes the final page-fitting decision for small groups via the
-    cantSplit outer row. An oversized group is written as normal content so
-    a legitimate multi-page TD is never clipped by a giant table row.
+    The exported rows have minimum height 10 mm (w:trHeight atLeast).
+    A 22 pt TD title plus its 8 pt after-space occupies around 12 mm.
+    A 16 pt measure heading plus 6 pt before-space and 10 mm table header
+    occupies around 19 mm. Unlike the previous heuristic, do not charge
+    another 12 mm for every row when the DOCX explicitly uses 10 mm rows.
+
+    Text in the 98.5 mm file column can wrap; estimate its extra height
+    only when more than two lines are expected. Leave a small allowance
+    for row borders, Word's line metrics and the compulsory closing para.
+    This is a placement estimate, never a request to shrink existing rows.
     """
-    height = 22.0  # 22 pt TD heading, bottom line and separator
+    height = 14.0  # title + required closing paragraph allowance
     for _measure, filenames in grouped.items():
-        height += 21.0  # measure heading + table heading
+        height += 19.5  # 16 pt measure heading + 10 mm header row
         for filename in filenames:
             name, _quantity = split_name_and_qty(filename)
-            wrapped_lines = max(1, math.ceil(len(name) / 42.0))
-            height += max(11.0, 5.4 * wrapped_lines) + 1.0
+            line_count = max(1, math.ceil(len(name) / 55.0))
+            # Two 11 pt lines generally still fit the 10 mm minimum.
+            # Longer descriptions need genuinely taller rows.
+            height += max(10.0, 5.1 * line_count) + 0.35
     return height
 
 
@@ -559,7 +570,7 @@ def _write_compact_td(doc, section_title, grouped, *, show_cut_line):
 
 # Reserved page-height allowance for a dashed separation between TDs.
 # The conservative per-group estimate also reserves some whitespace.
-TD_SEPARATOR_BUDGET_MM = 8.0
+TD_SEPARATOR_BUDGET_MM = 9.0
 
 
 def _plan_td_pages(prod_name, taglio_files, other_section_files,
