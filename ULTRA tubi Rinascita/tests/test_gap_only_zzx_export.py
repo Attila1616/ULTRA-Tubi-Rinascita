@@ -113,6 +113,45 @@ class GapOnlyExportTests(unittest.TestCase):
                 )
         self.assertEqual(sources, before)
 
+    def test_zero_gap_setting_is_rejected_for_gap_only_mode(self):
+        sources = [_source("dummy.zzx", "a", 0, False)]
+        with self.assertRaisesRegex(ValueError, "maggiore di zero"):
+            reflow_export_placements_with_gap(
+                sources, gap_mm=0.0, rod_length=6000.0
+            )
+
+    def test_planar_residuals_add_safety_without_changing_poses(self):
+        original_part = _fake_part()
+        def patched_part():
+            return deepcopy(original_part.to_dict())
+
+        part_data = patched_part()
+        part_data["ends"][1]["plane_max_residual_mm"] = 0.03
+        part_data["ends"][0]["plane_max_residual_mm"] = 0.02
+
+        class SlightlyImperfectPart:
+            segment_handle = 1001
+            overall_length = 100.0
+            def to_dict(self):
+                return deepcopy(part_data)
+
+        with patch(
+            "tubenest_engine.placement_reflow.read_tube_parts",
+            return_value=[SlightlyImperfectPart()],
+        ):
+            output = reflow_export_placements_with_gap(
+                [_source("dummy.zzx", "a", 0, False),
+                 _source("dummy.zzx", "b", 1, True)],
+                gap_mm=2.0,
+                rod_length=6000.0,
+            )
+        self.assertAlmostEqual(
+            output[1]["nestPlacement"]["z_start"], 82.05, places=5
+        )
+        self.assertFalse(
+            output[1]["nestPlacement"]["common_line_before"]
+        )
+
     def test_gap_only_can_export_real_zzx_without_shared_deletion(self):
         source = APP_ROOT / "Tube with sample text.zzx"
         parts = read_tube_parts(source)
