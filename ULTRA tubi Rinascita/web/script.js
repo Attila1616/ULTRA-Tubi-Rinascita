@@ -3363,9 +3363,9 @@ async function exportLockedRodZzx(tubeType, rodId, { ignoreCommonLines = false }
             const gap = Number(response.gapUsedMm);
             const gapLabel = Number.isFinite(gap) ? gap + ' mm' : 'margine configurato';
             alert(
-                reason + '\\n' +
-                'Margine tra i pezzi: ' + gapLabel + '\\n' +
-                'Angoli // e \\\\ conservati. Verifica la nuova disposizione in TubePro/TubesT.\\n' +
+                reason + '\n' +
+                'Margine tra i pezzi: ' + gapLabel + '\n' +
+                'Angoli // e \\\\ conservati. Verifica la nuova disposizione in TubePro/TubesT.\n' +
                 'File: ' + (response.path || '')
             );
         }
