@@ -3096,7 +3096,7 @@ function renderSingleRodHTML({ tubeType, rodId, label, kind, segments, isLocked,
     if (kind === 'locked') {
         const canExport = segments.length > 0 && segments.every(segment => !!segment.nestPlacement);
         if (canExport) {
-            html += `<button class="action-button" data-action="export-locked-rod-zzx" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Esporta questa verga come ZZX annidato">ZZX</button>`;
+            html += `<button class="action-button" data-action="export-locked-rod-zzx" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="ZZX: esportazione normale. Shift+clic: ignora co-edge e usa il margine configurato, conservando le inclinazioni.">ZZX</button>`;
         } else {
             html += `<button class="action-button icon-button locked-rod-renest-button" data-action="nest-locked-rod" data-rod-id="${escapeAttr(rodId)}" data-tube-type="${escapeAttr(tubeType)}" title="Ricalcola rotazioni e tagli comuni rispettando l'ordine manuale"${segments.length === 0 ? ' disabled' : ''}>&#8635;</button>`;
         }
@@ -3311,7 +3311,7 @@ async function nestLockedRodInPlace(tubeType, rodId) {
 }
 
 // --- Event Handlers & Actions ---
-async function exportLockedRodZzx(tubeType, rodId) {
+async function exportLockedRodZzx(tubeType, rodId, { ignoreCommonLines = false } = {}) {
     const rod = getLockedRod(tubeType, rodId);
     if (!rod || !(rod.segments || []).length) {
         alert('Verga bloccata non trovata o vuota.');
@@ -3344,6 +3344,7 @@ async function exportLockedRodZzx(tubeType, rodId) {
             tubeType,
             rodId,
             rodLength: 6000,
+            ignoreCommonLines: !!ignoreCommonLines,
             segments,
         });
         if (!response || response.status !== 'success') {
@@ -3355,6 +3356,19 @@ async function exportLockedRodZzx(tubeType, rodId) {
             console.warn('ZZX export warnings:', response.warnings);
         }
         console.log('ZZX annidato esportato:', response.path);
+        if (response.commonLineGapMode) {
+            const reason = response.commonLineFallback
+                ? 'I tagli comuni non coincidono entro la tolleranza: esportazione riposizionata automaticamente senza co-edge.'
+                : 'Modalità Shift+ZZX: esportazione senza co-edge.';
+            const gap = Number(response.gapUsedMm);
+            const gapLabel = Number.isFinite(gap) ? gap + ' mm' : 'margine configurato';
+            alert(
+                reason + '\\n' +
+                'Margine tra i pezzi: ' + gapLabel + '\\n' +
+                'Angoli // e \\\\ conservati. Verifica la nuova disposizione in TubePro/TubesT.\\n' +
+                'File: ' + (response.path || '')
+            );
+        }
     } catch (error) {
         console.error('Locked rod ZZX export failed:', error);
         alert('Errore durante l’esportazione ZZX della verga.');
@@ -3426,7 +3440,8 @@ async function handleContainerClick(event) {
             case 'export-locked-rod-zzx':
                 await exportLockedRodZzx(
                     actionTarget.dataset.tubeType,
-                    actionTarget.dataset.rodId
+                    actionTarget.dataset.rodId,
+                    { ignoreCommonLines: !!event.shiftKey }
                 );
                 break;
             case 'mark-locked-rod-fatto':
