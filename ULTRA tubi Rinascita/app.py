@@ -131,6 +131,10 @@ class Api:
         self.da_fare_path = self.config.get('da_fare_path', None)
         print(f"DEBUG: Extracted DA FARE path: {self.da_fare_path}")
         self.last_scan_data = []
+        # A shared path index is reused by startup's ZZX / IGS / validation
+        # screens. It is rebuilt on every explicit tube-data refresh.
+        self._startup_work_index = None
+        self._startup_work_root = None
         self.piece_id_to_path_map = {}
         self.history_id_to_path_map = {}
         self._inventory_request_stop = threading.Event()
@@ -573,9 +577,18 @@ class Api:
         try:
             self.config = logic.load_config() or {}
             self.da_fare_path = self.config.get('da_fare_path', None)
-            self.last_scan_data = logic.get_current_state(self.da_fare_path)
+            self._startup_work_index = None
+            self._startup_work_root = None
+            index = logic.scan_work_files(self.da_fare_path)
+            self.last_scan_data = logic.get_current_state(
+                self.da_fare_path, file_index=index,
+            )
             if self.last_scan_data is None:
                 return None
+            self._startup_work_index = index
+            self._startup_work_root = os.path.normcase(
+                os.path.abspath(str(self.da_fare_path or ""))
+            )
             self.piece_id_to_path_map.clear()
             for group in self.last_scan_data:
                 for piece in group.get('pieces', []):
@@ -660,9 +673,20 @@ class Api:
                 "message": "Errore durante l'esportazione ZZX della verga.",
             }
 
+    def _shared_startup_index(self):
+        root = os.path.normcase(
+            os.path.abspath(str(self.da_fare_path or ""))
+        )
+        if root == self._startup_work_root:
+            return self._startup_work_index
+        return None
+
     def get_unmatched_igs_files(self):
         try:
-            return logic.find_unmatched_igs_files(self.da_fare_path)
+            return logic.find_unmatched_igs_files(
+                self.da_fare_path,
+                file_index=self._shared_startup_index(),
+            )
         except Exception:
             print("--- PYTHON ERROR in get_unmatched_igs_files ---")
             traceback.print_exc()
@@ -670,7 +694,10 @@ class Api:
 
     def get_zzx_validation_issues(self):
         try:
-            return logic.find_zzx_validation_issues(self.da_fare_path)
+            return logic.find_zzx_validation_issues(
+                self.da_fare_path,
+                file_index=self._shared_startup_index(),
+            )
         except Exception:
             print("--- PYTHON ERROR in get_zzx_validation_issues ---")
             traceback.print_exc()
