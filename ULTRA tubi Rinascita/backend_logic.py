@@ -2721,7 +2721,8 @@ def get_current_state(da_fare_path, *, file_index=None):
         return []
 
     started = time.perf_counter()
-    if file_index is None:
+    file_index_created_here = file_index is None
+    if file_index_created_here:
         file_index = scan_work_files(da_fare_path)
     cache = _startup_metadata_cache()
     hits_before, misses_before = cache.hits, cache.misses
@@ -2786,7 +2787,11 @@ def get_current_state(da_fare_path, *, file_index=None):
     # Keep completed-file validation entries too; the warning scanner needs
     # them even though active nesting never displays the archived files.
     cache.prune_to_paths(file_index["zzx"])
-    cache.save()
+    # The app immediately performs its validation pass using this same
+    # index, which saves geometry + validation together in one compressed
+    # write. Direct callers without a shared index still persist here.
+    if file_index_created_here:
+        cache.save()
 
     grouped_tubes = defaultdict(list)
     for piece in all_pieces:
