@@ -102,9 +102,8 @@ class TestTtDocxPacking(unittest.TestCase):
             )
 
     def test_pseudo_nesting_fills_gaps_and_lines_stop_at_page_end(self):
-        # Input folder order would require 3 pages if rendered sequentially:
-        # 5-row Taglio, 8-row TD, 3-row TD, 2-row TD. Best-fit reuses the
-        # unoccupied space after Taglio and fits everything on 2 pages.
+        # Four TDs can share just two sheets. The larger TD is placed
+        # beside Taglio instead of wasting its remaining page space.
         taglio = [_file(index=i) for i in range(5)]
         groups = [
             ("TD LARGE", [_file(index=i) for i in range(8)]),
@@ -117,8 +116,8 @@ class TestTtDocxPacking(unittest.TestCase):
         self.assertEqual(
             [[item["title"] for item in page] for page in plan],
             [
-                ["PROD 474: Taglio Principale", "PROD 474: TD SMALL"],
-                ["PROD 474: TD LARGE", "PROD 474: TD MEDIUM"],
+                ["PROD 474: Taglio Principale", "PROD 474: TD LARGE"],
+                ["PROD 474: TD MEDIUM", "PROD 474: TD SMALL"],
             ],
         )
         self.assertEqual(
@@ -146,6 +145,19 @@ class TestTtDocxPacking(unittest.TestCase):
         self.assertEqual(
             has_line, [True, False, True, False],
             "Cut lines must occur only between TDs on the same page",
+        )
+
+    def test_height_estimate_uses_actual_minimum_row_height(self):
+        short_name = [_file(index=i) for i in range(10)]
+        grouped = self.generator.group_files_by_measure(short_name)
+        estimated = self.generator._td_group_estimated_height_mm(grouped)
+        self.assertLess(
+            estimated, 155,
+            "Ten fixed 10 mm rows must not be charged 12+ mm each",
+        )
+        self.assertGreater(
+            self.generator.MAX_SINGLE_PAGE_TD_MM, 250.0,
+            "Do not waste 32 mm of printable A4 space",
         )
 
     def test_single_group_or_oversized_page_never_has_trailing_cut_line(self):
