@@ -392,9 +392,16 @@ def add_table_for_files(doc, filenames):
     hdr[2].text = "Qta"
     hdr[3].text = "Firma Magazzino"
 
-    widths = [Mm(14), Mm(104), Mm(28), Mm(44)]
+    # Preserve the original column proportions (14:104:28:44) while
+    # fitting A4's 180 mm printable width with 15 mm page margins.
+    # Set BOTH grid columns and per-cell widths: nested DOCX tables
+    # otherwise render as four equal columns in some Word/LibreOffice builds.
+    original_widths = (14.0, 104.0, 28.0, 44.0)
+    scale = 180.0 / sum(original_widths)
+    widths = [Mm(value * scale) for value in original_widths]
 
     for i, w in enumerate(widths):
+        table.columns[i].width = w
         _set_col_width(hdr[i], w.mm)
         _center_cell(hdr[i])
 
