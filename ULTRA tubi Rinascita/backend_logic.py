@@ -820,7 +820,7 @@ def extract_tube_info(filename):
         # a TD drawing code (e.g. TD9903A01316 aisi 304 = 304, NOT 316).
         # Both "aisi304" and "aisi 304" are valid. Preserve AISI 430 too.
         material_pattern = re.search(
-            r"(?i)\\bAISI\\s*(304|316|430)\\b", filename
+            r"(?i)\bAISI\s*(304|316|430)\b", filename
         )
         finish_pattern = re.search(r"\b(BA|LUCIDO)\b", filename, re.IGNORECASE)
 
