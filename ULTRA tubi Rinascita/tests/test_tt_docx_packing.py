@@ -89,6 +89,11 @@ class TestTtDocxPacking(unittest.TestCase):
             self.assertLess(title_index, measure_index)
             self.assertLess(measure_index, nested_index)
             self.assertFalse(cell.tables[0]._tbl.tblPr.xpath("./w:tblpPr"))
+            column_mm = [col.width.mm for col in cell.tables[0].columns]
+            self.assertAlmostEqual(sum(column_mm), 180.0, delta=0.2)
+            self.assertGreater(column_mm[1], column_mm[3])
+            self.assertGreater(column_mm[3], column_mm[2])
+            self.assertGreater(column_mm[2], column_mm[0])
 
         # Dashed lines are after each group, except the final one.
         for outer in doc.tables[:2]:
