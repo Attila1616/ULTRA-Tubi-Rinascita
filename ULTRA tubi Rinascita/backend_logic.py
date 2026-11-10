@@ -2915,6 +2915,7 @@ def find_unmatched_igs_files(da_fare_path, *, file_index=None):
 
     zzx_by_stem = defaultdict(list)
     zzx_by_quantity_independent_stem = defaultdict(list)
+    igs_files = []
     if file_index is None:
         file_index = scan_work_files(da_fare_path)
 
@@ -2929,7 +2930,6 @@ def find_unmatched_igs_files(da_fare_path, *, file_index=None):
     for file_path in file_index["igs"]:
         if not _path_contains_fatto_folder(os.path.dirname(file_path)):
             igs_files.append(os.path.normpath(file_path))
-s.append(file_path)
 
     unmatched = []
     for igs_path in igs_files:
