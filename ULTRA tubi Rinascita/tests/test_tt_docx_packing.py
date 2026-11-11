@@ -173,15 +173,20 @@ class TestTtDocxPacking(unittest.TestCase):
             "PROD 474", large, [("TD SMALL", other)]
         )
         self.assertEqual([len(page) for page in pages], [1, 1])
-        # Oversized Taglio is divided into complete A4-safe tables,
-        # followed by the small TD on its own planned page.
+        # Oversized Taglio occupies two explicitly planned pages,
+        # repeating its heading on the continuation. The other TD follows
+        # only after the oversized block has completely finished.
         self.assertEqual(len(doc.tables), 3)
         self.assertFalse(
             doc._element.body.xpath(".//w:pBdr/w:bottom[@w:val='dashed']")
         )
         self.assertEqual(
             len(doc._element.body.xpath(".//w:br[@w:type='page']")),
-            1,
+            2,
+        )
+        self.assertEqual(
+            doc.tables[1].cell(0, 0).paragraphs[0].text,
+            "PROD 474: Taglio Principale (continua)",
         )
 
     def test_oversized_td_has_complete_indivisible_measure_chunks(self):
