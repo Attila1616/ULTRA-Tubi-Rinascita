@@ -173,7 +173,9 @@ class TestTtDocxPacking(unittest.TestCase):
             "PROD 474", large, [("TD SMALL", other)]
         )
         self.assertEqual([len(page) for page in pages], [1, 1])
-        self.assertEqual(len(doc.tables), 2)
+        # Oversized Taglio is divided into complete A4-safe tables,
+        # followed by the small TD on its own planned page.
+        self.assertEqual(len(doc.tables), 3)
         self.assertFalse(
             doc._element.body.xpath(".//w:pBdr/w:bottom[@w:val='dashed']")
         )
@@ -182,16 +184,82 @@ class TestTtDocxPacking(unittest.TestCase):
             1,
         )
 
-    def test_large_td_group_is_not_wrapped_in_unsplittable_container(self):
+    def test_oversized_td_has_complete_indivisible_measure_chunks(self):
         doc = Document()
         self.generator.set_a4(doc)
         large = [_file(index=i) for i in range(40)]
         self.generator.render_td_groups(
             doc, "PROD 474", [], [("TD BIG", large)]
         )
-        self.assertEqual(len(doc.tables), 1)
-        self.assertEqual(len(doc.tables[0].rows), 41)
-        self.assertIn("TD BIG", doc.paragraphs[0].text)
+        self.assertEqual(len(doc.tables), 2)
+        count = 0
+        for index, outer in enumerate(doc.tables, 1):
+            self.assertTrue(outer.rows[0]._tr.xpath("./w:trPr/w:cantSplit"))
+            cell = outer.cell(0, 0)
+            self.assertIn("PROD 474: TD BIG", cell.paragraphs[0].text)
+            self.assertIn(f"parte {index}/2", cell.paragraphs[1].text)
+            self.assertEqual(len(cell.tables), 1)
+            rows = cell.tables[0].rows
+            self.assertLess(len(rows) - 1, 23)
+            count += len(rows) - 1
+        self.assertEqual(count, 40)
+
+    def test_combined_multi_prod_packs_small_groups_across_prods(self):
+        sources = [
+            ("PROD 100", [], [("TD100", [_file(index=0)])]),
+            ("PROD 200", [], [("TD200", [_file(index=1)])]),
+            ("PROD 300", [], [("TD300", [_file(index=2)])]),
+        ]
+        pages = self.generator._plan_combined_td_pages(sources)
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(len(pages[0]), 3)
+        doc = Document()
+        self.generator.set_a4(doc)
+        self.generator.render_combined_td_groups(doc, sources)
+        self.assertEqual(len(doc.tables), 3)
+        for index, prod in enumerate(("PROD 100", "PROD 200", "PROD 300")):
+            self.assertIn(
+                prod, doc.tables[index].cell(0, 0).paragraphs[0].text
+            )
+            self.assertTrue(
+                doc.tables[index].rows[0]._tr.xpath("./w:trPr/w:cantSplit")
+            )
+        cut_lines = [
+            bool(table.cell(0, 0)._tc.xpath(
+                ".//w:pBdr/w:bottom[@w:val='dashed']"
+            ))
+            for table in doc.tables
+        ]
+        self.assertEqual(cut_lines, [True, True, False])
+
+    def test_combined_generator_saves_new_file_without_touching_individuals(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            for prod in ("PROD 100", "PROD 200"):
+                tt = base / prod / "TT" / "TD0001"
+                tt.mkdir(parents=True)
+                (tt / _file(index=0)).write_bytes(b"")
+            out = base / "printouts"
+            out.mkdir()
+            original = out / "PROD 100 Lista TT.docx"
+            original.write_bytes(b"keep-existing-document")
+            ok, path = self.generator.generate_combined_docx_for_prods(
+                [str(base / "PROD 100"), str(base / "PROD 200")],
+                output_dir=str(out),
+            )
+            self.assertTrue(ok, path)
+            self.assertTrue(Path(path).is_file())
+            self.assertEqual(
+                original.read_bytes(), b"keep-existing-document",
+            )
+            merged = Document(path)
+            self.assertEqual(len(merged.tables), 2)
+            titles = [
+                table.cell(0, 0).paragraphs[0].text
+                for table in merged.tables
+            ]
+            self.assertTrue(any("PROD 100" in title for title in titles))
+            self.assertTrue(any("PROD 200" in title for title in titles))
 
     def test_auto_save_uses_packed_layout(self):
         with tempfile.TemporaryDirectory() as tmp:
