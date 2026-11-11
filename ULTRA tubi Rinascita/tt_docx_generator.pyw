@@ -593,26 +593,68 @@ def _write_atomic_measure(doc, measure, filenames, *, section_title=None,
         trailing.paragraph_format.line_spacing = Pt(1)
 
 
-def write_section(doc, section_title, file_paths, *, show_cut_line=False):
-    """Keep all sizes of an oversized PROD/TD contiguous, heading only once.
+def _paginate_oversized_td(grouped, *, page_budget_mm=MAX_SINGLE_PAGE_TD_MM):
+    """Plan uninterrupted pages for ONE TD or Taglio Principale block.
 
-    The complete PROD/TD group gets its own uninterrupted sequence of size
-    tables. A page break is allowed inside this sequence ONLY because its
-    total height exceeds a whole A4 page. Each dimension table is itself an
-    unsplittable row. If one dimension is too tall for a sheet, it becomes
-    separately labelled, intact parts with repeated column headings.
+    Only groups whose total height exceeds one A4 page reach this planner.
+    Whole dimension tables remain indivisible. A dimension longer than a
+    whole page is chunked at file-row boundaries, with its heading repeated.
+    Reserve room for the PROD/TD title on EVERY continuation page.
+    """
+    title_height_mm = 14.0
+    measure_heading_and_header_mm = 19.5
+    if page_budget_mm <= title_height_mm + measure_heading_and_header_mm:
+        raise ValueError("Area stampabile insufficiente per una tabella TT.")
+
+    pages = []
+    current = []
+    occupied = title_height_mm
+
+    for measure, names in grouped.items():
+        chunks = _measure_chunks(names, page_budget_mm=page_budget_mm)
+        for chunk_index, chunk in enumerate(chunks, 1):
+            cost = (
+                measure_heading_and_header_mm
+                + sum(_measure_row_height_mm(filename) for filename in chunk)
+            )
+            if cost + title_height_mm > page_budget_mm + 1e-6:
+                raise ValueError(
+                    f"Tabella {measure} troppo alta per una pagina A4."
+                )
+            if current and occupied + cost > page_budget_mm + 1e-6:
+                pages.append(current)
+                current = []
+                occupied = title_height_mm
+
+            current.append((measure, chunk, chunk_index, len(chunks)))
+            occupied += cost
+
+    if current:
+        pages.append(current)
+    return pages
+
+
+def write_section(doc, section_title, file_paths, *, show_cut_line=False):
+    """Keep each PROD/TD whole, with a repeated heading on continuation pages.
+
+    A new page is permitted only for a group taller than one full A4 page.
+    No other PROD/TD can be inserted between its pages or dimensions.
     """
     grouped = group_files_by_measure(file_paths)
-    first_table = True
-    for measure, names in grouped.items():
-        chunks = _measure_chunks(names)
-        for index, chunk in enumerate(chunks, 1):
+    for page_index, page in enumerate(_paginate_oversized_td(grouped)):
+        if page_index:
+            doc.add_page_break()
+        for table_index, (measure, chunk, part, count) in enumerate(page):
+            title = None
+            if table_index == 0:
+                title = section_title
+                if page_index:
+                    title += " (continua)"
             _write_atomic_measure(
                 doc, measure, chunk,
-                section_title=section_title if first_table else None,
-                part_number=index, part_count=len(chunks),
+                section_title=title,
+                part_number=part, part_count=count,
             )
-            first_table = False
     if show_cut_line:
         _add_td_cut_line(doc)
 
