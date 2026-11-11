@@ -678,6 +678,17 @@ def _plan_td_pages(prod_name, taglio_files, other_section_files,
     if not items:
         return []
 
+    return _pack_td_items(
+        items, page_budget_mm=page_budget_mm,
+        pin_first=bool(taglio_files),
+    )
+
+
+def _pack_td_items(items, *, page_budget_mm=MAX_SINGLE_PAGE_TD_MM,
+                   pin_first=False):
+    """Common best-fit packing for a single PROD or multiple PRODs."""
+    if not items:
+        return []
     pages = []
     page_heights = []
 
@@ -685,14 +696,13 @@ def _plan_td_pages(prod_name, taglio_files, other_section_files,
         pages.append([item])
         page_heights.append(item["height_mm"])
 
-    # Always print Taglio Principale first when it exists.
+    # The existing single-PROD export keeps Taglio Principale first.
+    # Multi-PROD export optimizes all TDs together instead.
     start = 0
-    if taglio_files:
+    if pin_first:
         new_page(items[0])
         start = 1
 
-    # Place larger TDs before smaller ones, then fill the smallest available
-    # remainder. Stable original-index tie breaking is deterministic.
     for item in sorted(
         items[start:],
         key=lambda value: (-value["height_mm"], value["original_index"]),
@@ -729,11 +739,39 @@ def _plan_td_pages(prod_name, taglio_files, other_section_files,
     return pages
 
 
+def _plan_combined_td_pages(prod_sources):
+    """Repack complete TD groups from ALL selected PRODs on common A4 sheets.
+
+    Importing the generated DOCX files would retain their page breaks and
+    prevent nesting. Build the combined printout from the same source ZZX
+    groups, preserving the individual export format and labels.
+    """
+    items = []
+    for prod_name, taglio_files, other_section_files in prod_sources:
+        for page in _plan_td_pages(
+            prod_name, taglio_files, other_section_files,
+        ):
+            items.extend(page)
+    # Reassign stable global order for predictable tie breaking.
+    for index, item in enumerate(items):
+        item["original_index"] = index
+    return _pack_td_items(items, pin_first=False)
+
+
+def render_combined_td_groups(doc, prod_sources):
+    """Create one document with cross-PROD pseudo-nesting."""
+    _render_td_pages(doc, _plan_combined_td_pages(prod_sources))
+
+
 def render_td_groups(doc, prod_name, taglio_files, other_section_files):
-    """Pack TDs onto pages, drawing cut lines *only* between page-mates."""
-    pages = _plan_td_pages(
-        prod_name, taglio_files, other_section_files,
+    """Pack one PROD, drawing cut lines only between page-mates."""
+    _render_td_pages(
+        doc,
+        _plan_td_pages(prod_name, taglio_files, other_section_files),
     )
+
+
+def _render_td_pages(doc, pages):
     for page_index, page in enumerate(pages):
         if page_index:
             doc.add_page_break()
