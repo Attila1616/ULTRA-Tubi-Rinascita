@@ -562,12 +562,14 @@ def _measure_chunks(filenames, *, page_budget_mm=MAX_SINGLE_PAGE_TD_MM):
     return chunks
 
 
-def _write_atomic_measure(doc, section_title, measure, filenames, *,
+def _write_atomic_measure(doc, measure, filenames, *, section_title=None,
                           part_number=None, part_count=None):
-    """A complete dimension table inside one indivisible Word row.
+    """One complete size table in a non-splitting row of an oversized TD.
 
-    This is essential for large TDs: cantSplit on each individual file row
-    does NOT prevent Word from putting half the same table on another page.
+    Include the PROD/TD heading ONLY on the first table of the entire group.
+    All remaining sizes immediately follow as separate tables, never as
+    independent PROD/TD blocks. Word may move an entire size table onto the
+    next sheet when the complete TD group exceeds a physical A4 page.
     """
     wrapper = doc.add_table(rows=1, cols=1)
     wrapper.autofit = False
@@ -576,7 +578,10 @@ def _write_atomic_measure(doc, section_title, measure, filenames, *,
     tr_pr.append(OxmlElement("w:cantSplit"))
     cell = wrapper.cell(0, 0)
     _zero_cell_margins(cell)
-    add_title(cell, section_title, paragraph=cell.paragraphs[0])
+
+    if section_title is not None:
+        add_title(cell, section_title, paragraph=cell.paragraphs[0])
+
     label = measure
     if part_count is not None and part_count > 1:
         label += f" (parte {part_number}/{part_count})"
@@ -589,20 +594,25 @@ def _write_atomic_measure(doc, section_title, measure, filenames, *,
 
 
 def write_section(doc, section_title, file_paths, *, show_cut_line=False):
-    """Paginate oversized TDs strictly BETWEEN dimension tables, never within.
+    """Keep all sizes of an oversized PROD/TD contiguous, heading only once.
 
-    If a single measure is longer than an A4 sheet, split it into separately
-    labelled chunks with repeated column headers, each itself unsplittable.
-    Never shrink the printed rows or omit a file.
+    The complete PROD/TD group gets its own uninterrupted sequence of size
+    tables. A page break is allowed inside this sequence ONLY because its
+    total height exceeds a whole A4 page. Each dimension table is itself an
+    unsplittable row. If one dimension is too tall for a sheet, it becomes
+    separately labelled, intact parts with repeated column headings.
     """
     grouped = group_files_by_measure(file_paths)
+    first_table = True
     for measure, names in grouped.items():
         chunks = _measure_chunks(names)
         for index, chunk in enumerate(chunks, 1):
             _write_atomic_measure(
-                doc, section_title, measure, chunk,
+                doc, measure, chunk,
+                section_title=section_title if first_table else None,
                 part_number=index, part_count=len(chunks),
             )
+            first_table = False
     if show_cut_line:
         _add_td_cut_line(doc)
 
