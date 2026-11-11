@@ -801,6 +801,77 @@ def _render_td_pages(doc, pages):
 # ----------------------------
 # Generator
 # ----------------------------
+def _collect_prod_sources(prod_root):
+    """Read the same TT source sections used by normal individual printouts."""
+    prod_root = os.path.abspath(os.fspath(prod_root))
+    tt = find_tt_folder(prod_root)
+    if not tt:
+        raise ValueError(f"Cartella TT non trovata in: {prod_root}")
+
+    prod_name = extract_prod_name(prod_root)
+    taglio, other = split_tt_sections(tt)
+    taglio_files = []
+    for folder in taglio:
+        taglio_files.extend(collect_zzx_files(folder))
+    for name in os.listdir(tt):
+        path = os.path.join(tt, name)
+        if os.path.isfile(path) and name.lower().endswith(".zzx"):
+            taglio_files.append(path)
+
+    other_section_files = []
+    for name, folder in other:
+        files = collect_zzx_files(folder)
+        if files:
+            other_section_files.append((name, files))
+
+    if not taglio_files and not other_section_files:
+        raise ValueError(f"Nessun file ZZX trovato nella cartella TT: {prod_root}")
+    return prod_name, taglio_files, other_section_files
+
+
+def generate_combined_docx_for_prods(prod_roots, output_dir=None):
+    """Create ONE pseudo-nested DOCX across all selected PROD directories.
+
+    Unlike merging already paginated Word files, this regenerates the *same*
+    tables directly from the ZZX source lists. No existing DOCX is changed.
+    Returns (success, absolute_output_path_or_error).
+    """
+    try:
+        unique = []
+        seen = set()
+        for root in prod_roots or []:
+            folder = os.path.abspath(os.fspath(root))
+            key = os.path.normcase(folder)
+            if key not in seen:
+                unique.append(folder)
+                seen.add(key)
+        if len(unique) < 2:
+            return False, "Seleziona almeno due cartelle PROD per creare la lista combinata."
+
+        sources = [_collect_prod_sources(folder) for folder in unique]
+        doc = Document()
+        set_a4(doc)
+        render_combined_td_groups(doc, sources)
+
+        out = output_dir if output_dir and os.path.isdir(output_dir) else os.path.dirname(unique[0])
+        os.makedirs(out, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_name = f"Lista TT COMBINATA {stamp}.docx"
+        path = os.path.join(out, base_name)
+        suffix = 2
+        while os.path.exists(path):
+            path = os.path.join(
+                out, f"Lista TT COMBINATA {stamp}_{suffix}.docx"
+            )
+            suffix += 1
+        doc.save(path)
+        return True, path
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return False, str(exc)
+
+
 def generate_docx_for_prod(prod_root):
     tt = find_tt_folder(prod_root)
     if not tt:
