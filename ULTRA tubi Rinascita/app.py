@@ -1018,10 +1018,12 @@ class Api:
         return logic.save_summary_and_open_docx(summary_text, self.da_fare_path)
 
 
-    def generate_tt_docx_from_explorer_selection(self):
-        """Generates TT list DOCX for currently selected folders in File Explorer."""
+    def generate_tt_docx_from_explorer_selection(self, combined_only=False):
+        """Generate individual or cross-PROD packed TT printouts."""
         try:
-            return logic.generate_tt_docx_from_explorer_selection(self.da_fare_path)
+            return logic.generate_tt_docx_from_explorer_selection(
+                self.da_fare_path, combined_only=bool(combined_only),
+            )
         except Exception:
             traceback.print_exc()
             return {"status": "error", "message": "Errore durante la generazione DOCX TT."}
