@@ -3783,11 +3783,31 @@ def generate_tt_docx_from_dialog():
 
             results.append(msg)
 
+        combined_path = None
+        combined_error = None
+        if len(selected_folders) > 1:
+            merged = getattr(mod, "generate_combined_docx_for_prods", None)
+            if merged is not None:
+                combined_ok, combined_msg = merged(
+                    selected_folders, output_dir=output_dir,
+                )
+                if combined_ok:
+                    combined_path = combined_msg
+                else:
+                    combined_error = combined_msg
+
         print("--- TT DOCX DEBUG END ---\n")
 
+        output_lines = ["Generated:", *results]
+        if combined_path:
+            output_lines.extend(["", "Lista combinata:", combined_path])
+        if combined_error:
+            output_lines.extend(["", "Errore lista combinata:", combined_error])
         return {
             "status": "success",
-            "message": "Generated:\n" + "\n".join(results)
+            "message": "\n".join(output_lines),
+            "combined": combined_path,
+            "combined_error": combined_error,
         }
 
     except Exception:
@@ -3796,8 +3816,8 @@ def generate_tt_docx_from_dialog():
         return {"status": "error", "message": "Unexpected TT DOCX error. See console."}
 
 
-def generate_tt_docx_from_explorer_selection(da_fare_path=None):
-    """Generates TT list DOCX files for folders currently selected in File Explorer."""
+def generate_tt_docx_from_explorer_selection(da_fare_path=None, combined_only=False):
+    """Generate individual and/or cross-PROD packed TT DOCX printouts."""
     try:
         mod = _load_tt_docx_module()
         if mod is None:
@@ -3818,18 +3838,60 @@ def generate_tt_docx_from_explorer_selection(da_fare_path=None):
         output_dir = _get_docx_output_dir_fallback(da_fare_path, "tt_docx_output_dir")
         generated = []
         failed = []
+        valid_folders = []
+
+        if combined_only and len(selected_folders) < 2:
+            return {
+                "status": "error",
+                "message": "Seleziona almeno due cartelle PROD in Esplora file.",
+            }
 
         for folder in selected_folders:
+            if combined_only:
+                # Do not create unwanted individual DOCX just to obtain the
+                # source groups for the merged printout.
+                valid_folders.append(folder)
+                continue
+
             ok, msg = generate_auto(folder, output_dir=output_dir)
             if ok:
                 generated.append(msg)
+                valid_folders.append(folder)
             else:
                 failed.append({"folder": folder, "error": msg})
 
-        if generated:
+        combined = None
+        combined_error = None
+        if len(valid_folders) >= 2:
+            combined_generator = getattr(
+                mod, "generate_combined_docx_for_prods", None,
+            )
+            if combined_generator is None:
+                combined_error = "Generatore lista TT combinata non disponibile."
+            else:
+                ok, result = combined_generator(
+                    valid_folders, output_dir=output_dir,
+                )
+                if ok:
+                    combined = result
+                else:
+                    combined_error = result
+
+        if combined_only and not combined:
+            return {
+                "status": "error",
+                "message": combined_error or "Lista TT combinata non generata.",
+                "generated": generated,
+                "failed": failed,
+                "save_dir": output_dir,
+            }
+
+        if generated or combined:
             return {
                 "status": "success",
                 "generated": generated,
+                "combined": combined,
+                "combined_error": combined_error,
                 "failed": failed,
                 "save_dir": output_dir,
             }
