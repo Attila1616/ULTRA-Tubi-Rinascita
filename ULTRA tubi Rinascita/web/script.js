@@ -182,7 +182,10 @@ closeSearchBtn = document.getElementById('close-search-btn');
     document.getElementById('settings-btn')?.addEventListener('click', openSettingsModal);
     document.getElementById('debug-btn').addEventListener('click', showDebugModal);
     const ttDocxBtn = document.getElementById('tt-docx-btn');
-    if (ttDocxBtn) ttDocxBtn.addEventListener('click', generateTTDocxFromSelection);
+    if (ttDocxBtn) ttDocxBtn.addEventListener('click', () => generateTTDocxFromSelection(false));
+    document.getElementById('tt-docx-merged-btn')?.addEventListener(
+        'click', () => generateTTDocxFromSelection(true)
+    );
     document.getElementById('close-debug-btn').addEventListener('click', closeDebugModal);
 
 // Search listeners
@@ -4584,9 +4587,9 @@ function parseNonNegativeInteger(value, fallback = 0) {
 // --- DOCX Printout ---
 
 
-async function generateTTDocxFromSelection() {
+async function generateTTDocxFromSelection(combinedOnly = false) {
     try {
-        const resp = await pywebview.api.generate_tt_docx_from_explorer_selection();
+        const resp = await pywebview.api.generate_tt_docx_from_explorer_selection(!!combinedOnly);
         if (!resp) {
             alert('Errore: nessuna risposta dal backend.');
             return;
@@ -4597,6 +4600,15 @@ async function generateTTDocxFromSelection() {
                 lines.push('DOCX generati in: ' + (resp.save_dir || ''));
                 lines.push('');
                 lines.push(...resp.generated);
+            }
+            if (resp.combined) {
+                lines.push('');
+                lines.push('Lista TT unica (ottimizzata fra PROD):');
+                lines.push(resp.combined);
+            }
+            if (resp.combined_error) {
+                lines.push('');
+                lines.push('Lista combinata non generata: ' + resp.combined_error);
             }
             if (resp.failed && resp.failed.length) {
                 lines.push('');
