@@ -250,6 +250,35 @@ class TestTtDocxPacking(unittest.TestCase):
             doc._element.body.xpath(".//w:pBdr/w:bottom[@w:val='dashed']")
         )
 
+    def test_three_page_td_repeats_header_at_each_real_continuation(self):
+        large_td = [_file(index=i) for i in range(61)]
+        grouped = self.generator.group_files_by_measure(large_td)
+        planned = self.generator._paginate_oversized_td(grouped)
+        self.assertEqual(len(planned), 3)
+        doc = Document()
+        self.generator.set_a4(doc)
+        self.generator.render_td_groups(
+            doc, "PROD 501", [], [("TD00051", large_td)]
+        )
+        self.assertEqual(len(doc.tables), 3)
+        self.assertEqual(
+            len(doc._element.body.xpath(".//w:br[@w:type='page']")), 2
+        )
+        headings = [
+            wrapper.cell(0, 0).paragraphs[0].text
+            for wrapper in doc.tables
+        ]
+        self.assertEqual(headings, [
+            "PROD 501: TD00051",
+            "PROD 501: TD00051 (continua)",
+            "PROD 501: TD00051 (continua)",
+        ])
+        count = sum(
+            len(wrapper.cell(0, 0).tables[0].rows) - 1
+            for wrapper in doc.tables
+        )
+        self.assertEqual(count, 61)
+
     def test_td_with_three_sizes_is_one_indivisible_block(self):
         td_files = [
             _file(measure=measure, index=index)
