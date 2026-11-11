@@ -275,9 +275,9 @@ class TestTtDocxPacking(unittest.TestCase):
         files = [
             _file(measure=measure, index=index)
             for measure, count in (
-                ("60x60x2", 14),
-                ("80x80x2", 8),
-                ("80x80x3", 4),
+                ("60x60x2", 12),
+                ("80x80x2", 7),
+                ("80x80x3", 8),
             )
             for index in range(count)
         ]
