@@ -204,6 +204,104 @@ class TestTtDocxPacking(unittest.TestCase):
             count += len(rows) - 1
         self.assertEqual(count, 40)
 
+    def test_oversized_taglio_repeats_heading_only_on_continuation(self):
+        # Three different tube sizes exceed a page together. The first
+        # two fit on page 1 and the third continues on page 2.
+        sizes = [
+            ("40x40x2", 10),
+            ("60x60x3", 9),
+            ("80x80x3", 8),
+        ]
+        taglio = [
+            _file(measure=measure, index=index)
+            for measure, count in sizes
+            for index in range(count)
+        ]
+        grouped = self.generator.group_files_by_measure(taglio)
+        pages = self.generator._paginate_oversized_td(grouped)
+        self.assertEqual(len(pages), 2)
+        self.assertEqual([len(page) for page in pages], [2, 1])
+
+        doc = Document()
+        self.generator.set_a4(doc)
+        self.generator.render_td_groups(doc, "PROD 501", taglio, [])
+        self.assertEqual(len(doc.tables), 3)
+        self.assertEqual(
+            len(doc._element.body.xpath(".//w:br[@w:type='page']")), 1
+        )
+        cells = [table.cell(0, 0) for table in doc.tables]
+        self.assertEqual(
+            cells[0].paragraphs[0].text, "PROD 501: Taglio Principale"
+        )
+        self.assertEqual(cells[1].paragraphs[0].text, "60x60x3")
+        self.assertEqual(
+            cells[2].paragraphs[0].text,
+            "PROD 501: Taglio Principale (continua)",
+        )
+        for cell in cells:
+            self.assertEqual(len(cell.tables), 1)
+            self.assertEqual(len(cell._tc.xpath("./w:tbl")), 1)
+        self.assertFalse(
+            doc._element.body.xpath(".//w:pBdr/w:bottom[@w:val='dashed']")
+        )
+
+    def test_td_with_three_sizes_is_one_indivisible_block(self):
+        td_files = [
+            _file(measure=measure, index=index)
+            for measure in ("80x80x3", "80x80x2", "60x60x2")
+            for index in range(2)
+        ]
+        plan = self.generator._plan_td_pages(
+            "PROD 501", [], [("TD00051", td_files)]
+        )
+        self.assertEqual(len(plan), 1)
+        self.assertEqual(len(plan[0]), 1)
+        doc = Document()
+        self.generator.set_a4(doc)
+        self.generator.render_td_groups(
+            doc, "PROD 501", [], [("TD00051", td_files)]
+        )
+        self.assertEqual(len(doc.tables), 1)
+        wrapper = doc.tables[0]
+        self.assertTrue(wrapper.rows[0]._tr.xpath("./w:trPr/w:cantSplit"))
+        cell = wrapper.cell(0, 0)
+        self.assertEqual(cell.paragraphs[0].text, "PROD 501: TD00051")
+        self.assertEqual(len(cell.tables), 3)
+        self.assertFalse(
+            doc._element.body.xpath(".//w:br[@w:type='page']")
+        )
+
+    def test_oversized_multi_size_td_keeps_all_sizes_in_sequence(self):
+        files = [
+            _file(measure=measure, index=index)
+            for measure, count in (
+                ("60x60x2", 14),
+                ("80x80x2", 8),
+                ("80x80x3", 4),
+            )
+            for index in range(count)
+        ]
+        grouped = self.generator.group_files_by_measure(files)
+        pages = self.generator._paginate_oversized_td(grouped)
+        self.assertEqual(len(pages), 2)
+        doc = Document()
+        self.generator.set_a4(doc)
+        self.generator.render_td_groups(
+            doc, "PROD 501", [], [("TD00051", files)]
+        )
+        self.assertEqual(len(doc.tables), 3)
+        cells = [table.cell(0, 0) for table in doc.tables]
+        self.assertEqual(cells[0].paragraphs[0].text, "PROD 501: TD00051")
+        self.assertEqual(cells[1].paragraphs[0].text, "80x80x2")
+        self.assertEqual(
+            cells[2].paragraphs[0].text,
+            "PROD 501: TD00051 (continua)",
+        )
+        self.assertEqual(
+            sum(len(cell.tables[0].rows) - 1 for cell in cells),
+            len(files),
+        )
+
     def test_combined_multi_prod_packs_small_groups_across_prods(self):
         sources = [
             ("PROD 100", [], [("TD100", [_file(index=0)])]),
