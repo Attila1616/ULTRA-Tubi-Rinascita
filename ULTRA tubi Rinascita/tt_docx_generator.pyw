@@ -526,13 +526,83 @@ def _add_td_cut_line(container, *, reuse_trailing=False):
     p_pr.append(borders)
 
 
+def _measure_row_height_mm(filename):
+    """Match the placement estimator used for ordinary, unshrunk rows."""
+    name, _quantity = split_name_and_qty(filename)
+    line_count = max(1, math.ceil(len(name) / 55.0))
+    return max(10.0, 5.1 * line_count) + 0.35
+
+
+def _measure_chunks(filenames, *, page_budget_mm=MAX_SINGLE_PAGE_TD_MM):
+    """Partition genuinely oversized measure tables into whole printable tables.
+
+    A 40-row table cannot physically fit on A4 without scaling. Rather than
+    allow Word to cut it between two pages, create smaller *complete* tables,
+    each with its own heading and repeated header row.
+    """
+    # The title + measure heading + header row are repeated on each chunk.
+    available = float(page_budget_mm) - 14.0 - 19.5
+    if available <= 0:
+        raise ValueError("Area stampabile A4 insufficiente.")
+    chunks, current, used = [], [], 0.0
+    for name in filenames:
+        height = _measure_row_height_mm(name)
+        if height > available:
+            raise ValueError(
+                "Una riga del DOCX TT è troppo alta per una pagina A4 "
+                f"senza ridurne il carattere: {name}"
+            )
+        if current and used + height > available:
+            chunks.append(current)
+            current, used = [], 0.0
+        current.append(name)
+        used += height
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _write_atomic_measure(doc, section_title, measure, filenames, *,
+                          part_number=None, part_count=None):
+    """A complete dimension table inside one indivisible Word row.
+
+    This is essential for large TDs: cantSplit on each individual file row
+    does NOT prevent Word from putting half the same table on another page.
+    """
+    wrapper = doc.add_table(rows=1, cols=1)
+    wrapper.autofit = False
+    wrapper.columns[0].width = Mm(180)
+    tr_pr = wrapper.rows[0]._tr.get_or_add_trPr()
+    tr_pr.append(OxmlElement("w:cantSplit"))
+    cell = wrapper.cell(0, 0)
+    _zero_cell_margins(cell)
+    add_title(cell, section_title, paragraph=cell.paragraphs[0])
+    label = measure
+    if part_count is not None and part_count > 1:
+        label += f" (parte {part_number}/{part_count})"
+    add_measure_heading(cell, label, reuse_trailing=True)
+    add_table_for_files(cell, filenames)
+    if cell.paragraphs and not cell.paragraphs[-1].text:
+        trailing = cell.paragraphs[-1]
+        trailing.paragraph_format.space_after = Pt(0)
+        trailing.paragraph_format.line_spacing = Pt(1)
+
+
 def write_section(doc, section_title, file_paths, *, show_cut_line=False):
-    """Normal flow for an unusually tall TD that cannot fit on one page."""
-    add_title(doc, section_title)
+    """Paginate oversized TDs strictly BETWEEN dimension tables, never within.
+
+    If a single measure is longer than an A4 sheet, split it into separately
+    labelled chunks with repeated column headers, each itself unsplittable.
+    Never shrink the printed rows or omit a file.
+    """
     grouped = group_files_by_measure(file_paths)
     for measure, names in grouped.items():
-        add_measure_heading(doc, measure)
-        add_table_for_files(doc, names)
+        chunks = _measure_chunks(names)
+        for index, chunk in enumerate(chunks, 1):
+            _write_atomic_measure(
+                doc, section_title, measure, chunk,
+                part_number=index, part_count=len(chunks),
+            )
     if show_cut_line:
         _add_td_cut_line(doc)
 
