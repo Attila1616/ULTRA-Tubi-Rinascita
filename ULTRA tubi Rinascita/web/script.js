@@ -1261,7 +1261,9 @@ function renderTubeDatabase(debug) {
 
         const selected = dbOrderSelected.has(row.key) ? ' checked' : '';
         const selectedLabel = row.manualOrder
-            ? '<span class="database-in-manual-order" title="Selezionato manualmente per Ordine tubi">In ordine</span>'
+            ? '<span class="database-in-manual-order" title="Selezionato manualmente per Ordine tubi">In ordine' +
+                (row.orderedQuantity ? ' · ' + escapeHtml(row.orderedQuantity) + 'V richieste' : '') +
+              '</span>'
             : '';
         html += `<div class="database-cell database-selection-cell">
                     <input type="checkbox" class="database-order-select" data-order-key="${escapeAttr(row.key)}"
@@ -1362,7 +1364,9 @@ function renderTubeDatabasePanels() {
                                     <input type="checkbox" class="database-order-select"
                                         data-order-key="${escapeAttr(tube.key)}" aria-label="Seleziona tubo per Ordine tubi"${selected}>
                                     Seleziona per ordine
-                                    ${tube.manualOrder ? '<span class="database-in-manual-order">In ordine</span>' : ''}
+                                    ${tube.manualOrder ? '<span class="database-in-manual-order">In ordine' +
+                                        (tube.orderedQuantity ? ' · ' + escapeHtml(tube.orderedQuantity) + 'V richieste' : '') +
+                                        '</span>' : ''}
                                 </label>
                                 <div class="database-tube-main">${escapeHtml(tube.misura)} x ${escapeHtml(formatNumber(tube.spessore))}</div>
                                 <div class="database-tube-meta">${escapeHtml(tube.materiale)} ${escapeHtml(tube.finitura)} · ${escapeHtml(tube.forma)}</div>
@@ -4781,7 +4785,7 @@ async function submitFastTubeList() {
               ' tipi di tubo (' + response.quantity + ' verghe richieste).';
         fastTubeElement('fast-tube-modal').style.display = 'none';
         await loadTubeDatabase();
-        alert(message);
+        alert(message + (response.warning ? '\nAttenzione: ' + response.warning : ''));
     } catch (error) {
         console.error(error);
         fastTubeSetStatus('Errore durante arrivo/ordine: ' + String(error));
