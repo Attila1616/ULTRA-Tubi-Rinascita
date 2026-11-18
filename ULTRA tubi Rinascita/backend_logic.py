@@ -1181,17 +1181,20 @@ def generate_tube_order_txt(da_fare_path=None):
                 eligible_by_key[key] = dict(row)
         # Brand-new explicitly ordered sizes may have no stock record. They
         # still belong on the TXT order list with current stock shown as zero.
-        codes = tube_database.code_catalog_map(VARIABLES_ROOT)
-        for key in manual_keys:
-            if key not in eligible_by_key:
-                identity = tube_database.identity_dict_from_key(key)
-                code_info = codes.get(key, {})
-                eligible_by_key[key] = {
-                    **identity,
-                    "codice": code_info.get("code") or "",
-                    "quantitaTotale": 0,
-                    "priorita": "",
-                }
+        missing_manual_keys = manual_keys - set(eligible_by_key)
+        codes = (
+            tube_database.code_catalog_map(VARIABLES_ROOT)
+            if missing_manual_keys else {}
+        )
+        for key in missing_manual_keys:
+            identity = tube_database.identity_dict_from_key(key)
+            code_info = codes.get(key, {})
+            eligible_by_key[key] = {
+                **identity,
+                "codice": code_info.get("code") or "",
+                "quantitaTotale": 0,
+                "priorita": "",
+            }
         requested = tube_database.load_manual_order_quantities(VARIABLES_ROOT)
         eligible = list(eligible_by_key.values())
         eligible.sort(key=lambda row: (
