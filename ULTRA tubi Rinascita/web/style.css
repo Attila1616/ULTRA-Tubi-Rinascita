@@ -1511,3 +1511,60 @@ body.modal-scroll-locked {
     font-size: 12px;
     max-width: 245px;
 }
+
+
+/* Fast batch intake / ordering: desktop-first, with horizontal scrolling
+   instead of shrinking the quantity and thickness fields. */
+.fast-tube-content {
+    width: min(1100px, calc(100vw - 36px));
+    max-width: 1100px;
+    max-height: min(92vh, 900px);
+    display: flex;
+    flex-direction: column;
+}
+.fast-tube-body { overflow-y: auto; min-height: 0; }
+.fast-tube-hint { color: #546579; font-size: 12px; margin: 0 0 14px; }
+.fast-tube-destination {
+    display: grid;
+    grid-template-columns: auto minmax(150px, 1fr) auto minmax(150px, 1fr);
+    align-items: center;
+    gap: 9px 12px;
+    margin-bottom: 14px;
+}
+.fast-tube-destination label { font-size: 13px; font-weight: 600; }
+.fast-tube-table { overflow-x: auto; margin-bottom: 12px; }
+.fast-tube-head, .fast-tube-row {
+    display: grid;
+    grid-template-columns: minmax(170px, 2fr) minmax(100px, .85fr)
+        minmax(110px, 1fr) minmax(90px, .8fr) minmax(90px, .8fr) 40px;
+    gap: 8px;
+    min-width: 680px;
+    align-items: center;
+}
+.fast-tube-head {
+    font-size: 12px;
+    color: #38546f;
+    font-weight: 700;
+    background: #eaf2fa;
+    padding: 8px 6px;
+}
+.fast-tube-row { padding: 6px; border-bottom: 1px solid #e0e8f1; }
+.fast-tube-row:nth-child(even) { background: #f8fafc; }
+.fast-tube-row input, .fast-tube-row select { min-width: 0; width: 100%; }
+.fast-tube-row input:focus-visible, .fast-tube-row select:focus-visible {
+    outline: 2px solid #266fc1;
+    outline-offset: 1px;
+}
+.fast-tube-delete {
+    border: 1px solid #e7c3ca;
+    background: #fff6f6;
+    border-radius: 6px;
+    color: #9e3444;
+    min-height: 34px;
+    cursor: pointer;
+}
+#fast-tube-status { min-height: 18px; margin-top: 9px; }
+@media (max-width: 760px) {
+    .fast-tube-destination { grid-template-columns: auto minmax(0, 1fr); }
+    .fast-tube-content { width: calc(100vw - 18px); }
+}
