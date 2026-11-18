@@ -754,6 +754,18 @@ class Api:
             traceback.print_exc()
             return {"status": "error", "message": "Errore durante l'aggiunta del tubo."}
 
+    def register_fast_tube_list(self, payload):
+        """Receive or order several tubes in one validated operation."""
+        try:
+            return logic.register_fast_tube_list(payload or {}, self.da_fare_path)
+        except Exception:
+            print("--- PYTHON ERROR in register_fast_tube_list ---")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": "Errore durante arrivo/ordine rapido.",
+            }
+
     def remove_tube_database_item(self, payload):
         try:
             return logic.remove_tube_database_item(payload or {}, self.da_fare_path)
