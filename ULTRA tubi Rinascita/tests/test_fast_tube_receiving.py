@@ -120,6 +120,20 @@ class FastTubeBatchTests(TestCase):
                 self.assertEqual(self.terra_tubes()[0]["quantita"], 3)
         self.assertEqual(db.load_manual_order_keys(self.root), set())
 
+    def test_zero_stock_manual_order_can_be_removed_using_regular_ui_action(self):
+        request = sample("90x90", "3", "6")
+        result = db.register_fast_tube_list(self.root, {
+            "mode": "order", "items": [request],
+        })
+        self.assertEqual(result["status"], "success")
+        key = db.identity_key_from_values("90x90", 3, "304", "2B")
+        result = db.set_manual_order_tubes(self.root, {
+            "operation": "remove", "keys": [key],
+        })
+        self.assertEqual(result["status"], "success")
+        self.assertNotIn(key, db.load_manual_order_keys(self.root))
+        self.assertNotIn(key, db.load_manual_order_quantities(self.root))
+
     def test_legacy_manual_selection_keeps_explicit_quantities(self):
         row = db.make_tube("60x60", 2, "304", "2B", 1)
         a = db.identity_key_from_tube(row)
