@@ -167,6 +167,28 @@ class FastTubeBatchTests(TestCase):
         self.assertIn("Giacenza attuale: 0 verghe", content)
         self.assertIn("Quantità richiesta: 6 verghe", content)
 
+    def test_ordered_zero_stock_tube_is_visible_in_inventory_list(self):
+        key = db.identity_key_from_values("90x90", 3, "304", "2B")
+        db._save_manual_order_state(self.root, {key}, {key: 6})
+        with (
+            patch.object(logic, "VARIABLES_ROOT", self.root),
+            patch.object(logic, "ensure_tube_database",
+                         return_value={"status": "success"}),
+            patch.object(db, "ensure_order_priorities_for_inventory"),
+            patch.object(db, "summarize_inventory", return_value=[]),
+            patch.object(db, "load_locations", return_value=[]),
+            patch.object(db, "get_location_targets", return_value=[]),
+            patch.object(db, "code_catalog_map", return_value={}),
+            patch.object(db, "database_debug", return_value={}),
+        ):
+            result = logic.get_tube_database_rows({})
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(len(result["rows"]), 1)
+        row = result["rows"][0]
+        self.assertTrue(row["manualOrder"])
+        self.assertEqual(row["orderedQuantity"], 6)
+        self.assertEqual(row["quantitaTotale"], 0)
+
     def test_ui_has_tab_path_and_two_explicit_actions(self):
         app_root = Path(__file__).resolve().parents[1]
         html = (app_root / "web" / "index.html").read_text(encoding="utf-8")
