@@ -225,6 +225,21 @@ if (searchModal) searchModal.addEventListener('mousedown', (e) => { if (e.target
     document.getElementById('db-collapse-all-ripiani-btn')?.addEventListener('click', () => setAllDatabaseRipianiCollapsed(true));
     document.getElementById('db-import-codes-btn')?.addEventListener('click', importTubeCodes);
     document.getElementById('db-add-code-btn')?.addEventListener('click', addManualTubeCode);
+    document.getElementById('db-fast-receive-btn')?.addEventListener('click', () => openFastTubeModal('receive'));
+    document.getElementById('db-fast-order-btn')?.addEventListener('click', () => openFastTubeModal('order'));
+    document.getElementById('fast-tube-close')?.addEventListener('click', closeFastTubeModal);
+    document.getElementById('fast-tube-cancel')?.addEventListener('click', closeFastTubeModal);
+    document.getElementById('fast-tube-add-row')?.addEventListener('click', () => addFastTubeRow());
+    document.getElementById('fast-tube-confirm')?.addEventListener('click', submitFastTubeList);
+    document.getElementById('fast-tube-location')?.addEventListener('change', populateFastTubeShelves);
+    document.getElementById('fast-tube-rows')?.addEventListener('keydown', handleFastTubeKeydown);
+    document.getElementById('fast-tube-rows')?.addEventListener('click', handleFastTubeRowClick);
+    document.getElementById('fast-tube-modal')?.addEventListener('mousedown', event => {
+        if (event.target.id === 'fast-tube-modal') closeFastTubeModal();
+    });
+    document.getElementById('fast-tube-modal')?.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { event.preventDefault(); closeFastTubeModal(); }
+    });
     document.getElementById('db-codes-docx-btn')?.addEventListener('click', generateTubeCodesDocx);
     document.getElementById('db-multi-location-docx-btn')?.addEventListener('click', generateMultiLocationTubesDocx);
     document.getElementById('db-export-xlsx-btn')?.addEventListener('click', openInventoryExportModal);
@@ -4584,6 +4599,198 @@ function parseNonNegativeInteger(value, fallback = 0) {
     const parsed = parseInt(value, 10);
     return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
+// --- Fast batch stock arrivals / manual In ordine entry ---
+let fastTubeMode = 'receive';
+let fastTubeSubmitting = false;
+
+function fastTubeElement(id) {
+    return document.getElementById(id);
+}
+
+function fastTubeSetStatus(message) {
+    const status = fastTubeElement('fast-tube-status');
+    if (status) status.textContent = message || '';
+}
+
+function populateFastTubeLocations() {
+    const select = fastTubeElement('fast-tube-location');
+    if (!select) return;
+    const targets = tubeDatabaseTargets || [];
+    select.innerHTML = targets.map(target =>
+        '<option value="' + escapeAttr(target.name) + '">' +
+        escapeHtml(target.name) + '</option>'
+    ).join('');
+    const terra = targets.find(target =>
+        (target.type || '').toLowerCase() === 'terra' ||
+        (target.name || '').trim().toLowerCase() === 'terra'
+    );
+    if (terra) select.value = terra.name;
+    populateFastTubeShelves();
+}
+
+function populateFastTubeShelves() {
+    const location = fastTubeElement('fast-tube-location')?.value || '';
+    const select = fastTubeElement('fast-tube-ripiano');
+    if (!select) return;
+    const target = (tubeDatabaseTargets || []).find(entry => entry.name === location);
+    const names = target?.ripiani || [];
+    select.innerHTML = names.map(name =>
+        '<option value="' + escapeAttr(name) + '">' +
+        escapeHtml(name) + '</option>'
+    ).join('');
+    const ground = names.find(name => name.trim().toLowerCase() === 'per terra');
+    if (ground) select.value = ground;
+}
+
+function addFastTubeRow({ focus = true } = {}) {
+    const host = fastTubeElement('fast-tube-rows');
+    if (!host) return;
+    const row = document.createElement('div');
+    row.className = 'fast-tube-row';
+    row.innerHTML = [
+        '<input type="text" class="search-input" data-fast-field="misura" ',
+        'placeholder="60x60 oppure Ø60,3" autocomplete="off" aria-label="Misura tubo">',
+        '<input type="text" class="search-input" data-fast-field="spessore" ',
+        'placeholder="2" inputmode="decimal" autocomplete="off" aria-label="Spessore">',
+        '<select class="search-select" data-fast-field="materiale" tabindex="-1" ',
+        'title="Materiale (clicca per modificare)" aria-label="Materiale">',
+        '<option value="304" selected>304</option><option value="316">316</option>',
+        '<option value="430">430</option></select>',
+        '<select class="search-select" data-fast-field="finitura" tabindex="-1" ',
+        'title="Finitura (clicca per modificare)" aria-label="Finitura">',
+        '<option value="2B" selected>2B</option><option value="BA">BA</option></select>',
+        '<input type="number" class="search-input" data-fast-field="quantita" ',
+        'value="1" min="1" max="100000" step="1" aria-label="Quantità verghe">',
+        '<button type="button" class="fast-tube-delete" data-fast-remove ',
+        'aria-label="Rimuovi riga" title="Rimuovi riga">×</button>',
+    ].join('');
+    host.appendChild(row);
+    if (focus) row.querySelector('[data-fast-field="misura"]').focus();
+    return row;
+}
+
+function handleFastTubeRowClick(event) {
+    if (!event.target.closest('[data-fast-remove]')) return;
+    const host = fastTubeElement('fast-tube-rows');
+    event.target.closest('.fast-tube-row')?.remove();
+    if (!host?.querySelector('.fast-tube-row')) addFastTubeRow();
+}
+
+function handleFastTubeKeydown(event) {
+    if (event.target?.dataset?.fastField !== 'quantita' || event.shiftKey) return;
+    if (event.key !== 'Tab' && event.key !== 'Enter') return;
+    // Direct keyboard path: measure -> thickness -> quantity ->
+    // next row measure. Click defaults to override 304 or 2B.
+    event.preventDefault();
+    const nextRow = event.target.closest('.fast-tube-row')?.nextElementSibling;
+    if (nextRow?.classList.contains('fast-tube-row')) {
+        nextRow.querySelector('[data-fast-field="misura"]')?.focus();
+    } else {
+        addFastTubeRow();
+    }
+}
+
+async function openFastTubeModal(mode = 'receive') {
+    const modal = fastTubeElement('fast-tube-modal');
+    if (!modal) return;
+    fastTubeMode = mode === 'order' ? 'order' : 'receive';
+    if (!tubeDatabaseTargets?.length) await loadTubeDatabase();
+    fastTubeElement('fast-tube-title').textContent = fastTubeMode === 'receive'
+        ? 'Registra arrivo tubi' : 'Aggiungi tubi a In ordine';
+    fastTubeElement('fast-tube-confirm').textContent = fastTubeMode === 'receive'
+        ? 'Registra arrivo' : 'Segna In ordine';
+    fastTubeElement('fast-tube-destination').style.display =
+        fastTubeMode === 'receive' ? 'grid' : 'none';
+    fastTubeElement('fast-tube-hint').textContent =
+        'TAB: Misura → Spessore → Quantità → nuova riga. Materiale 304 e finitura 2B preimpostati; clicca per modificarli.' +
+        (fastTubeMode === 'order' ? ' Le quantità indicano le verghe richieste.' : '');
+    fastTubeElement('fast-tube-rows').replaceChildren();
+    fastTubeSetStatus('');
+    populateFastTubeLocations();
+    modal.style.display = 'flex';
+    addFastTubeRow();
+}
+
+function closeFastTubeModal() {
+    if (fastTubeSubmitting) return;
+    const modal = fastTubeElement('fast-tube-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+function collectFastTubeRows() {
+    const rows = Array.from(
+        fastTubeElement('fast-tube-rows')?.querySelectorAll('.fast-tube-row') || []
+    );
+    const items = [];
+    for (let i = 0; i < rows.length; i += 1) {
+        const row = rows[i];
+        const val = name => row.querySelector('[data-fast-field="' + name + '"]')?.value?.trim() || '';
+        const misura = val('misura');
+        const spessore = val('spessore');
+        // Ignore automatically created trailing blank rows.
+        if (!misura && !spessore) continue;
+        const quantita = val('quantita');
+        if (!misura || !spessore || !/^[0-9]+$/.test(quantita) || Number(quantita) < 1) {
+            throw new Error('Riga ' + (i + 1) + ': inserisci misura, spessore e quantità intera positiva.');
+        }
+        items.push({
+            misura,
+            spessore,
+            materiale: val('materiale') || '304',
+            finitura: val('finitura') || '2B',
+            quantita,
+        });
+    }
+    if (!items.length) throw new Error('Inserisci almeno una misura e uno spessore.');
+    return items;
+}
+
+async function submitFastTubeList() {
+    if (fastTubeSubmitting) return;
+    let items;
+    try {
+        items = collectFastTubeRows();
+    } catch (error) {
+        fastTubeSetStatus(error.message);
+        return;
+    }
+    const button = fastTubeElement('fast-tube-confirm');
+    const payload = { mode: fastTubeMode, items };
+    if (fastTubeMode === 'receive') {
+        payload.target_location = fastTubeElement('fast-tube-location')?.value || '';
+        payload.target_ripiano = fastTubeElement('fast-tube-ripiano')?.value || '';
+        if (!payload.target_location || !payload.target_ripiano) {
+            fastTubeSetStatus('Seleziona una ubicazione e un ripiano/zona validi.');
+            return;
+        }
+    }
+    fastTubeSubmitting = true;
+    if (button) button.disabled = true;
+    fastTubeSetStatus('Salvataggio in corso...');
+    try {
+        const response = await window.pywebview.api.register_fast_tube_list(payload);
+        if (!response || response.status !== 'success') {
+            fastTubeSetStatus(response?.message || 'Impossibile registrare le righe.');
+            return;
+        }
+        const message = fastTubeMode === 'receive'
+            ? 'Arrivo registrato: ' + response.quantity + ' verghe in ' +
+              response.location + ' / ' + response.ripiano + '\n' +
+              'In ordine rimossi: ' + response.cleared_order_count
+            : 'Aggiunti a In ordine: ' + response.rows_count +
+              ' tipi di tubo (' + response.quantity + ' verghe richieste).';
+        fastTubeElement('fast-tube-modal').style.display = 'none';
+        await loadTubeDatabase();
+        alert(message);
+    } catch (error) {
+        console.error(error);
+        fastTubeSetStatus('Errore durante arrivo/ordine: ' + String(error));
+    } finally {
+        fastTubeSubmitting = false;
+        if (button) button.disabled = false;
+    }
+}
+
 // --- DOCX Printout ---
 
 
