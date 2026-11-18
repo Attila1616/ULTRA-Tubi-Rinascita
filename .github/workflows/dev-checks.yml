@@ -31,6 +31,12 @@ jobs:
       - name: Compile Python sources
         run: python -m py_compile runtime_paths.py backend_logic.py app.py tube_database.py tt_docx_generator.pyw
 
+      - name: Quick tube receiving regression tests
+        run: python -m unittest discover -s tests -p "test_fast_tube_receiving.py" -v
+
+      - name: Check web JavaScript syntax
+        run: node --check web/script.js
+
       - name: TT DOCX regression tests
         run: python -m unittest discover -s tests -p "test_tt_docx*.py" -v
 
