@@ -2,6 +2,7 @@ import json
 import os
 import re
 import shutil
+import copy
 from collections import defaultdict
 from datetime import datetime
 
@@ -89,6 +90,42 @@ def load_manual_order_keys(project_root):
     }
 
 
+def load_manual_order_quantities(project_root):
+    """Explicit quantities for manually requested purchases, if provided."""
+    document = read_json(manual_order_path(project_root), {"keys": []})
+    if not isinstance(document, dict):
+        return {}
+    keys = load_manual_order_keys(project_root)
+    quantities = document.get("quantities") or {}
+    if not isinstance(quantities, dict):
+        return {}
+    result = {}
+    for key, value in quantities.items():
+        if key not in keys:
+            continue
+        try:
+            quantity = int(value)
+            if quantity > 0 and str(value).strip() == str(quantity):
+                result[key] = quantity
+        except (ValueError, TypeError):
+            continue
+    return result
+
+
+def _save_manual_order_state(project_root, keys, quantities=None):
+    """Preserve optional requested amounts when updating manual order flags."""
+    keys = sorted(set(keys))
+    amounts = quantities or {}
+    write_json(manual_order_path(project_root), {
+        "schema_version": 2,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "keys": keys,
+        "quantities": {
+            key: amounts[key] for key in keys if key in amounts
+        },
+    })
+
+
 def set_manual_order_tubes(project_root, payload):
     """Add/remove distinct stocked tube types without altering priorities.
 
@@ -117,11 +154,10 @@ def set_manual_order_tubes(project_root, payload):
     before = load_manual_order_keys(project_root)
     after = before | supplied if operation == "add" else before - supplied
     if after != before:
-        write_json(manual_order_path(project_root), {
-            "schema_version": 1,
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "keys": sorted(after),
-        })
+        _save_manual_order_state(
+            project_root, after,
+            load_manual_order_quantities(project_root),
+        )
     return {
         "status": "success",
         "changed": len(after - before) if operation == "add"
@@ -1369,6 +1405,172 @@ def add_tube(project_root, payload):
         "tube": tube,
     })
     return {"status": "success", "message": "Tubo aggiunto."}
+
+
+def _validate_fast_tube_row(item, row_number):
+    """Validate a compact arrival/order entry before touching the database."""
+    if not isinstance(item, dict):
+        raise ValueError(f"Riga {row_number}: dati tubo non validi.")
+    misura = normalize_misura(str(item.get("misura") or "").lstrip("Øø"))
+    if not re.fullmatch(
+        r"(?:[0-9]+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?x[0-9]+(?:\.[0-9]+)?)",
+        misura,
+    ):
+        raise ValueError(
+            f"Riga {row_number}: misura non valida. "
+            "Usa 60.3 per un tubo tondo oppure 60x60 per un tubolare."
+        )
+    dimensions = [float(value) for value in misura.split("x")]
+    if any(value <= 0 or value > 10000 for value in dimensions):
+        raise ValueError(f"Riga {row_number}: dimensioni non valide.")
+    thickness = normalize_decimal_text(item.get("spessore"))
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", thickness):
+        raise ValueError(f"Riga {row_number}: spessore non valido.")
+    if not 0 < float(thickness) <= 100:
+        raise ValueError(f"Riga {row_number}: spessore non valido.")
+    material = normalize_materiale(item.get("materiale") or "304")
+    finish = normalize_finitura(item.get("finitura") or "2B")
+    if material not in {"304", "316", "430"}:
+        raise ValueError(f"Riga {row_number}: materiale non valido.")
+    if finish not in {"2B", "BA"}:
+        raise ValueError(f"Riga {row_number}: finitura non valida.")
+    raw_quantity = item.get("quantita")
+    qty_text = str(raw_quantity if raw_quantity is not None else "").strip()
+    if not re.fullmatch(r"[0-9]+", qty_text):
+        raise ValueError(f"Riga {row_number}: inserisci una quantità intera positiva.")
+    quantity = int(qty_text)
+    if quantity < 1 or quantity > 100000:
+        raise ValueError(f"Riga {row_number}: quantità fuori intervallo.")
+    return make_tube(misura, thickness, material, finish, quantity)
+
+
+def register_fast_tube_list(project_root, payload):
+    """Receive or order multiple tubes with one validated operation.
+
+    'receive' adds actual stock to a chosen existing location/ripiano and
+    clears the manual In ordine flag. 'order' changes no stock and supports
+    entirely new tube types, even when inventory has zero quantities.
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    mode = str(payload.get("mode") or "receive").strip().lower()
+    if mode not in {"receive", "order"}:
+        return {"status": "error", "message": "Modalità arrivo/ordine non valida."}
+    items = payload.get("items")
+    if not isinstance(items, list) or not items or len(items) > 250:
+        return {
+            "status": "error",
+            "message": "Inserisci da 1 a 250 tubi.",
+        }
+
+    try:
+        aggregate = {}
+        for index, item in enumerate(items, 1):
+            tube = _validate_fast_tube_row(item, index)
+            key = identity_key_from_tube(tube)
+            if key in aggregate:
+                aggregate[key]["quantita"] += tube["quantita"]
+            else:
+                aggregate[key] = tube
+        keys = set(aggregate)
+        ordered_before = load_manual_order_keys(project_root)
+        quantities_before = load_manual_order_quantities(project_root)
+
+        if mode == "order":
+            quantities = dict(quantities_before)
+            # An explicit quick-entry quantity replaces the previous request,
+            # rather than incrementing it every time the button is clicked.
+            quantities.update({
+                key: value["quantita"] for key, value in aggregate.items()
+            })
+            after = ordered_before | keys
+            _save_manual_order_state(project_root, after, quantities)
+            append_movement(project_root, {
+                "action": "fast_order",
+                "items": list(aggregate.values()),
+            })
+            return {
+                "status": "success",
+                "mode": "order",
+                "rows_count": len(aggregate),
+                "quantity": sum(item["quantita"] for item in aggregate.values()),
+                "marked_ordered": len(keys),
+                "message": "Tubi aggiunti alla lista In ordine.",
+            }
+
+        location_name = str(payload.get("target_location") or "Terra").strip()
+        if location_name.casefold() == "per terra":
+            location_name = "Terra"
+        ref, location = load_location_by_name(project_root, location_name)
+        if not ref or not location:
+            raise ValueError(f"Ubicazione non trovata: {location_name}")
+
+        target_shelf = str(payload.get("target_ripiano") or "").strip()
+        shelves = location.get("ripiani") or []
+        if not target_shelf:
+            if str(location.get("type") or "").lower() == "terra":
+                shelf = next(
+                    (s for s in shelves
+                     if str(s.get("name") or "").casefold() == "per terra"),
+                    None,
+                )
+                target_shelf = (shelf or (shelves[0] if len(shelves) == 1 else {})).get("name", "")
+            elif len(shelves) == 1:
+                target_shelf = shelves[0].get("name", "")
+        if not target_shelf:
+            raise ValueError("Seleziona il ripiano/zona di destinazione.")
+        ripiano = next(
+            (s for s in shelves
+             if str(s.get("name") or "").casefold() == target_shelf.casefold()),
+            None,
+        )
+        if ripiano is None:
+            raise ValueError(f"Ripiano/zona non trovato: {target_shelf}")
+
+        # All inputs and the destination are validated before any mutation.
+        revised_location = copy.deepcopy(location)
+        dest = next(
+            shelf for shelf in revised_location["ripiani"]
+            if str(shelf.get("name") or "").casefold() == target_shelf.casefold()
+        )
+        for tube in aggregate.values():
+            merge_tube_into_list(dest.setdefault("tubi", []), tube)
+        dest["tubi"] = sort_tubes(dest["tubi"])
+
+        after = ordered_before - keys
+        quantities_after = {
+            key: qty for key, qty in quantities_before.items() if key in after
+        }
+        # Persist the target only once. Should the order-state write fail,
+        # restore the old location contents rather than silently accepting a
+        # partial receipt with uncleared order flags.
+        save_location_file(project_root, ref["file"], revised_location)
+        try:
+            if after != ordered_before:
+                _save_manual_order_state(project_root, after, quantities_after)
+        except Exception:
+            save_location_file(project_root, ref["file"], location)
+            raise
+        append_movement(project_root, {
+            "action": "fast_receive",
+            "target": {
+                "location": location.get("name") or location_name,
+                "ripiano": target_shelf,
+            },
+            "items": list(aggregate.values()),
+            "cleared_order_keys": sorted(ordered_before & keys),
+        })
+        return {
+            "status": "success",
+            "mode": "receive",
+            "rows_count": len(aggregate),
+            "quantity": sum(item["quantita"] for item in aggregate.values()),
+            "cleared_order_count": len(ordered_before & keys),
+            "location": location.get("name") or location_name,
+            "ripiano": target_shelf,
+            "message": "Arrivo registrato e In ordine aggiornato.",
+        }
+    except (ValueError, OSError) as exc:
+        return {"status": "error", "message": str(exc)}
 
 
 def remove_tube_from_ripiano(ripiano, tube_identity, quantity):
