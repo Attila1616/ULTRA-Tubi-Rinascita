@@ -1484,12 +1484,19 @@ def register_fast_tube_list(project_root, payload):
             })
             after = ordered_before | keys
             _save_manual_order_state(project_root, after, quantities)
-            append_movement(project_root, {
-                "action": "fast_order",
-                "items": list(aggregate.values()),
-            })
+            log_warning = None
+            try:
+                append_movement(project_root, {
+                    "action": "fast_order",
+                    "items": list(aggregate.values()),
+                })
+            except OSError as exc:
+                # Never report a successful database change as failed, or a
+                # user may retry and accidentally duplicate a receipt.
+                log_warning = f"Ordine salvato; registro movimenti non scritto: {exc}"
             return {
                 "status": "success",
+                "warning": log_warning,
                 "mode": "order",
                 "rows_count": len(aggregate),
                 "quantity": sum(item["quantita"] for item in aggregate.values()),
@@ -1550,17 +1557,22 @@ def register_fast_tube_list(project_root, payload):
         except Exception:
             save_location_file(project_root, ref["file"], location)
             raise
-        append_movement(project_root, {
-            "action": "fast_receive",
-            "target": {
-                "location": location.get("name") or location_name,
-                "ripiano": target_shelf,
-            },
-            "items": list(aggregate.values()),
-            "cleared_order_keys": sorted(ordered_before & keys),
-        })
+        log_warning = None
+        try:
+            append_movement(project_root, {
+                "action": "fast_receive",
+                "target": {
+                    "location": location.get("name") or location_name,
+                    "ripiano": target_shelf,
+                },
+                "items": list(aggregate.values()),
+                "cleared_order_keys": sorted(ordered_before & keys),
+            })
+        except OSError as exc:
+            log_warning = f"Arrivo salvato; registro movimenti non scritto: {exc}"
         return {
             "status": "success",
+            "warning": log_warning,
             "mode": "receive",
             "rows_count": len(aggregate),
             "quantity": sum(item["quantita"] for item in aggregate.values()),
