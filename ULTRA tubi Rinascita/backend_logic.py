@@ -974,15 +974,46 @@ def get_tube_database_rows(filters=None, da_fare_path=None):
     tube_database.ensure_order_priorities_for_inventory(VARIABLES_ROOT)
     rows = tube_database.summarize_inventory(VARIABLES_ROOT, filters or {})
     ordered_keys = tube_database.load_manual_order_keys(VARIABLES_ROOT)
+    order_quantities = tube_database.load_manual_order_quantities(VARIABLES_ROOT)
     for row in rows:
         row["key"] = tube_database.identity_key_from_tube(row)
         row["manualOrder"] = row["key"] in ordered_keys
+        row["orderedQuantity"] = order_quantities.get(row["key"])
+
+    # Show manually ordered tube sizes even when no physical inventory entry
+    # exists yet. This permits checking/removing a brand-new quick order.
+    existing = {row["key"] for row in rows}
+    catalog_by_key = tube_database.code_catalog_map(VARIABLES_ROOT)
+    for key in sorted(ordered_keys - existing):
+        identity = tube_database.identity_dict_from_key(key)
+        if not tube_database.passes_filters(identity, filters or {}):
+            continue
+        code_info = catalog_by_key.get(
+            key, {"code": "", "codes": [], "hasCode": False}
+        )
+        code_filter = str((filters or {}).get("codice") or "tutti").lower()
+        if code_filter == "con" and not code_info.get("hasCode"):
+            continue
+        if code_filter == "senza" and code_info.get("hasCode"):
+            continue
+        rows.append({
+            **identity,
+            "quantitaTotale": 0,
+            "posizioni": [],
+            "codice": code_info.get("code", ""),
+            "codici": code_info.get("codes", []),
+            "hasCode": bool(code_info.get("hasCode")),
+            "priorita": "",
+            "manualOrder": True,
+            "orderedQuantity": order_quantities.get(key),
+        })
     locations = tube_database.load_locations(VARIABLES_ROOT, filters or {})
     for location in locations:
         for shelf in location.get("ripiani", []):
             for tube in shelf.get("tubi", []):
                 tube["key"] = tube_database.identity_key_from_tube(tube)
                 tube["manualOrder"] = tube["key"] in ordered_keys
+                tube["orderedQuantity"] = order_quantities.get(tube["key"])
     return {
         "status": "success",
         "rows": rows,
@@ -1000,6 +1031,17 @@ def add_tube_database_item(payload, da_fare_path=None):
     if ensure_result.get("status") != "success":
         return {"status": "error", "message": ensure_result.get("message", "Database Tubi non disponibile.")}
     return tube_database.add_tube(VARIABLES_ROOT, payload or {})
+
+def register_fast_tube_list(payload, da_fare_path=None):
+    """Record a batch arrival or quick manual order using existing DB storage."""
+    ready = ensure_tube_database(da_fare_path)
+    if ready.get("status") != "success":
+        return {
+            "status": "error",
+            "message": ready.get("message", "Database Tubi non disponibile."),
+        }
+    return tube_database.register_fast_tube_list(VARIABLES_ROOT, payload or {})
+
 
 def remove_tube_database_item(payload, da_fare_path=None):
     ensure_result = ensure_tube_database(da_fare_path)
@@ -1137,6 +1179,20 @@ def generate_tube_order_txt(da_fare_path=None):
             key = tube_database.identity_key_from_tube(row)
             if key in manual_keys:
                 eligible_by_key[key] = dict(row)
+        # Brand-new explicitly ordered sizes may have no stock record. They
+        # still belong on the TXT order list with current stock shown as zero.
+        codes = tube_database.code_catalog_map(VARIABLES_ROOT)
+        for key in manual_keys:
+            if key not in eligible_by_key:
+                identity = tube_database.identity_dict_from_key(key)
+                code_info = codes.get(key, {})
+                eligible_by_key[key] = {
+                    **identity,
+                    "codice": code_info.get("code") or "",
+                    "quantitaTotale": 0,
+                    "priorita": "",
+                }
+        requested = tube_database.load_manual_order_quantities(VARIABLES_ROOT)
         eligible = list(eligible_by_key.values())
         eligible.sort(key=lambda row: (
             0 if tube_database.identity_key_from_tube(row) in manual_keys else 1,
@@ -1155,8 +1211,14 @@ def generate_tube_order_txt(da_fare_path=None):
                 quantity = int(row.get("quantitaTotale") or 0)
                 stock_unit = "verga" if quantity == 1 else "verghe"
                 lines.extend([
-                    line, f"Giacenza attuale: {quantity} {stock_unit}", ""
+                    line, f"Giacenza attuale: {quantity} {stock_unit}"
                 ])
+                key = tube_database.identity_key_from_tube(row)
+                if key in manual_keys and key in requested:
+                    asked = int(requested[key])
+                    order_unit = "verga" if asked == 1 else "verghe"
+                    lines.append(f"Quantità richiesta: {asked} {order_unit}")
+                lines.append("")
         if lines:
             lines.pop()
 
