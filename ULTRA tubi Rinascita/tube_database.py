@@ -139,10 +139,13 @@ def set_manual_order_tubes(project_root, payload):
     raw_keys = payload.get("keys") or []
     if not isinstance(raw_keys, list) or not raw_keys:
         return {"status": "error", "message": "Seleziona almeno un tubo."}
+    before = load_manual_order_keys(project_root)
     valid_keys = {
         identity_key_from_tube(tube)
         for _, _, _, tube in iter_position_tubes(project_root)
-    }
+    } | before
+    # A quick-ordered size may have ZERO inventory rows; the existing
+    # selection UI must still be able to remove/reselect that saved key.
     supplied = {str(key).strip() for key in raw_keys}
     invalid = supplied - valid_keys
     if invalid:
@@ -151,7 +154,6 @@ def set_manual_order_tubes(project_root, payload):
             "message": "Alcuni tubi selezionati non sono più nel database. "
                        "Aggiorna l'elenco e riprova.",
         }
-    before = load_manual_order_keys(project_root)
     after = before | supplied if operation == "add" else before - supplied
     if after != before:
         _save_manual_order_state(
