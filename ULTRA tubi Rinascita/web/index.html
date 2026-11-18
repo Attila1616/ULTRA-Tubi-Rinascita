@@ -112,6 +112,8 @@
                     </div>
                     <button id="db-add-scaffolding-btn" class="action-button" type="button">+ Scaffalatura</button>
                     <button id="db-add-code-btn" class="action-button" type="button">+ Codice</button>
+                    <button id="db-fast-receive-btn" class="action-button button-primary" type="button">+ Arrivo tubi</button>
+                    <button id="db-fast-order-btn" class="action-button" type="button">+ In ordine</button>
                     <button id="db-order-priorities-btn" class="action-button" type="button">Priorità ordini</button>
                     <button id="db-order-txt-btn" class="action-button fatto-button" type="button">Genera ordine TXT</button>
                 </div>
@@ -241,6 +243,38 @@
         </div>
         <div class="modal-body">
             <pre id="search-result" class="summary-output"></pre>
+        </div>
+    </div>
+</div>
+
+<!-- Keyboard-first batch registration of arriving tubes / quick manual orders -->
+<div id="fast-tube-modal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="fast-tube-title">
+    <div class="modal-content fast-tube-content">
+        <div class="modal-header">
+            <h2 id="fast-tube-title">Arrivo tubi</h2>
+            <button type="button" id="fast-tube-close" class="close-button" aria-label="Chiudi">&times;</button>
+        </div>
+        <div class="modal-body fast-tube-body">
+            <p id="fast-tube-hint" class="fast-tube-hint">Tab: Misura → Spessore → Quantità → nuova riga. Materiale 304 e finitura 2B preimpostati (modificabili con il mouse).</p>
+            <div id="fast-tube-destination" class="fast-tube-destination">
+                <label for="fast-tube-location">Ubicazione</label>
+                <select id="fast-tube-location" class="search-select"></select>
+                <label for="fast-tube-ripiano">Ripiano / zona</label>
+                <select id="fast-tube-ripiano" class="search-select"></select>
+            </div>
+            <div class="fast-tube-table" role="group" aria-label="Elenco tubi">
+                <div class="fast-tube-head" aria-hidden="true">
+                    <span>Misura</span><span>Spessore</span><span>Materiale</span>
+                    <span>Finitura</span><span>Quantità</span><span></span>
+                </div>
+                <div id="fast-tube-rows" class="fast-tube-rows"></div>
+            </div>
+            <button type="button" id="fast-tube-add-row" class="action-button">+ Riga</button>
+            <p id="fast-tube-status" class="database-status" role="status" aria-live="polite"></p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" id="fast-tube-cancel" class="action-button">Annulla</button>
+            <button type="button" id="fast-tube-confirm" class="action-button fatto-button">Registra arrivo</button>
         </div>
     </div>
 </div>
