@@ -98,6 +98,14 @@ def plan_bmp_groups(file_paths):
                 "reason": "Il nome deve terminare con .N.BMP (N = numero pagina).",
             })
             continue
+        # PROD.498.BMP is a production code, NOT page 498 of PROD.
+        # The exporter creates PROD.498.1.BMP for its first real page.
+        if match["base"].casefold() in {"prod", "prodm"}:
+            skipped.append({
+                "file": path,
+                "reason": "Manca l'indice pagina finale .N.BMP.",
+            })
+            continue
         page = int(match["page"])
         if page < 1 or page > MAX_PAGES_PER_GROUP:
             skipped.append({
