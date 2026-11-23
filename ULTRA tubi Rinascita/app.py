@@ -7,6 +7,11 @@ import re
 import subprocess
 import traceback
 import threading
+from bmp_pdf_hotkey import (
+    BmpPdfHotkey,
+    DEFAULT_BMP_PDF_HOTKEY,
+    normalize_bmp_hotkey,
+)
 
 def _pick_windows_explorer_folder(initial_directory=None):
     """Use the normal Windows Explorer-style file dialog as a folder picker.
@@ -144,6 +149,18 @@ class Api:
             daemon=True,
         )
         self._inventory_request_thread.start()
+        self._bmp_pdf_hotkey = BmpPdfHotkey()
+        try:
+            self._bmp_pdf_hotkey.configure(
+                self.config.get("bmp_pdf_hotkey", DEFAULT_BMP_PDF_HOTKEY)
+            )
+        except Exception as exc:
+            # A restricted workstation may disallow global keyboard hooks;
+            # keep TubeNest usable and report the issue in the console.
+            print(
+                f"[TubeNest BMP->PDF] Hotkey registration failed: {exc}",
+                flush=True,
+            )
 
     def _inventory_request_loop(self):
         while not self._inventory_request_stop.is_set():
@@ -160,6 +177,7 @@ class Api:
 
     def shutdown(self, *args):
         self._inventory_request_stop.set()
+        self._bmp_pdf_hotkey.stop()
 
     def get_initial_data(self):
         self.config = logic.load_config() or {}
@@ -168,6 +186,7 @@ class Api:
 
     def get_config_settings(self):
         self.config = logic.load_config() or {}
+        self.config.setdefault("bmp_pdf_hotkey", DEFAULT_BMP_PDF_HOTKEY)
         self.config.setdefault("nesting_gap_mm", 2.0)
         self.config.setdefault("nesting_rod_tolerance_mm", 1.0)
         self.config.setdefault("nesting_tail_reserve_max_length_mm", 5000.0)
@@ -196,6 +215,15 @@ class Api:
     def save_config_settings(self, payload):
         payload = payload or {}
         updated = dict(logic.load_config() or {})
+        try:
+            updated["bmp_pdf_hotkey"] = normalize_bmp_hotkey(
+                payload.get(
+                    "bmp_pdf_hotkey",
+                    updated.get("bmp_pdf_hotkey", DEFAULT_BMP_PDF_HOTKEY),
+                )
+            )
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
         path_keys = (
             "da_fare_path",
             "inventory_xlsx_path",
@@ -366,12 +394,25 @@ class Api:
 
         response = logic.save_config(updated)
         if response.get("status") == "success":
+            hotkey_warning = None
+            try:
+                self._bmp_pdf_hotkey.configure(updated["bmp_pdf_hotkey"])
+            except Exception as exc:
+                hotkey_warning = (
+                    "Impostazioni salvate, ma la hotkey BMP -> PDF non e' "
+                    f"attiva: {exc}"
+                )
+                print(f"[TubeNest BMP->PDF] {hotkey_warning}", flush=True)
             self.config = updated
             self.da_fare_path = updated.get("da_fare_path") or None
             request_folder = updated.get("inventory_request_folder")
             if request_folder:
                 logic.initialize_inventory_request_folder(request_folder)
-            return {"status": "success", "config": updated}
+            return {
+                "status": "success",
+                "config": updated,
+                "hotkey_warning": hotkey_warning,
+            }
         return response
 
     def pick_settings_folder(self):
