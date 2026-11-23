@@ -1,6 +1,8 @@
 pywebview
 openpyxl
 python-docx
+Pillow>=10.3,<13
+reportlab>=4.2,<5
 keyboard
 pywin32
 bottle
