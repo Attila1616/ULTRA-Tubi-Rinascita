@@ -81,11 +81,13 @@ class BmpPdfMergeTests(TestCase):
     def test_duplicated_page_number_rejects_group(self):
         one = bmp(self.root / "PROD.498.1.BMP")
         one_alias = bmp(self.root / "PROD.498.01.BMP")
-        # Leading zero is deliberately not a canonical page number.
+        # Zero-padded page numbers are supported, but both files
+        # represent page 1 and must never produce a duplicate PDF page.
         groups, errs, ignored = plan_bmp_groups([one, one_alias])
-        self.assertEqual(len(groups), 1)
-        self.assertEqual(len(errs), 0)
-        self.assertEqual(len(ignored), 1)
+        self.assertEqual(len(groups), 0)
+        self.assertEqual(len(errs), 1)
+        self.assertEqual(len(ignored), 0)
+        self.assertIn("1", errs[0]["reason"])
 
     def test_invalid_bmp_does_not_leave_partial_pdf(self):
         first = bmp(self.root / "PROD.498.1.BMP")
