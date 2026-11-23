@@ -14,7 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 
 # The *last* dotted number is the page, not any number inside the PROD code.
-_NUMBERED_BMP = re.compile(r"^(?P<base>.+)\.(?P<page>[1-9][0-9]*)\.bmp$", re.I)
+_NUMBERED_BMP = re.compile(r"^(?P<base>.+)\.(?P<page>[0-9]+)\.bmp$", re.I)
 MAX_PAGES_PER_GROUP = 500
 
 
@@ -99,10 +99,10 @@ def plan_bmp_groups(file_paths):
             })
             continue
         page = int(match["page"])
-        if page > MAX_PAGES_PER_GROUP:
+        if page < 1 or page > MAX_PAGES_PER_GROUP:
             skipped.append({
                 "file": path,
-                "reason": f"Numero pagina superiore a {MAX_PAGES_PER_GROUP}.",
+                "reason": f"Numero pagina fuori dall'intervallo 1-{MAX_PAGES_PER_GROUP}.",
             })
             continue
         name = match["base"]
