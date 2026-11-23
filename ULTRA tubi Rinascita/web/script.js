@@ -455,6 +455,7 @@ async function openSettingsModal() {
         document.getElementById('settings-order-low-quantity').value = parseNonNegativeInteger(config.order_priority_low_quantity, 1);
         document.getElementById('settings-order-medium-quantity').value = parseNonNegativeInteger(config.order_priority_medium_quantity, 3);
         document.getElementById('settings-order-high-quantity').value = parseNonNegativeInteger(config.order_priority_high_quantity, 5);
+        document.getElementById('settings-bmp-pdf-hotkey').value = config.bmp_pdf_hotkey || 'ctrl+alt+b';
         document.getElementById('settings-nesting-gap-mm').value = Number.isFinite(Number(config.nesting_gap_mm)) ? Number(config.nesting_gap_mm) : 2;
         document.getElementById('settings-nesting-rod-tolerance-mm').value =
             Number.isFinite(Number(config.nesting_rod_tolerance_mm))
@@ -597,6 +598,7 @@ async function saveSettings() {
         const payload = {
             ignore_folders: settingsIgnoredFolders,
             inventory_request_enabled: document.getElementById('settings-inventory-request-enabled').checked,
+            bmp_pdf_hotkey: document.getElementById('settings-bmp-pdf-hotkey').value.trim(),
             lock_unlocked_color: document.getElementById('settings-lock-unlocked-color').value,
             lock_locked_color: document.getElementById('settings-lock-locked-color').value,
             order_priority_low_quantity: parseNonNegativeInteger(document.getElementById('settings-order-low-quantity').value, 1),
@@ -642,6 +644,9 @@ async function saveSettings() {
             return;
         }
         closeSettingsModal();
+        if (response.hotkey_warning) {
+            alert(response.hotkey_warning);
+        }
         applyLockColors(response.config?.lock_unlocked_color, response.config?.lock_locked_color);
         nestingRodToleranceMm = Number(response.config?.nesting_rod_tolerance_mm ?? 1);
         nestingSettingsKey = `gap:${Number(response.config?.nesting_gap_mm ?? payload.nesting_gap_mm ?? 2)}|tolerance:${nestingRodToleranceMm}|algorithm:current|full-rod-v3`;
