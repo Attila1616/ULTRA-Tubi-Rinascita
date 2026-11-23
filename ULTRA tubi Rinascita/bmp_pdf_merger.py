@@ -49,7 +49,7 @@ def get_selected_bmp_files(*, shell=None, foreground_hwnd=None):
                 if int(window.HWND) != int(foreground_hwnd):
                     continue
                 full_name = str(getattr(window, "FullName", "") or "")
-                if os.path.basename(full_name).casefold() != "explorer.exe":
+                if full_name.replace("\\", "/").rsplit("/", 1)[-1].casefold() != "explorer.exe":
                     return []
                 selected = window.Document.SelectedItems()
                 paths = []
